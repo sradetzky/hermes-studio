@@ -17,7 +17,7 @@ model config.
 ```
 brief → studio-storyboarder → storyboard.md
       → studio-prompt-engineer → current_prompt.txt (+ handoff params)
-      → studio (orchestrator)  → design_studio.py generate / generate-image
+      → studio (orchestrator)  → comfyui-mcp → archive-output → clear_vram
       → studio-reviewer        → PASS/REVISE/REJECT appended to chat.jsonl
 ```
 

@@ -18,7 +18,7 @@ See **PLAN.md** for the full architecture and implementation order.
 3. Replace the SOUL in the new profile with the one in `hermes/profiles/studio/SOUL.md`.
 4. Implement / expand the skill in `hermes/skills/design-studio/`.
 5. Set up the folder root (copy `studio-root/` or point to your preferred location).
-6. Wire ComfyUI (MCP or REST) and test generation → folder placement.
+6. Verify the pinned comfyui-mcp server and test generation → folder placement.
 7. Only then build the minimal FastAPI + single-page UI.
 
 ## Key Files

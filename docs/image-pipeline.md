@@ -3,9 +3,13 @@
 All local via ComfyUI; the native Krea2ImageNode is a paid cloud API node and
 is NOT used.
 
-## Runner
+## Graph builder
 
-`scripts/krea2_image.py --recipe <r> [opts]`
+`scripts/krea2_image.py --recipe <r> [opts] --dry-run`
+
+The `studio` orchestrator uploads inputs and enqueues the emitted graph through
+comfyui-mcp, archives output, then calls `clear_vram`. Running without
+`--dry-run` is a legacy diagnostic fallback only.
 
 | Recipe | Purpose | Graph |
 |---|---|---|
@@ -47,6 +51,6 @@ attention (default 1.0; raise if identity drifts, lower if edits won't take).
 
 ## Project integration
 
-`design_studio.py generate-image <project> --recipe <r> ...` archives into
-`generations/NNN/` with meta.json (seed/prompt_id) + prompt.txt. Files land in
-ComfyUI/output first and are copied over.
+MCP output files are archived with `design_studio.py archive-output`; see
+docs/comfyui-mcp.md. Legacy `generate-image` still archives automatically and
+now unloads models/frees VRAM at terminal completion.

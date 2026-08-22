@@ -5,17 +5,21 @@ description: Use when working in the hermes-studio repo — creating studio proj
 
 # design-studio skill
 
-Manages the on-disk project structure for the Hermes Studio and
-runs H3 generations through the proven `minimax-h3-run` runner.
+Manages the on-disk project structure for Hermes Studio. Production ComfyUI
+execution goes through the `comfyui` MCP server owned by the `studio` profile.
+The Python runners build proven graphs and remain explicit legacy fallbacks;
+they are not the normal Studio transport.
 
 ## Repo & Paths
 
 - Repo: `~/repos/hermes-studio/` (see `PLAN.md` + `AGENTS.md` there)
 - Core tool: `~/repos/hermes-studio/scripts/design_studio.py` (library + CLI)
 - Studio root: `$DESIGN_STUDIO_ROOT` or `~/repos/hermes-studio/studio-root/`
-- H3 runner: `~/.hermes/skills/minimax-h3-run/scripts/run_h3.py`
-  (handoff JSONs resolve with fallback to `~/Documents/MinimaxH3/`)
-- ComfyUI root: `~/ComfyUI` (API at `http://127.0.0.1:8188`)
+- H3 graph builder: `~/.hermes/skills/minimax-h3-run/scripts/run_h3.py`
+  (handoffs fall back to `~/Documents/MinimaxH3/`)
+- Krea 2 graph builder: `~/repos/hermes-studio/scripts/krea2_image.py`
+- ComfyUI transport: pinned `comfyui-mcp@0.52.61` on the `studio` profile
+- ComfyUI root: `~/ComfyUI`
 
 ## Folder contract (source of truth — never invent structure)
 
@@ -26,27 +30,51 @@ runs H3 generations through the proven `minimax-h3-run` runner.
 <root>/shared/{characters,styles,workflows}/   <root>/tmp/
 ```
 
-## CLI (test each step before wiring the web UI)
+## Filesystem CLI
 
 ```bash
 python3 ~/repos/hermes-studio/scripts/design_studio.py create-project <name> "brief..."
 python3 ~/repos/hermes-studio/scripts/design_studio.py list-projects
-python3 ~/repos/hermes-studio/scripts/design_studio.py write-prompt <name> "<structured prompt>"
-python3 ~/repos/hermes-studio/scripts/design_studio.py append-chat <name> user "..."
-# generation (blocking; archives to generations/NNN/ automatically):
-python3 ~/repos/hermes-studio/scripts/design_studio.py generate <name> \
-  --handoff h3_handoff_<slug>.json --arg --mp --arg 0.9 --arg --steps --arg 20
-# always smoke new param combos with --dry-run first
+python3 ~/repos/hermes-studio/scripts/design_studio.py write-prompt <project-id> "<structured prompt>"
+python3 ~/repos/hermes-studio/scripts/design_studio.py append-chat <project-id> user "..."
+# after an MCP job completes:
+python3 ~/repos/hermes-studio/scripts/design_studio.py archive-output <project-id> \
+  <comfy-output-file> --prompt-id <id> --kind image --recipe krea2-edit
 ```
 
 After creation, pass the exact project folder id returned by the command
 (`2026-08-22_smoke-test`). Fuzzy/suffix matching is intentionally unsupported
 so output can never land in an ambiguously matched project.
 
-## Generation rules
+## MCP generation transaction (mandatory)
 
-- `generate` calls `run_h3.py` with the project's handoff, then archives the
-  produced video + prompt + `meta.json` into the next `generations/NNN/`.
+Only the `studio` orchestrator may execute these steps. Never run two GPU jobs
+concurrently.
+
+1. Write `current_prompt.txt` and build/inspect the API graph with the relevant
+   runner's `--dry-run` mode. Dry-run must not queue a job.
+2. Upload references through `mcp_comfyui_upload_image`; patch the graph with
+   the returned server filenames.
+3. Optionally call `mcp_comfyui_clear_vram` before switching model families.
+4. Submit with `mcp_comfyui_enqueue_workflow`; retain the `prompt_id`.
+5. Wait through `mcp_comfyui_queue` / `mcp_comfyui_get_history` until success,
+   error, or timeout. Never start another job while one is running.
+6. On success, archive output with `design_studio.py archive-output`.
+7. **Finally, always call `mcp_comfyui_clear_vram`** with model unload and
+   memory free enabled — after success, error, cancellation, or timeout.
+8. On timeout/error, cancel through `mcp_comfyui_queue` first, verify the job
+   stopped, then clear VRAM. Killing a wrapper process does not cancel ComfyUI.
+
+Do not use raw REST, curl, `/prompt`, `/history`, `/upload`, or `/free` during
+normal Studio work. If MCP is unavailable, stop with a clear error; do not
+silently fall back to REST.
+
+The legacy `generate` and `generate-image` CLI commands remain for manual
+diagnostics only. They explicitly clean VRAM, and timeout paths interrupt the
+ComfyUI job before cleanup.
+
+## Output rules
+
 - Do NOT auto-extract `preview.jpg`; the user reviews renders themselves.
 - User deletes broken renders himself — missing/colliding outputs are expected;
   report output path + prompt_id and move on.

@@ -165,6 +165,30 @@ def queue(graph: dict) -> str:
         return json.load(r)["prompt_id"]
 
 
+def free_vram() -> dict:
+    """Best-effort cleanup for the explicit legacy REST execution path."""
+    request = urllib.request.Request(
+        f"{HOST}/free",
+        data=json.dumps({"unload_models": True, "free_memory": True}).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return {"ok": response.status == 200, "status": response.status}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+def interrupt() -> dict:
+    request = urllib.request.Request(f"{HOST}/interrupt", data=b"", method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return {"ok": response.status == 200, "status": response.status}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
 def wait(prompt_id: str, timeout: int = 600) -> dict:
     t0 = time.time()
     while time.time() - t0 < timeout:
@@ -274,9 +298,18 @@ def main(argv=None) -> int:
     assert graph is not None
     pid = queue(graph)
     print(json.dumps({"prompt_id": pid, "seed": seed, "recipe": args.recipe}))
-    result = wait(pid, timeout=args.timeout)
+    try:
+        result = wait(pid, timeout=args.timeout)
+    except Exception:
+        interrupt()
+        free_vram()
+        raise
+    if result.get("error") == "timeout":
+        result["interrupt"] = interrupt()
+    cleanup = free_vram()
+    result["vram_cleanup"] = cleanup
     print(json.dumps(result, indent=2))
-    return 0 if result.get("done") else 1
+    return 0 if result.get("done") and cleanup.get("ok") else 1
 
 
 if __name__ == "__main__":

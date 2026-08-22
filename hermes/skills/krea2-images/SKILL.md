@@ -5,8 +5,8 @@ description: Use when generating or editing images with local Krea 2 in ComfyUI 
 
 # krea2-images skill
 
-Local Krea 2 (darkBeast checkpoints) image generation/editing through the
-studio's runner.
+Local Krea 2 graph recipes. The illustrator prepares prompts/parameters; the
+`studio` orchestrator queues graphs through comfyui-mcp.
 
 ## Tool
 
@@ -14,7 +14,7 @@ studio's runner.
 python3 ~/repos/hermes-studio/scripts/krea2_image.py --recipe <r> [opts]
 ```
 
-Recipes (all verified working):
+Recipes (all verified working; use `--dry-run` to emit the graph):
 
 | Recipe | Purpose | Models |
 |---|---|---|
@@ -31,10 +31,15 @@ turbo-range), `--seed`, `--lora name:strength` (repeatable), `--denoise`,
 
 ## Behaviour
 
-- Prints `{prompt_id, seed}` then waits; prints `{done, files}` at completion.
-- Files land in `~/ComfyUI/output/<prefix>_*.png`; archive them into the
-  project (`design_studio.py`) yourself after review.
-- ALWAYS sequential: one ComfyUI job at a time, ever.
+- `studio-illustrator` must not queue ComfyUI. It returns recipe, prompt,
+  reference paths, aspect, steps, seed/ref-boost and any extra LoRAs to the
+  `studio` orchestrator.
+- `studio` builds with `--dry-run`, uploads refs and enqueues through MCP,
+  archives with `design_studio.py archive-output`, then always calls
+  `mcp_comfyui_clear_vram`.
+- Direct execution without `--dry-run` is a manual diagnostic fallback only;
+  it unloads models/frees memory after terminal success or failure and
+  interrupts before cleanup on timeout.
 
 ## Identity edit
 

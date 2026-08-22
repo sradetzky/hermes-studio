@@ -17,7 +17,7 @@ User (browser)
 Simple Web UI (FastAPI + minimal frontend)
     ↓
 Hermes Profile "studio"  ←→  Local LLM endpoint (shared across profiles)
-    ↓ (MCP / REST)
+    ↓ (comfyui-mcp)
 ComfyUI (native MiniMax H3 nodes)
     ↓
 Folder structure on disk (source of truth for projects & media)
@@ -91,7 +91,8 @@ Hermes (via design-studio skill) is responsible for creating projects and writin
 - Preferred stack: FastAPI backend + single HTML page (Alpine.js or vanilla + Tailwind CDN). No heavy SPA.
 
 ### 2.6 Integration Points
-- ComfyUI ↔ Hermes: prefer `comfyui-mcp` (compact mode) or official Hermes comfyui skill + REST.
+- ComfyUI ↔ Hermes: pinned `comfyui-mcp`; the `studio` profile is the sole GPU
+  queue owner. No silent raw-REST fallback in normal operation.
 - Pre-export clean API-format workflows for T2VA, FL2VA, Ref2VA with injectable parameters (prompt, duration, seed, refs, turbo strength, etc.).
 - Hermes skill must be able to:
   - Create new project folder
@@ -120,7 +121,9 @@ Hermes (via design-studio skill) is responsible for creating projects and writin
 5. Test from CLI: create project → write prompt → (manual ComfyUI for now) → verify folder layout.
 
 ### Phase 2 – ComfyUI Wiring
-- Make Hermes able to submit the pre-made API workflows via MCP or REST.
+- [x] Connect the `studio` profile to pinned `comfyui-mcp` and verify tools.
+- Submit API-format workflows via MCP; always archive output and call
+  `clear_vram` after every terminal success/error/cancel/timeout.
 - Parameter injection must be reliable.
 - After generation, skill must cleanly archive into `generations/`.
 

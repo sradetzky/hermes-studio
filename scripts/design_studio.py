@@ -27,6 +27,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import urllib.request
 from pathlib import Path
 
 RUN_H3 = Path.home() / ".hermes/skills/minimax-h3-run/scripts/run_h3.py"
@@ -34,6 +35,31 @@ KREA2 = Path(__file__).resolve().parent / "krea2_image.py"
 COMFY_ROOT = Path.home() / "ComfyUI"
 COMFY_OUTPUT = COMFY_ROOT / "output"
 DEFAULT_ROOT = Path(__file__).resolve().parent.parent / "studio-root"
+
+
+def free_comfy_vram() -> dict:
+    """Cleanup for legacy direct execution; production uses MCP clear_vram."""
+    request = urllib.request.Request(
+        "http://127.0.0.1:8188/free",
+        data=json.dumps({"unload_models": True, "free_memory": True}).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return {"ok": response.status == 200, "status": response.status}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+def interrupt_comfy() -> dict:
+    request = urllib.request.Request(
+        "http://127.0.0.1:8188/interrupt", data=b"", method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return {"ok": response.status == 200, "status": response.status}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
 
 
 def studio_root(override: str | None = None) -> Path:
@@ -124,6 +150,53 @@ def next_generation_dir(pp: Path) -> Path:
     return gens / f"{max(nums, default=0) + 1:03d}"
 
 
+def archive_outputs(root: Path, project: str, outputs: list[str],
+                    metadata: dict | None = None) -> Path:
+    """Archive completed MCP outputs from ComfyUI/output into one generation."""
+    pp = project_path(root, project)
+    output_root = COMFY_OUTPUT.resolve()
+    sources = []
+    for output in outputs:
+        source = Path(output).expanduser()
+        if not source.is_absolute():
+            source = output_root / source
+        source = source.resolve()
+        if not source.is_relative_to(output_root):
+            raise ValueError(f"output escapes ComfyUI output directory: {output!r}")
+        if not source.is_file():
+            raise FileNotFoundError(f"ComfyUI output not found: {source}")
+        sources.append(source)
+    if not sources:
+        raise ValueError("at least one output file is required")
+
+    gen_dir = next_generation_dir(pp)
+    gen_dir.mkdir()
+    copied = []
+    try:
+        for source in sources:
+            target = gen_dir / source.name
+            if target.exists():
+                raise FileExistsError(f"duplicate output filename: {source.name}")
+            shutil.copy2(source, target)
+            copied.append(target.name)
+        prompt_file = pp / "current_prompt.txt"
+        if prompt_file.exists():
+            shutil.copy2(prompt_file, gen_dir / "prompt.txt")
+        meta = {
+            **(metadata or {}),
+            "generated": _dt.datetime.now().isoformat(timespec="seconds"),
+            "transport": "comfyui-mcp",
+            "files": copied,
+            "sources": [str(source) for source in sources],
+        }
+        (gen_dir / "meta.json").write_text(
+            json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+    except Exception:
+        shutil.rmtree(gen_dir, ignore_errors=True)
+        raise
+    return gen_dir
+
+
 def run_generation(root: Path, project: str, handoff: str | None = None,
                    extra_args: list[str] | None = None,
                    timeout: int = 7200, dry_run: bool = False) -> dict:
@@ -146,7 +219,14 @@ def run_generation(root: Path, project: str, handoff: str | None = None,
         return {"dry_run": True, "stdout": result.stdout[-4000:], "stderr": result.stderr[-2000:]}
 
     print(f"[design-studio] submitting: {' '.join(cmd)}", file=sys.stderr)
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True,
+                                timeout=timeout)
+    except subprocess.TimeoutExpired:
+        interrupt_comfy()
+        free_comfy_vram()
+        raise
+    cleanup = free_comfy_vram()
 
     summary = {}
     try:  # runner writes its summary JSON via -o /dev/stdout
@@ -155,12 +235,14 @@ def run_generation(root: Path, project: str, handoff: str | None = None,
         pass
     if result.returncode != 0:
         return {"ok": False, "returncode": result.returncode,
-                "stderr": result.stderr[-3000:], "summary": summary}
+                "stderr": result.stderr[-3000:], "summary": summary,
+                "vram_cleanup": cleanup}
 
     gen_dir = next_generation_dir(pp)
     gen_dir.mkdir()
     meta = {"generated": _dt.datetime.now().isoformat(timespec="seconds"),
-            "handoff": str(handoff or ""), "runner": str(RUN_H3), **summary}
+            "handoff": str(handoff or ""), "runner": str(RUN_H3),
+            "vram_cleanup": cleanup, **summary}
 
     video = None
     for key in ("video", "output", "path"):  # locate produced file in summary
@@ -175,7 +257,8 @@ def run_generation(root: Path, project: str, handoff: str | None = None,
         (pp / "current_prompt.txt").read_text(encoding="utf-8"), encoding="utf-8")
     (gen_dir / "meta.json").write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
     # preview.jpg is created by the reviewer/user; do not extract frames automatically.
-    return {"ok": True, "generation": str(gen_dir), "meta": meta}
+    return {"ok": cleanup.get("ok", False), "generation": str(gen_dir),
+            "meta": meta}
 
 
 def run_image_generation(root: Path, project: str, recipe: str, prompt: str = "",
@@ -274,6 +357,14 @@ def main(argv=None) -> int:
                     help="extra krea2_image.py arg, e.g. --arg=--aspect --arg=16:9")
     sp.add_argument("--timeout", type=int, default=900)
 
+    sp = sub.add_parser("archive-output")
+    sp.add_argument("project")
+    sp.add_argument("outputs", nargs="+")
+    sp.add_argument("--prompt-id", default="")
+    sp.add_argument("--kind", default="")
+    sp.add_argument("--recipe", default="")
+    sp.add_argument("--meta-json", default="{}")
+
     args = ap.parse_args(argv)
     root = studio_root(args.root)
 
@@ -305,6 +396,20 @@ def main(argv=None) -> int:
                                    timeout=args.timeout)
         print(json.dumps(out, indent=2))
         return 0 if out.get("ok") else 1
+    elif args.cmd == "archive-output":
+        try:
+            meta = json.loads(args.meta_json)
+        except json.JSONDecodeError as exc:
+            ap.error(f"invalid --meta-json: {exc}")
+        if not isinstance(meta, dict):
+            ap.error("--meta-json must be a JSON object")
+        if args.prompt_id:
+            meta["prompt_id"] = args.prompt_id
+        if args.kind:
+            meta["kind"] = args.kind
+        if args.recipe:
+            meta["recipe"] = args.recipe
+        print(archive_outputs(root, args.project, args.outputs, meta))
     return 0
 
 

@@ -31,6 +31,7 @@ database → thin FastAPI web UI (Phase 3 M1–M3 working).
 - `docs/studio-cli.md` — design_studio.py commands & folder contract
 - `docs/image-pipeline.md` — Krea 2 recipes, models, capabilities
 - `docs/video-pipeline.md` — H3 runner integration, proven knobs
+- `docs/comfyui-mcp.md` — production transport, queue/cleanup transaction
 - `docs/frontend-plan.md` — web UI stack, layout, API surface, milestones
 
 ## Conventions
@@ -53,9 +54,11 @@ database → thin FastAPI web UI (Phase 3 M1–M3 working).
   the studio profile verified live (see docs/frontend-plan.md)
 - Quality pass: exact project ids, atomic chat records, persistent per-project
   Hermes sessions, stable incremental UI polling, profile drift checks
+- Phase 2 transport: studio owns pinned comfyui-mcp; MCP clear_vram verified;
+  every terminal job must unload models/free memory
 
 ## Next steps
 
-- [ ] Real end-to-end video generation through generate (blocking GPU job)
+- [ ] Real end-to-end H3 video generation through comfyui-mcp
 - [ ] Web UI M4 polish: upload endpoint (drag-drop), generation filters
 - [ ] Wire orchestrator → subagent dispatch (design-studio skill)

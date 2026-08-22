@@ -27,20 +27,26 @@ python3 scripts/design_studio.py list-projects
 python3 scripts/design_studio.py write-prompt <project-id> "<structured prompt>"
 python3 scripts/design_studio.py append-chat <project-id> <role> "content"
 
-# H3 video generation (blocking; wraps minimax-h3-run runner)
+# Archive completed comfyui-mcp output (production path)
+python3 scripts/design_studio.py archive-output <project-id> \
+  <comfy-output-file> --prompt-id <id> --kind image --recipe krea2-edit
+
+# Legacy direct H3 generation (manual diagnostics only)
 python3 scripts/design_studio.py generate <project-id> \
   --handoff h3_handoff_<slug>.json \
   --arg=--mp --arg=0.9 --arg=--steps --arg=20 [--dry-run]
 
-# Krea 2 still images (blocking; see docs/image-pipeline.md for recipes)
+# Legacy direct Krea 2 execution (manual diagnostics only)
 python3 scripts/design_studio.py generate-image <project-id> \
   --recipe t2i --prompt "..." --arg=--aspect --arg=16:9
 ```
 
 ## Behaviour notes
 
-- `generate` / `generate-image` archive automatically into the next numbered
-  `generations/NNN/`; meta.json carries seed + prompt_id + params
+- Production jobs run through comfyui-mcp; `archive-output` copies one or more
+  completed files into the next `generations/NNN/` and writes MCP metadata
+- Legacy `generate` / `generate-image` remain explicit diagnostics; they clean
+  VRAM after completion and interrupt before cleanup on timeout
 - No auto frame extraction or preview generation — user reviews renders
 - Missing/colliding output files are expected (user deletes broken renders);
   report path + prompt_id and move on
