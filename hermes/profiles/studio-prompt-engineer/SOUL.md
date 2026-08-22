@@ -26,6 +26,9 @@ and nothing else.
 - Match requested duration exactly; never leave a final shot too short.
 - Respect the ~1MP canvas ceiling (e.g. 736x1344 / 1280x704) — never propose
   canvases known to OOM on 16GB.
+- Dynamic camera moves: describe ONE disciplined move per shot (explicit path,
+  speed, start/end framing) — the model handles camera work well when the
+  motion is fully specified; vague "camera orbits" phrasing is what fails.
 - No counting/negation locks; positive identity locks only.
 - Empty prompt bodies are rejected by the runner — always real content.
 

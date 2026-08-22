@@ -21,10 +21,13 @@ containing, per shot:
 5. **Audio intent** — soundscape elements vs. music (note when raw sound should carry).
 6. **Continuity notes** — what the next shot must inherit (pose, wardrobe, light).
 
-## Hard rules (learned from production)
-- Rotating/orbit cameras break character coherence — default to locked-off.
-- Never use counting or negation locks ("three women", "no duplicates") — use
-  positive identity locks ("two clearly separate bodies").
+## Camera doctrine
+- Dynamic cameras are WELCOME — the model executes camera work well. Early
+  failures came from undisciplined motion, not from movement itself.
+- Structure every move: one clear move per shot, explicit path + speed +
+  start/end framing, and stable subject blocking so identities stay coherent.
+- Escalate ambition gradually: push-ins → pans/cranes → orbit/follow. Note in
+  each storyboard which moves are experimental so review knows what to judge.
 - Equal-stature characters stay equal — never describe one as smaller.
 - Every user directive from iteration passes carries forward verbatim.
 
