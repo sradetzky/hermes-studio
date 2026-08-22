@@ -5,10 +5,12 @@ no state in the UI that isn't already on disk; minimal dependencies.
 
 ## Stack (locked)
 
-- **FastAPI** backend (`.venv/`, deps: fastapi + uvicorn only)
+- **FastAPI** backend (`.venv/`; pinned in `requirements.txt`, including
+  python-multipart for reference uploads)
 - **Single HTML page**, vanilla JS + Tailwind via CDN — no SPA framework
 - Media served by mounting `studio-root/` and `~/ComfyUI/output` read-only
-- Chat resumes one persistent Hermes `studio` session per project
+- Chat jobs resume one persistent Hermes `studio` session per project and run
+  asynchronously behind durable `.runtime/jobs/*.json` records
 
 ## Layout (single page, three columns)
 
@@ -38,22 +40,27 @@ no state in the UI that isn't already on disk; minimal dependencies.
 | GET | `/api/project/{id}` | brief, chat tail, current_prompt |
 | GET | `/api/project/{id}/generations` | listing w/ meta.json contents |
 | GET | `/api/project/{id}/chat?after=N` | poll new chat lines |
-| POST | `/api/chat` | send message → resume studio session and return reply |
-| POST | `/api/upload` | drag-drop file into references/ |
+| POST | `/api/chat` | queue Studio work → HTTP 202 + job record |
+| GET | `/api/jobs/{id}` | one job's queued/running/completed/failed state |
+| GET | `/api/project/{id}/jobs` | recent project activity |
+| POST | `/api/project/{id}/references` | multi-file drag/drop upload |
 | GET | `/media/...` | static mount of studio-root |
 | GET | `/comfy/...` | static mount of ComfyUI/output |
 
 ## Chat → Hermes wiring
 
-POST /api/chat serializes requests per project and spawns
-`hermes -p studio [-r SESSION] chat -Q -t all -q "<msg>"`. The session id is
-stored under `.runtime/sessions/`; stdout is the reply and stderr carries only
-CLI metadata. Both sides are appended atomically to the project's chat.jsonl.
+POST /api/chat rejects a second active project job, returns HTTP 202 immediately,
+and starts a background worker. The worker serializes by project and spawns
+`hermes -p studio [-r SESSION] chat -Q -t all -q "<msg>"`. Session ids live
+under `.runtime/sessions/`; job state lives under `.runtime/jobs/`. Startup
+marks orphaned queued/running jobs failed rather than leaving them stuck.
 
 ## Safety / scope guards
 
-- Backend never writes into projects except: create-project, append chat,
-  upload to references/. Generation stays agent-side.
+- Backend writes only through project creation, atomic chat append, and the
+  validated reference-upload endpoint. Generation stays agent-side.
+- Uploads are restricted to image/video/audio extensions, 20 files/request,
+  256MB/file; path components are rejected and name collisions never overwrite
 - Exact project ids only; the core resolver rejects separators, symlink
   escapes, fuzzy suffix matching and paths outside `projects/`
 - No auth v1 (localhost bind only)
@@ -61,9 +68,9 @@ CLI metadata. Both sides are appended atomically to the project's chat.jsonl.
 ## Milestones
 
 1. M1 (done): backend read APIs + media mounts + static index.html
-2. M2 (partial): create-project + prompt viewer done; upload pending
-3. M3 (done): persistent chat round-trip through studio profile
-4. M4: polish — polling refresh, video poster frames, generation filter
+2. M2 (done): create-project + prompt viewer + drag/drop references
+3. M3 (done): persistent asynchronous chat round-trip + activity status
+4. M4: media review — detail viewer, promote/use-as-ref, generation filter
 
 ## Out of scope (v1)
 

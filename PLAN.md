@@ -133,14 +133,16 @@ Hermes (via design-studio skill) is responsible for creating projects and writin
 ### Phase 3 – Minimal Web UI
 - FastAPI app that:
   - Serves static index.html
-  - `/api/chat` → streams to Hermes studio profile
+  - `/api/chat` → asynchronous persisted jobs on Hermes studio profile
   - `/api/projects` + `/api/project/{id}/media`
   - Mounts the studio-root safely for media serving
 - Single page with: project list, chat, video player, prompt viewer, references.
 - Auto-refresh or simple polling for new generations.
+- [x] Async per-project job state + visible queued/running/completed/failed status.
+- [x] Multi-file drag/drop reference upload with safe non-overwriting storage.
 
 ### Phase 4 – Polish
-- Drag-drop references
+- Media detail/filter/review actions
 - “Generate with this prompt” button that appears when Hermes outputs a structured prompt
 - Promote to `final/`
 - Basic project metadata

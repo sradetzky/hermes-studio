@@ -59,9 +59,11 @@ database → thin FastAPI web UI (Phase 3 M1–M3 working).
   every terminal job must unload models/free memory
 - Backup specialist: studio-grok on xAI OAuth/Grok 4.6; xAI web + X search
   verified, Imagine quality configured; persistent project dispatch available
+- Web M4 foundation: asynchronous project jobs, visible activity state, and
+  safe multi-file drag/drop references
 
 ## Next steps
 
 - [ ] Real end-to-end H3 video generation through comfyui-mcp
-- [ ] Web UI M4 polish: upload endpoint (drag-drop), generation filters
+- [ ] Web UI media review: detail viewer, filters, promote/use-as-reference
 - [ ] Wire orchestrator → subagent dispatch (design-studio skill)

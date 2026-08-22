@@ -8,6 +8,9 @@ This is a starter skeleton + decision log for a fully local creative studio buil
 
 See **PLAN.md** for the full architecture and implementation order.
 
+Web UI dependencies are pinned in `requirements.txt`; run with
+`./webapp/run.sh` after installing them into `.venv`.
+
 ## Quick Start for Implementing Agent
 
 1. Read `PLAN.md` completely.
