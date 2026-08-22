@@ -11,6 +11,13 @@ See **PLAN.md** for the full architecture and implementation order.
 Web UI dependencies are pinned in `requirements.txt`; run with
 `./webapp/run.sh` after installing them into `.venv`.
 
+Development dependencies are in `requirements-dev.txt`. Rebuild the committed
+offline stylesheet after changing HTML/JS utility classes with:
+
+```bash
+scripts/build-web-css.sh
+```
+
 ## Quick Start for Implementing Agent
 
 1. Read `PLAN.md` completely.

@@ -8,7 +8,8 @@ as work proceeds. Detailed docs live in `docs/` — this file stays a lean map.
 Hermes Studio: fully local, agent-orchestrated creative studio.
 Hermes profiles orchestrate → ComfyUI (`~/ComfyUI`, RTX 5060 Ti 16GB) renders
 video (MiniMax H3) and stills (Krea 2) → filesystem (`studio-root/`) is the
-database → thin FastAPI web UI (Phase 3 M1–M3 working).
+project/media source of truth → SQLite only coordinates web jobs/chat sessions
+→ thin FastAPI web UI (Phase 3 M1–M4 foundation working).
 
 ## Repo map
 
@@ -22,6 +23,9 @@ database → thin FastAPI web UI (Phase 3 M1–M3 working).
 | `scripts/krea2_image.py` | Krea 2 image runner (t2i / style-ref / upscale) |
 | `scripts/sync-profiles.sh` | Deploy/check repo SOULs + skills against live profiles |
 | `scripts/switch-model.sh` | Fleet-wide model/provider switching |
+| `scripts/build-web-css.sh` | Rebuild pinned local Tailwind CSS bundle |
+| `webapp/` | App factory, routes, SQLite jobs, process manager, uploads, local UI |
+| `requirements*.txt` | Pinned runtime and development dependencies |
 | `comfyui/workflows/` | Parameterized H3 API-format workflow JSONs (empty) |
 | `studio-root/` | Default studio root: projects/, shared/, tmp/ |
 
@@ -61,6 +65,10 @@ database → thin FastAPI web UI (Phase 3 M1–M3 working).
   verified, Imagine quality configured; persistent project dispatch available
 - Web M4 foundation: asynchronous project jobs, visible activity state, and
   safe multi-file drag/drop references
+- Thermo-nuclear refactor: app factory + SQLite transactional jobs/chat/session,
+  lifespan-owned scheduler/processes, atomic upload store, guarded media routes,
+  local CSS/JS modules, continuous stale-peer recovery, locked CLI chat exports,
+  and route/process/concurrency/lifecycle tests
 
 ## Next steps
 

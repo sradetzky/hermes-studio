@@ -1,5 +1,7 @@
 import json
+import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
@@ -12,6 +14,7 @@ from unittest.mock import patch
 from scripts import design_studio as ds
 from scripts import krea2_image
 from scripts.krea2_image import parse_loras
+from webapp.job_store import JobStore
 
 
 class ProjectPathTests(unittest.TestCase):
@@ -48,6 +51,70 @@ class ProjectPathTests(unittest.TestCase):
         self.assertEqual(len(records), count)
         self.assertEqual({r["content"] for r in records},
                          {f"message-{i}" for i in range(count)})
+
+    def test_configured_cli_chat_append_uses_transactional_store(self):
+        runtime = Path(self.temp.name) / "runtime"
+        with patch.dict(os.environ, {
+            "DESIGN_STUDIO_ROOT": str(self.root),
+            "HERMES_STUDIO_RUNTIME_ROOT": str(runtime),
+        }):
+            ds.append_chat(self.root, self.project.name, "user", "transactional")
+        store = JobStore(runtime / "studio.db")
+        total, events = store.chat_events(self.project.name)
+        self.assertEqual(total, 1)
+        self.assertEqual(events[0].content, "transactional")
+        exported = [json.loads(line) for line in
+                    (self.project / "chat.jsonl").read_text().splitlines()]
+        self.assertEqual(exported[0]["content"], "transactional")
+
+    def test_direct_script_entrypoint_reaches_transactional_store(self):
+        runtime = Path(self.temp.name) / "direct-runtime"
+        environment = {
+            **os.environ,
+            "DESIGN_STUDIO_ROOT": str(self.root),
+            "HERMES_STUDIO_RUNTIME_ROOT": str(runtime),
+        }
+        script = ds.REPO_ROOT / "scripts" / "design_studio.py"
+        subprocess.run(
+            [sys.executable, str(script), "append-chat", self.project.name,
+             "system", "direct-entrypoint"],
+            cwd=ds.REPO_ROOT,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        store = JobStore(runtime / "studio.db")
+        total, events = store.chat_events(self.project.name)
+        self.assertEqual(total, 1)
+        self.assertEqual(events[0].content, "direct-entrypoint")
+
+    def test_cli_append_after_import_survives_web_job_export(self):
+        runtime = Path(self.temp.name) / "reconcile-runtime"
+        with patch.dict(os.environ, {
+            "DESIGN_STUDIO_ROOT": str(self.root),
+            "HERMES_STUDIO_RUNTIME_ROOT": str(runtime),
+        }):
+            store = JobStore(runtime / "studio.db")
+            store.initialize()
+            store.import_chat_if_empty(
+                self.project.name, self.project / "chat.jsonl")
+            ds.append_chat(
+                self.root, self.project.name, "system", "external-after-import")
+            job = store.create_chat_job(self.project.name, "question")
+            store.claim_next("worker")
+            store.complete(job.id, "worker", "answer", "session")
+            store.export_chat(self.project.name, self.project / "chat.jsonl")
+        rows = [json.loads(line) for line in
+                (self.project / "chat.jsonl").read_text().splitlines()]
+        self.assertEqual(
+            [(row["role"], row["content"]) for row in rows],
+            [
+                ("system", "external-after-import"),
+                ("user", "question"),
+                ("assistant", "answer"),
+            ],
+        )
 
     def test_archives_mcp_outputs_with_protected_metadata(self):
         comfy_output = Path(self.temp.name) / "comfy-output"

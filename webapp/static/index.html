@@ -1,394 +1,66 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Hermes Studio</title>
-<script src="https://cdn.tailwindcss.com"></script>
-<style>
-  body { background:#0b0d10; color:#e6e8eb; }
-  .panel { background:#12151a; border:1px solid #232830; border-radius:.75rem; }
-  .btn { background:#1c2129; border:1px solid #2c333e; padding:.35rem .8rem; border-radius:.5rem; font-size:.85rem; }
-  .btn:hover { background:#242b35; }
-  .proj { padding:.45rem .7rem; border-radius:.5rem; cursor:pointer; font-size:.9rem; }
-  .proj:hover, .proj.active { background:#1c2129; }
-  #chatlog div { margin-bottom:.6rem; line-height:1.45; }
-  .role-user { color:#7ab7ff; } .role-assistant { color:#9be29b; }
-  pre.prompt { white-space:pre-wrap; font-size:.78rem; color:#b9c0c9; max-height:16rem; overflow:auto; }
-  img.thumb, video.thumb { width:100%; border-radius:.5rem; display:block; }
-  .activity-dot { width:.55rem; height:.55rem; border-radius:999px; background:#596170; }
-  .activity-dot.queued { background:#d9a441; }
-  .activity-dot.running { background:#65a9ff; box-shadow:0 0 0 .2rem #65a9ff22; }
-  .activity-dot.completed { background:#66c77a; }
-  .activity-dot.failed { background:#ef6c6c; }
-  .dropzone { border:1px dashed #343d49; border-radius:.6rem; padding:.7rem; text-align:center; color:#737d8a; cursor:pointer; }
-  .dropzone:hover, .dropzone.drag { border-color:#6ea8ef; color:#a9c9f2; background:#6ea8ef0d; }
-  .ref-card { min-width:0; }
-  .ref-name { font-size:.62rem; color:#747e8b; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-top:.25rem; }
-  button:disabled, input:disabled { opacity:.5; cursor:not-allowed; }
-</style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hermes Studio</title>
+  <link rel="stylesheet" href="/static/studio.css">
+  <script type="module" src="/static/app.js"></script>
 </head>
 <body class="h-screen flex flex-col">
-<header class="px-4 py-3 border-b border-[#232830] flex items-center gap-3">
-  <span class="font-semibold tracking-wide">Hermes Studio</span>
-  <span class="text-xs text-gray-500" id="status"></span>
-  <div class="ml-auto flex items-center gap-2 text-xs text-gray-400" id="activity" title="Studio activity">
-    <span class="activity-dot" id="activity-dot"></span>
-    <span id="activity-text">Idle</span>
-  </div>
-</header>
-
-<main class="flex-1 grid grid-cols-[220px_1fr_360px] gap-3 p-3 min-h-0">
-
-  <!-- projects rail -->
-  <aside class="panel p-2 overflow-auto">
-    <div class="flex justify-between items-center mb-2 px-1">
-      <span class="text-xs uppercase tracking-wider text-gray-500">Projects</span>
-      <button class="btn" onclick="newProject()">+</button>
+  <header class="px-4 py-3 border-b border-[#232830] flex items-center gap-3">
+    <span class="font-semibold tracking-wide">Hermes Studio</span>
+    <span class="text-xs text-gray-500" id="status"></span>
+    <div class="ml-auto flex items-center gap-2 text-xs text-gray-400"
+         id="activity" title="Studio activity">
+      <span class="activity-dot" id="activity-dot"></span>
+      <span id="activity-text">Idle</span>
     </div>
-    <nav id="projects"></nav>
-  </aside>
+  </header>
 
-  <!-- chat + prompt -->
-  <section class="flex flex-col gap-3 min-h-0">
-    <div class="panel flex-1 p-3 overflow-auto min-h-0" id="chatlog"></div>
-    <div class="panel p-3">
-      <details open>
-        <summary class="text-xs uppercase tracking-wider text-gray-500 cursor-pointer mb-2">Current prompt</summary>
-        <pre class="prompt" id="prompt">—</pre>
-      </details>
-    </div>
-    <form class="panel p-2 flex gap-2" onsubmit="sendChat(event)">
-      <input id="chatinput" class="flex-1 bg-transparent outline-none text-sm px-2"
-             placeholder="Message the studio agent…" autocomplete="off">
-      <button class="btn" id="send-button">Send</button>
-    </form>
-  </section>
+  <main class="flex-1 grid grid-cols-[220px_1fr_360px] gap-3 p-3 min-h-0">
+    <aside class="panel p-2 overflow-auto">
+      <div class="flex justify-between items-center mb-2 px-1">
+        <span class="text-xs uppercase tracking-wider text-gray-500">Projects</span>
+        <button class="btn" id="new-project" type="button">+</button>
+      </div>
+      <nav id="projects"></nav>
+    </aside>
 
-  <!-- media -->
-  <aside class="panel p-3 overflow-auto">
-    <div class="text-xs uppercase tracking-wider text-gray-500 mb-2">Generations</div>
-    <div id="gens" class="space-y-3"></div>
-    <div class="text-xs uppercase tracking-wider text-gray-500 mt-4 mb-2">References</div>
-    <div class="dropzone mb-3" id="dropzone" tabindex="0">
-      <div id="drop-text">Drop references here or click to browse</div>
-      <div class="text-[10px] mt-1">images · video · audio · 256MB max each</div>
-    </div>
-    <input id="file-input" type="file" multiple hidden
-      accept="image/*,video/*,audio/*">
-    <div id="refs" class="grid grid-cols-3 gap-2"></div>
-  </aside>
-</main>
+    <section class="flex flex-col gap-3 min-h-0">
+      <div class="panel flex-1 p-3 overflow-auto min-h-0" id="chatlog"></div>
+      <div class="panel p-3">
+        <details open>
+          <summary class="text-xs uppercase tracking-wider text-gray-500 cursor-pointer mb-2">
+            Current prompt
+          </summary>
+          <pre class="prompt" id="prompt">—</pre>
+        </details>
+      </div>
+      <form class="panel p-2 flex gap-2" id="chat-form">
+        <input id="chatinput"
+               class="flex-1 bg-transparent outline-none text-sm px-2"
+               placeholder="Message the studio agent…" autocomplete="off">
+        <button class="btn" id="send-button">Send</button>
+      </form>
+    </section>
 
-<script>
-const $ = s => document.querySelector(s);
-let current = null;
-let projects = [];
-let chatCount = 0;
-let generationSignature = '';
-let referenceSignature = '';
-let polling = false;
-let pendingRefresh = false;
-
-async function j(url, opts) {
-  const r = await fetch(url, opts);
-  if (!r.ok) {
-    let detail = r.status;
-    try { detail = (await r.json()).detail || detail; } catch (_) {}
-    throw new Error(detail);
-  }
-  return r.json();
-}
-
-async function loadProjects() {
-  const d = await j('/api/projects');
-  projects = d.projects;
-  renderProjects();
-  if (!current && projects.length) await pick(projects[0].id);
-}
-
-function renderProjects() {
-  const nav = $('#projects');
-  nav.replaceChildren();
-  if (!projects.length) return showEmpty(nav, 'no projects yet');
-  for (const project of projects) {
-    const item = document.createElement('div');
-    item.className = `proj ${project.id === current ? 'active' : ''}`;
-    item.textContent = project.id;
-    item.onclick = () => pick(project.id);
-    nav.append(item);
-  }
-}
-
-async function pick(id) {
-  current = id;
-  chatCount = 0;
-  generationSignature = '';
-  referenceSignature = '';
-  $('#chatlog').replaceChildren();
-  delete $('#chatlog').dataset.empty;
-  $('#gens').replaceChildren();
-  $('#refs').replaceChildren();
-  renderActivity([]);
-  renderProjects();
-  await refreshProject();
-}
-
-async function newProject() {
-  const name = prompt('Project name:');
-  if (!name) return;
-  const brief = prompt('Brief (optional):') || '';
-  const created = await j('/api/projects', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({name, brief})});
-  current = created.id;
-  await loadProjects();
-  await pick(created.id);
-}
-
-async function refreshProject() {
-  if (!current) return;
-  if (polling) {
-    pendingRefresh = true;
-    return;
-  }
-  polling = true;
-  const selected = current;
-  const pid = encodeURIComponent(selected);
-  try {
-    const [project, chat, gens, refs, jobs] = await Promise.all([
-      j(`/api/project/${pid}`),
-      j(`/api/project/${pid}/chat?after=${chatCount}`),
-      j(`/api/project/${pid}/generations`),
-      j(`/api/project/${pid}/references`),
-      j(`/api/project/${pid}/jobs?limit=5`),
-    ]);
-    if (selected !== current) {
-      pendingRefresh = true;
-      return;
-    }
-    $('#prompt').textContent = project.current_prompt || '—';
-    document.title = `${project.id} — Hermes Studio`;
-    if (chat.total < chatCount) {
-      chatCount = 0;
-      $('#chatlog').replaceChildren();
-      const all = await j(`/api/project/${pid}/chat`);
-      appendMessages(all.messages);
-      chatCount = all.total;
-    } else {
-      appendMessages(chat.messages);
-      chatCount = chat.total;
-    }
-    const nextGenerationSignature = JSON.stringify(gens.generations);
-    if (nextGenerationSignature !== generationSignature) {
-      generationSignature = nextGenerationSignature;
-      renderGenerations(gens.generations);
-    }
-    const nextReferenceSignature = JSON.stringify(refs.references);
-    if (nextReferenceSignature !== referenceSignature) {
-      referenceSignature = nextReferenceSignature;
-      renderReferences(refs.references);
-    }
-    renderActivity(jobs.jobs);
-  } catch (err) {
-    $('#status').textContent = `refresh error: ${err.message}`;
-  } finally {
-    polling = false;
-    if (pendingRefresh) {
-      pendingRefresh = false;
-      queueMicrotask(refreshProject);
-    }
-  }
-}
-
-function appendMessages(messages) {
-  const log = $('#chatlog');
-  if (!messages.length && chatCount === 0 && !log.children.length) {
-    return showEmpty(log, 'Say hello to start planning…');
-  }
-  if (messages.length && log.dataset.empty) {
-    log.replaceChildren();
-    delete log.dataset.empty;
-  }
-  for (const message of messages) {
-    const row = document.createElement('div');
-    row.style.whiteSpace = 'pre-wrap';
-    const role = document.createElement('span');
-    role.className = `role-${message.role} font-semibold`;
-    role.textContent = message.role;
-    row.append(role, document.createTextNode(` ${message.content || ''}`));
-    log.append(row);
-  }
-  if (messages.length) log.scrollTop = log.scrollHeight;
-}
-
-function renderGenerations(generations) {
-  const box = $('#gens');
-  box.replaceChildren();
-  if (!generations.length) return showEmpty(box, 'none yet');
-  let rendered = 0;
-  for (const generation of generations) {
-    const video = generation.files.find(f => f.toLowerCase().endsWith('.mp4'));
-    const image = generation.files.find(f => /\.(png|jpe?g|webp)$/i.test(f));
-    if (!video && !image) continue;
-    const card = document.createElement('div');
-    const file = video || image;
-    const src = `/media/projects/${encodeURIComponent(current)}/generations/${encodeURIComponent(generation.gen)}/${encodeURIComponent(file)}`;
-    const media = document.createElement(video ? 'video' : 'img');
-    media.className = 'thumb';
-    media.src = src;
-    if (video) { media.controls = true; media.preload = 'metadata'; }
-    else { media.loading = 'lazy'; }
-    card.append(media);
-    const label = document.createElement('div');
-    label.className = 'text-[10px] text-gray-500 mt-1';
-    const meta = generation.meta || {};
-    const details = [generation.gen];
-    if (meta.seed !== undefined && meta.seed !== null) details.push(`seed ${meta.seed}`);
-    if (meta.recipe || meta.kind) details.push(meta.recipe || meta.kind);
-    label.textContent = details.join(' · ');
-    card.append(label);
-    box.append(card);
-    rendered += 1;
-  }
-  if (!rendered) showEmpty(box, 'none yet');
-}
-
-function renderReferences(references) {
-  const box = $('#refs');
-  box.replaceChildren();
-  for (const file of references) {
-    const src = `/media/projects/${encodeURIComponent(current)}/references/${encodeURIComponent(file)}`;
-    const card = document.createElement('div');
-    card.className = 'ref-card';
-    if (/\.(png|jpe?g|webp|gif)$/i.test(file)) {
-      const image = document.createElement('img');
-      image.className = 'thumb';
-      image.loading = 'lazy';
-      image.src = src;
-      image.alt = file;
-      card.append(image);
-    } else if (/\.(mp4|mov|webm)$/i.test(file)) {
-      const video = document.createElement('video');
-      video.className = 'thumb';
-      video.src = src;
-      video.muted = true;
-      video.preload = 'metadata';
-      card.append(video);
-    } else {
-      const icon = document.createElement('div');
-      icon.className = 'panel p-3 text-center text-lg';
-      icon.textContent = '♪';
-      card.append(icon);
-    }
-    const name = document.createElement('div');
-    name.className = 'ref-name';
-    name.textContent = file;
-    name.title = file;
-    card.append(name);
-    box.append(card);
-  }
-}
-
-function renderActivity(jobs) {
-  const latest = jobs[0];
-  const active = jobs.find(job => job.status === 'queued' || job.status === 'running');
-  const state = active?.status || latest?.status || 'idle';
-  const dot = $('#activity-dot');
-  dot.className = `activity-dot ${state === 'idle' ? '' : state}`;
-  const labels = {
-    idle: 'Idle', queued: 'Studio queued', running: 'Studio working…',
-    completed: 'Last job completed', failed: 'Last job failed',
-  };
-  $('#activity-text').textContent = labels[state] || state;
-  $('#activity').title = latest?.error || latest?.message || 'Studio activity';
-  $('#chatinput').disabled = Boolean(active);
-  $('#send-button').disabled = Boolean(active);
-}
-
-function showEmpty(element, text) {
-  const empty = document.createElement('div');
-  empty.className = 'text-xs text-gray-600 px-2';
-  empty.textContent = text;
-  element.dataset.empty = 'true';
-  element.append(empty);
-}
-
-async function sendChat(e) {
-  e.preventDefault();
-  const input = $('#chatinput');
-  const msg = input.value.trim();
-  if (!msg || !current) return alert('Pick a project first');
-  input.value = '';
-  $('#status').textContent = 'studio is thinking…';
-  try {
-    const job = await j(`/api/chat?pid=${encodeURIComponent(current)}`, {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({message: msg})});
-    $('#status').textContent = '';
-    renderActivity([job]);
-    await refreshProject();
-  } catch (err) { $('#status').textContent = 'error: ' + err.message; }
-}
-
-function uploadReferences(files) {
-  if (!current || !files.length) return Promise.resolve();
-  const form = new FormData();
-  for (const file of files) form.append('files', file);
-  const dropText = $('#drop-text');
-  dropText.textContent = `Uploading ${files.length} file${files.length === 1 ? '' : 's'}…`;
-  return new Promise((resolve, reject) => {
-    const request = new XMLHttpRequest();
-    request.open('POST', `/api/project/${encodeURIComponent(current)}/references`);
-    request.upload.onprogress = event => {
-      if (event.lengthComputable) {
-        dropText.textContent = `Uploading… ${Math.round(event.loaded / event.total * 100)}%`;
-      }
-    };
-    request.onload = () => {
-      if (request.status >= 200 && request.status < 300) resolve();
-      else {
-        let message = request.status;
-        try { message = JSON.parse(request.responseText).detail || message; } catch (_) {}
-        reject(new Error(message));
-      }
-    };
-    request.onerror = () => reject(new Error('upload network error'));
-    request.send(form);
-  }).then(async () => {
-    referenceSignature = '';
-    $('#status').textContent = '';
-    await refreshProject();
-  }).catch(error => {
-    $('#status').textContent = `upload error: ${error.message}`;
-  }).finally(() => {
-    dropText.textContent = 'Drop references here or click to browse';
-    $('#file-input').value = '';
-  });
-}
-
-const dropzone = $('#dropzone');
-const fileInput = $('#file-input');
-dropzone.onclick = () => current ? fileInput.click() : alert('Pick a project first');
-dropzone.onkeydown = event => {
-  if (event.key === 'Enter' || event.key === ' ') dropzone.click();
-};
-for (const eventName of ['dragenter', 'dragover']) {
-  dropzone.addEventListener(eventName, event => {
-    event.preventDefault();
-    dropzone.classList.add('drag');
-  });
-}
-for (const eventName of ['dragleave', 'drop']) {
-  dropzone.addEventListener(eventName, event => {
-    event.preventDefault();
-    dropzone.classList.remove('drag');
-  });
-}
-dropzone.addEventListener('drop', event => uploadReferences(event.dataTransfer.files));
-fileInput.onchange = () => uploadReferences(fileInput.files);
-
-loadProjects();
-setInterval(refreshProject, 5000);
-</script>
+    <aside class="panel p-3 overflow-auto">
+      <div class="text-xs uppercase tracking-wider text-gray-500 mb-2">
+        Generations
+      </div>
+      <div id="gens" class="space-y-3"></div>
+      <div class="text-xs uppercase tracking-wider text-gray-500 mt-4 mb-2">
+        References
+      </div>
+      <div class="dropzone mb-3" id="dropzone" tabindex="0">
+        <div id="drop-text">Drop references here or click to browse</div>
+        <div class="text-[10px] mt-1">images · video · audio · 256MB max each</div>
+      </div>
+      <input id="file-input" type="file" multiple hidden
+             accept="image/*,video/*,audio/*">
+      <div id="refs" class="grid grid-cols-3 gap-2"></div>
+    </aside>
+  </main>
 </body>
 </html>

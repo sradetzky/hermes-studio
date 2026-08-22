@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as _dt
+import fcntl
 import json
 import os
 import re
@@ -30,13 +31,20 @@ import sys
 import urllib.request
 from pathlib import Path
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if __package__ in {None, ""} and str(REPO_ROOT) not in sys.path:
+    # Direct `python scripts/design_studio.py` execution needs the repo package
+    # root for shared runtime modules. Installed/package imports need no shim.
+    sys.path.insert(0, str(REPO_ROOT))
+
 RUN_H3 = Path.home() / ".hermes/skills/minimax-h3-run/scripts/run_h3.py"
 KREA2 = Path(__file__).resolve().parent / "krea2_image.py"
 COMFY_ROOT = Path.home() / "ComfyUI"
 COMFY_OUTPUT = COMFY_ROOT / "output"
 GROK_IMAGE_OUTPUT = (Path.home() / ".hermes" / "profiles" / "studio-grok" /
                      "cache" / "images")
-DEFAULT_ROOT = Path(__file__).resolve().parent.parent / "studio-root"
+DEFAULT_ROOT = REPO_ROOT / "studio-root"
+DEFAULT_RUNTIME = DEFAULT_ROOT.parent / ".runtime"
 SESSION_ID_RE = re.compile(r"session_id:\s*([A-Za-z0-9_-]+)")
 
 
@@ -132,17 +140,43 @@ def write_prompt(root: Path, project: str, prompt: str) -> Path:
 
 def append_chat(root: Path, project: str, role: str, content: str) -> None:
     pp = project_path(root, project)
+    configured_root = Path(
+        os.environ.get("DESIGN_STUDIO_ROOT", DEFAULT_ROOT)
+    ).expanduser().resolve()
+    if root.resolve() == configured_root:
+        # Lazy import avoids a module cycle: webapp routes import this CLI core.
+        from webapp.job_store import JobStore
+
+        runtime = Path(os.environ.get(
+            "HERMES_STUDIO_RUNTIME_ROOT", DEFAULT_RUNTIME
+        )).expanduser().resolve()
+        store = JobStore(runtime / "studio.db")
+        store.initialize()
+        store.import_chat_if_empty(pp.name, pp / "chat.jsonl")
+        store.append_external_event(pp.name, role, content)
+        store.export_chat(pp.name, pp / "chat.jsonl")
+        return
     entry = {"role": role,
              "content": content,
              "ts": _dt.datetime.now().isoformat(timespec="seconds")}
     # O_APPEND + single write: atomic enough for line-sized records even with
     # concurrent writers (threads / CLI + webapp).
     data = json.dumps(entry, ensure_ascii=False).encode("utf-8") + b"\n"
-    fd = os.open(pp / "chat.jsonl", os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
-    try:
-        os.write(fd, data)
-    finally:
-        os.close(fd)
+    lock_path = pp / ".chat.lock"
+    with lock_path.open("a+b") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            fd = os.open(
+                pp / "chat.jsonl",
+                os.O_WRONLY | os.O_CREAT | os.O_APPEND,
+                0o644,
+            )
+            try:
+                os.write(fd, data)
+            finally:
+                os.close(fd)
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
 # ---------------------------------------------------------------- generation

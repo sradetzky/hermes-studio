@@ -1,0 +1,303 @@
+from __future__ import annotations
+
+import logging
+import os
+import re
+import signal
+import subprocess
+import threading
+import time
+import uuid
+from collections.abc import Callable
+from pathlib import Path
+
+from webapp.config import Settings
+from webapp.job_store import JobStore, JobStoreError
+from webapp.models import Job, JobStatus
+
+
+log = logging.getLogger(__name__)
+SESSION_RE = re.compile(r"session_id:\s*([A-Za-z0-9_-]+)")
+CommandBuilder = Callable[[Job, str | None], list[str]]
+
+
+class StudioJobManager:
+    def __init__(self, settings: Settings, store: JobStore,
+                 command_builder: CommandBuilder | None = None,
+                 cleanup_callback: Callable[[], None] | None = None):
+        self.settings = settings
+        self.store = store
+        self.owner_id = uuid.uuid4().hex
+        self.command_builder = command_builder or self._default_command
+        self.cleanup_callback = cleanup_callback or self._cleanup_comfy
+        self._stop = threading.Event()
+        self._heartbeat_stop = threading.Event()
+        self._wake = threading.Event()
+        self._scheduler: threading.Thread | None = None
+        self._heartbeat: threading.Thread | None = None
+        self._processes: dict[str, subprocess.Popen] = {}
+        self._process_lock = threading.Lock()
+
+    def start(self) -> None:
+        self.store.initialize()
+        self.store.register_worker(self.owner_id)
+        self._recover_running_jobs()
+        self._heartbeat = threading.Thread(
+            target=self._heartbeat_loop,
+            name=f"studio-heartbeat-{self.owner_id[:8]}",
+            daemon=False,
+        )
+        self._heartbeat.start()
+        self._scheduler = threading.Thread(
+            target=self._scheduler_loop,
+            name=f"studio-scheduler-{self.owner_id[:8]}",
+            daemon=False,
+        )
+        self._scheduler.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._wake.set()
+        with self._process_lock:
+            processes = list(self._processes.values())
+        had_processes = bool(processes)
+        for process in processes:
+            self._terminate_process(process)
+        if had_processes:
+            self._cleanup_safely()
+        if self._scheduler:
+            self._scheduler.join(timeout=30)
+            if self._scheduler.is_alive():
+                log.error("Studio scheduler did not stop within 30 seconds")
+        for job in self.store.active_jobs():
+            if job.owner_id == self.owner_id:
+                self.store.fail(job.id, "Studio server stopped", self.owner_id)
+                self._export_chat(job.project)
+        self._heartbeat_stop.set()
+        if self._heartbeat:
+            self._heartbeat.join(timeout=5)
+        self.store.unregister_worker(self.owner_id)
+
+    def submit_chat(self, project: str, message: str) -> Job:
+        chat_path = self._chat_path(project)
+        self.store.import_chat_if_empty(project, chat_path)
+        job = self.store.create_chat_job(project, message)
+        self._wake.set()
+        return job
+
+    def _scheduler_loop(self) -> None:
+        while not self._stop.is_set():
+            self.store.heartbeat_worker(self.owner_id)
+            try:
+                stale = self.store.claim_stale_running(
+                    self.owner_id,
+                    time.time() - self.settings.worker_lease_timeout_seconds,
+                )
+                if stale:
+                    self._recover_claimed_job(stale)
+                    continue
+                job = self.store.claim_next(self.owner_id)
+            except JobStoreError:
+                log.exception("Could not claim next Studio job")
+                self._stop.wait(0.5)
+                continue
+            if not job:
+                self._wake.wait(0.5)
+                self._wake.clear()
+                continue
+            if self._stop.is_set():
+                self.store.fail(job.id, "Studio server stopped", self.owner_id)
+                self._export_chat(job.project)
+                break
+            self._execute(job)
+
+    def _heartbeat_loop(self) -> None:
+        while not self._heartbeat_stop.wait(1):
+            try:
+                self.store.heartbeat_worker(self.owner_id)
+            except Exception:
+                log.exception("Could not update Studio worker heartbeat")
+
+    def _execute(self, job: Job) -> None:
+        session_id = self.store.get_session(job.project)
+        command = self.command_builder(job, session_id)
+        process: subprocess.Popen | None = None
+        try:
+            with self._process_lock:
+                if self._stop.is_set():
+                    self.store.fail(
+                        job.id, "Studio server stopped", self.owner_id)
+                    self._export_chat(job.project)
+                    return
+                process = subprocess.Popen(
+                    command,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    start_new_session=True,
+                )
+                self.store.set_pid(job.id, self.owner_id, process.pid)
+                self._processes[job.id] = process
+            try:
+                stdout, stderr = self._communicate(process)
+            except subprocess.TimeoutExpired:
+                self._terminate_process(process)
+                process.communicate()
+                self._cleanup_safely()
+                self.store.fail(
+                    job.id, "Studio agent timed out", self.owner_id)
+                self._export_chat(job.project)
+                return
+            if process.returncode:
+                if self._stop.is_set():
+                    return
+                error = f"Studio agent failed ({process.returncode})"
+                log.error(
+                    "Studio agent failed (%d): %s",
+                    process.returncode, stderr.strip(),
+                )
+                self._cleanup_safely()
+                self.store.fail(
+                    job.id, error, self.owner_id,
+                )
+                self._export_chat(job.project)
+                return
+            reply = stdout.strip()
+            if not reply:
+                self._cleanup_safely()
+                self.store.fail(
+                    job.id, "Studio agent returned an empty reply", self.owner_id)
+                self._export_chat(job.project)
+                return
+            match = SESSION_RE.search(stderr)
+            self.store.complete(
+                job.id, self.owner_id, reply,
+                match.group(1) if match else None,
+            )
+            self._export_chat(job.project)
+        except Exception as exc:
+            log.exception("Studio job %s failed", job.id)
+            if process:
+                self._terminate_process(process)
+            self._cleanup_safely()
+            try:
+                self.store.fail(job.id, str(exc), self.owner_id)
+                self._export_chat(job.project)
+            except Exception:
+                log.exception("Could not persist failure for job %s", job.id)
+        finally:
+            with self._process_lock:
+                self._processes.pop(job.id, None)
+
+    def _default_command(self, job: Job, session_id: str | None) -> list[str]:
+        command = [
+            self.settings.hermes_command,
+            "-p", self.settings.studio_profile,
+        ]
+        if session_id and re.fullmatch(r"[A-Za-z0-9_-]+", session_id):
+            command += ["-r", session_id]
+        command += ["chat", "-Q", "-t", "all", "-q", job.message]
+        return command
+
+    def _chat_path(self, project: str) -> Path:
+        return self.settings.studio_root / "projects" / project / "chat.jsonl"
+
+    def _export_chat(self, project: str) -> None:
+        try:
+            self.store.export_chat(project, self._chat_path(project))
+        except Exception:
+            log.exception("Could not export chat for project %s", project)
+
+    def _recover_running_jobs(self) -> None:
+        while stale := self.store.claim_stale_running(
+                self.owner_id,
+                time.time() - self.settings.worker_lease_timeout_seconds):
+            self._recover_claimed_job(stale)
+
+    def _recover_claimed_job(self, job: Job) -> None:
+        if job.pid:
+            self._terminate_orphan_pid(job.pid)
+        self._cleanup_safely()
+        self.store.fail(
+            job.id, "Studio worker lease expired during execution",
+            self.owner_id)
+        self._export_chat(job.project)
+
+    def _communicate(self, process: subprocess.Popen) -> tuple[str, str]:
+        deadline = time.monotonic() + self.settings.job_timeout_seconds
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(
+                    process.args, self.settings.job_timeout_seconds)
+            try:
+                return process.communicate(timeout=min(1.0, remaining))
+            except subprocess.TimeoutExpired:
+                self.store.heartbeat_worker(self.owner_id)
+
+    @staticmethod
+    def _terminate_process(process: subprocess.Popen) -> None:
+        if process.poll() is not None:
+            return
+        try:
+            os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+            process.wait(timeout=5)
+        except (ProcessLookupError, subprocess.TimeoutExpired):
+            try:
+                os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+    @staticmethod
+    def _terminate_orphan_pid(pid: int) -> None:
+        cmdline = Path(f"/proc/{pid}/cmdline")
+        try:
+            command = cmdline.read_bytes()
+        except OSError:
+            return
+        if b"hermes" not in command:
+            log.error("Refusing to terminate non-Hermes orphan pid %d", pid)
+            return
+        try:
+            os.killpg(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            return
+        for _ in range(20):
+            if not Path(f"/proc/{pid}").exists():
+                return
+            time.sleep(0.1)
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+    def _cleanup_comfy(self) -> None:
+        prompt = (
+            "Use only comfyui MCP tools. Cancel the running ComfyUI job and "
+            "all pending jobs, verify the queue is stopped, then call "
+            "clear_vram with unload_models=true and free_memory=true. "
+            "Reply only with the final queue and VRAM status."
+        )
+        try:
+            result = subprocess.run(
+                [
+                    self.settings.hermes_command,
+                    "-p", self.settings.studio_profile,
+                    "chat", "-Q", "-t", "comfyui", "-q", prompt,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+            if result.returncode:
+                log.error(
+                    "ComfyUI cleanup failed (%d): %s",
+                    result.returncode, result.stderr.strip())
+        except Exception:
+            log.exception("Could not cancel ComfyUI work during job cleanup")
+
+    def _cleanup_safely(self) -> None:
+        try:
+            self.cleanup_callback()
+        except Exception:
+            log.exception("Studio cleanup callback failed")

@@ -140,6 +140,8 @@ Hermes (via design-studio skill) is responsible for creating projects and writin
 - Auto-refresh or simple polling for new generations.
 - [x] Async per-project job state + visible queued/running/completed/failed status.
 - [x] Multi-file drag/drop reference upload with safe non-overwriting storage.
+- [x] Transactional SQLite runtime coordination, lifecycle-managed Hermes
+  children, guarded media routes and fully local frontend assets.
 
 ### Phase 4 – Polish
 - Media detail/filter/review actions

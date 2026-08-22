@@ -1,0 +1,31 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body { background:#0b0d10; color:#e6e8eb; }
+.panel { background:#12151a; border:1px solid #232830; border-radius:.75rem; }
+.btn { background:#1c2129; border:1px solid #2c333e; padding:.35rem .8rem; border-radius:.5rem; font-size:.85rem; }
+.btn:hover { background:#242b35; }
+.proj { width:100%; padding:.45rem .7rem; border-radius:.5rem; cursor:pointer; font-size:.9rem; text-align:left; }
+.proj:hover, .proj.active { background:#1c2129; }
+#chatlog > div { margin-bottom:.6rem; line-height:1.45; }
+.chat-row { white-space:pre-wrap; }
+.role-user { color:#7ab7ff; }
+.role-assistant { color:#9be29b; }
+.role-system { color:#ef9a72; }
+pre.prompt { white-space:pre-wrap; font-size:.78rem; color:#b9c0c9; max-height:16rem; overflow:auto; }
+img.thumb, video.thumb { width:100%; border-radius:.5rem; display:block; }
+.activity-dot { width:.55rem; height:.55rem; border-radius:999px; background:#596170; }
+.activity-dot.queued { background:#d9a441; }
+.activity-dot.running { background:#65a9ff; box-shadow:0 0 0 .2rem #65a9ff22; }
+.activity-dot.completed { background:#66c77a; }
+.activity-dot.failed { background:#ef6c6c; }
+.dropzone { border:1px dashed #343d49; border-radius:.6rem; padding:.7rem; text-align:center; color:#737d8a; cursor:pointer; }
+.dropzone:hover, .dropzone.drag { border-color:#6ea8ef; color:#a9c9f2; background:#6ea8ef0d; }
+.dropzone.uploading { pointer-events:none; opacity:.65; }
+.ref-card { min-width:0; }
+.ref-name { font-size:.62rem; color:#747e8b; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-top:.25rem; }
+.generation-label { font-size:.625rem; color:#6b7280; margin-top:.25rem; }
+.audio-icon { padding:.75rem; text-align:center; font-size:1.125rem; }
+.empty { font-size:.75rem; color:#4b5563; padding:0 .5rem; }
+button:disabled, input:disabled { opacity:.5; cursor:not-allowed; }

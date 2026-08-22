@@ -5,12 +5,20 @@ no state in the UI that isn't already on disk; minimal dependencies.
 
 ## Stack (locked)
 
-- **FastAPI** backend (`.venv/`; pinned in `requirements.txt`, including
-  python-multipart for reference uploads)
-- **Single HTML page**, vanilla JS + Tailwind via CDN — no SPA framework
-- Media served by mounting `studio-root/` and `~/ComfyUI/output` read-only
+- **FastAPI** backend (`.venv/`; production/dev dependencies pinned separately)
+- **Vanilla ES module + locally compiled Tailwind CSS** — no runtime CDN and
+  no SPA framework
+- Media served only through guarded references/generations/final routes
 - Chat jobs resume one persistent Hermes `studio` session per project and run
-  asynchronously behind durable `.runtime/jobs/*.json` records
+  asynchronously behind a transactional SQLite runtime store
+
+## Backend ownership
+
+- `app.py` — inert app factory + lifespan wiring
+- `job_store.py` — typed SQLite jobs, sessions and chat events
+- `studio_manager.py` — FIFO scheduler, worker lease, tracked Hermes process
+- `reference_store.py` — synchronous staging + atomic no-overwrite publication
+- `routes.py` — thin HTTP boundary and guarded media serving
 
 ## Layout (single page, three columns)
 
@@ -50,19 +58,28 @@ no state in the UI that isn't already on disk; minimal dependencies.
 ## Chat → Hermes wiring
 
 POST /api/chat rejects a second active project job, returns HTTP 202 immediately,
-and starts a background worker. The worker serializes by project and spawns
-`hermes -p studio [-r SESSION] chat -Q -t all -q "<msg>"`. Session ids live
-under `.runtime/sessions/`; job state lives under `.runtime/jobs/`. Startup
-marks orphaned queued/running jobs failed rather than leaving them stuck.
+and inserts a queued transaction. A lifespan-owned scheduler atomically claims
+the oldest global job and spawns
+`hermes -p studio [-r SESSION] chat -Q -t all -q "<msg>"`. Session IDs are
+stored transactionally with job/chat state in `.runtime/studio.db`. A global
+SQLite running-job invariant keeps Studio/ComfyUI execution sequential across
+multiple web workers. Lifespan shutdown tracks and terminates child processes;
+worker leases prevent one live worker from recovering another worker's job,
+while surviving schedulers continuously take over expired peer leases before
+advancing the global queue.
 
 ## Safety / scope guards
 
-- Backend writes only through project creation, atomic chat append, and the
-  validated reference-upload endpoint. Generation stays agent-side.
+- Backend writes only through project creation, transactional chat events plus
+  derived `chat.jsonl` export, and the validated reference-upload endpoint.
+  Generation stays agent-side.
 - Uploads are restricted to image/video/audio extensions, 20 files/request,
-  256MB/file; path components are rejected and name collisions never overwrite
+  256MB/file; path components are rejected, batches stage before publication,
+  and lock + hard-link publication makes name collisions non-overwriting
 - Exact project ids only; the core resolver rejects separators, symlink
   escapes, fuzzy suffix matching and paths outside `projects/`
+- `/media` exposes only references, generations and final—not briefs, chats,
+  prompts, research, shared or temporary files
 - No auth v1 (localhost bind only)
 
 ## Milestones

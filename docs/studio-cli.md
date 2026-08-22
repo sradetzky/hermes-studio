@@ -51,6 +51,9 @@ python3 scripts/design_studio.py generate-image <project-id> \
 
 ## Behaviour notes
 
+- For the configured Studio root, `append-chat` writes the transactional SQLite
+  chat store first and atomically refreshes derived `chat.jsonl`; ad-hoc project
+  roots retain the standalone locked JSONL fallback
 - Production jobs run through comfyui-mcp; `archive-output` copies one or more
   completed files into the next `generations/NNN/` and writes MCP metadata
 - Legacy `generate` / `generate-image` remain explicit diagnostics; they clean
