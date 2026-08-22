@@ -23,6 +23,7 @@ import datetime as _dt
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -51,20 +52,20 @@ def slugify(name: str) -> str:
 
 
 def project_path(root: Path, name: str, must_exist: bool = True) -> Path:
-    """Resolve a project by exact folder name, date-prefixed name, or unique suffix."""
-    projects = root / "projects"
-    candidates = [projects / name]
-    today = _dt.date.today().isoformat()
-    candidates.append(projects / f"{today}_{slugify(name)}")
-    # suffix match on existing dirs (e.g. 'my-idea' -> '2026-08-22_my-idea')
-    if must_exist and (projects / name).is_dir():
-        return (projects / name).resolve()
-    matches = sorted(d for d in projects.iterdir() if d.is_dir() and d.name.endswith(f"_{slugify(name)}")) if projects.is_dir() else []
-    if matches:
-        return matches[-1].resolve()
+    """Resolve a project by exact folder name. No fuzzy matching."""
+    projects = (root / "projects").resolve()
     if not must_exist:
+        today = _dt.date.today().isoformat()
         return (projects / f"{today}_{slugify(name)}").resolve()
-    raise FileNotFoundError(f"project {name!r} not found under {projects}")
+    if not name or Path(name).name != name or name in {".", ".."}:
+        raise ValueError(f"invalid project id: {name!r}")
+    p = (projects / name).resolve()
+    if p.parent != projects:
+        raise ValueError(f"project escapes projects directory: {name!r}")
+    if p.is_dir():
+        return p
+    raise FileNotFoundError(
+        f"project {name!r} not found; use an exact folder name (see list-projects)")
 
 
 # ---------------------------------------------------------------- project mgmt
@@ -80,7 +81,6 @@ def create_project(root: Path, name: str, brief: str = "") -> Path:
         encoding="utf-8")
     (pp / "chat.jsonl").touch()
     (pp / "current_prompt.txt").touch()
-    print(pp)
     return pp
 
 
@@ -88,7 +88,8 @@ def list_projects(root: Path) -> list[str]:
     projects = root / "projects"
     if not projects.is_dir():
         return []
-    return sorted(d.name for d in projects.iterdir() if d.is_dir())
+    return sorted(d.name for d in projects.iterdir()
+                  if d.is_dir() and not d.is_symlink())
 
 
 # ------------------------------------------------------------- prompt & chat
@@ -105,8 +106,14 @@ def append_chat(root: Path, project: str, role: str, content: str) -> None:
     entry = {"role": role,
              "content": content,
              "ts": _dt.datetime.now().isoformat(timespec="seconds")}
-    with (pp / "chat.jsonl").open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    # O_APPEND + single write: atomic enough for line-sized records even with
+    # concurrent writers (threads / CLI + webapp).
+    data = json.dumps(entry, ensure_ascii=False).encode("utf-8") + b"\n"
+    fd = os.open(pp / "chat.jsonl", os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+    try:
+        os.write(fd, data)
+    finally:
+        os.close(fd)
 
 
 # ---------------------------------------------------------------- generation
@@ -259,9 +266,10 @@ def main(argv=None) -> int:
     sp = sub.add_parser("generate-image")
     sp.add_argument("project")
     sp.add_argument("--recipe", required=True,
-                    choices=["t2i", "t2i-nvfp4", "style-ref", "upscale"])
+                    choices=["t2i", "t2i-nvfp4", "style-ref", "upscale", "edit"])
     sp.add_argument("--prompt", default="")
-    sp.add_argument("--image", help="input image for style-ref / upscale")
+    sp.add_argument("--image", help="input image for style-ref / upscale / edit")
+    sp.add_argument("--ref-boost", type=float, default=None, help="edit recipe")
     sp.add_argument("--arg", action="append", default=[],
                     help="extra krea2_image.py arg, e.g. --arg=--aspect --arg=16:9")
     sp.add_argument("--timeout", type=int, default=900)
@@ -270,7 +278,7 @@ def main(argv=None) -> int:
     root = studio_root(args.root)
 
     if args.cmd == "create-project":
-        create_project(root, args.name, " ".join(args.brief))
+        print(create_project(root, args.name, " ".join(args.brief)))
     elif args.cmd == "list-projects":
         print("\n".join(list_projects(root)) or "(no projects)")
     elif args.cmd == "write-prompt":
@@ -279,7 +287,6 @@ def main(argv=None) -> int:
         append_chat(root, args.project, args.role, args.content)
         print("appended")
     elif args.cmd == "generate":
-        import shlex
         extra = []
         for a in args.arg:
             extra.extend(shlex.split(a))
@@ -288,10 +295,11 @@ def main(argv=None) -> int:
         print(json.dumps(out, indent=2))
         return 0 if out.get("ok") or out.get("dry_run") else 1
     elif args.cmd == "generate-image":
-        import shlex
         extra = []
         for a in args.arg:
             extra.extend(shlex.split(a))
+        if args.ref_boost is not None:
+            extra += ["--ref-boost", str(args.ref_boost)]
         out = run_image_generation(root, args.project, args.recipe, args.prompt,
                                    image=args.image, extra_args=extra,
                                    timeout=args.timeout)

@@ -1,9 +1,9 @@
-# media & generated artifacts stay out of git
-studio-root/projects/**/references/*
-studio-root/projects/**/generations/*
-studio-root/projects/**/final/*
+# Runtime project data stays out of git. Repo structure is preserved by .gitkeep.
+studio-root/projects/*
+!studio-root/projects/.gitkeep
 studio-root/tmp/*
 !*/.gitkeep
 __pycache__/
 *.pyc
 .venv/
+.runtime/

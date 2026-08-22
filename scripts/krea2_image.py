@@ -33,8 +33,8 @@ import argparse
 import json
 import random
 import sys
+import time
 import urllib.request
-import urllib.parse
 from pathlib import Path
 
 HOST = "http://127.0.0.1:8188"
@@ -85,7 +85,7 @@ def api_graph(unet: str, loras: list[tuple[str, float]], prompt: str,
                              "strength_model": strength}}
         prev, prev_out = key, 0
     g["sample"]["inputs"]["model"] = [prev, prev_out]
-    return {k: v for k, v in g.items() if not k.startswith("_")}
+    return g
 
 
 def identity_edit_graph(image_file: str, instruction: str, width: int, height: int,
@@ -140,12 +140,6 @@ def upload_image(path: Path) -> str:
     return out["name"]
 
 
-def load_graph_for(recipe: str) -> dict:
-    """Load a UI-format workflow JSON and convert to API format is complex;
-    recipes that need UI workflows use pre-exported API JSONs instead."""
-    raise NotImplementedError
-
-
 def img2img_graph(unet: str, loras, image_file: str, width: int, height: int,
                   steps: int, seed: int, denoise: float, prefix: str) -> dict:
     g = api_graph(unet, loras, "high quality portrait", width, height,
@@ -157,7 +151,6 @@ def img2img_graph(unet: str, loras, image_file: str, width: int, height: int,
                 "inputs": {"clip": ["clip", 0], "text": "refine details, enhance quality",
                            "image": ["load", 0]}}
     g["neg"] = {"class_type": "ConditioningZeroOut", "inputs": {"conditioning": ["pos", 0]}}
-    g["latent"] = None
     del g["latent"]
     g["sample"]["inputs"]["latent_image"] = ["encode", 0]
     g["sample"]["inputs"]["denoise"] = denoise
@@ -173,8 +166,7 @@ def queue(graph: dict) -> str:
 
 
 def wait(prompt_id: str, timeout: int = 600) -> dict:
-    import time
-    t0 = __import__("time").time()
+    t0 = time.time()
     while time.time() - t0 < timeout:
         with urllib.request.urlopen(f"{HOST}/history/{prompt_id}", timeout=15) as r:
             h = json.load(r)
@@ -190,6 +182,28 @@ def wait(prompt_id: str, timeout: int = 600) -> dict:
                 return {"done": False, "error": str(status)[:2000]}
         time.sleep(2)
     return {"done": False, "error": "timeout"}
+
+
+def parse_loras(values: list[str]) -> list[tuple[str, float]]:
+    loras = []
+    for value in values:
+        name, separator, raw_strength = value.rpartition(":")
+        if not separator or not name:
+            raise ValueError(f"invalid LoRA {value!r}; expected NAME:STRENGTH")
+        try:
+            strength = float(raw_strength)
+        except ValueError as exc:
+            raise ValueError(
+                f"invalid LoRA strength in {value!r}; expected a number") from exc
+        loras.append((name, strength))
+    return loras
+
+
+def input_image(path: str, dry_run: bool) -> str:
+    image = Path(path).expanduser()
+    if not image.is_file():
+        raise FileNotFoundError(f"input image not found: {image}")
+    return image.name if dry_run else upload_image(image)
 
 
 def main(argv=None) -> int:
@@ -214,19 +228,22 @@ def main(argv=None) -> int:
     seed = args.seed if args.seed is not None else random.randrange(2**31)
     w, h = ASPECTS[args.aspect]
     graph = None
+    try:
+        extra_loras = parse_loras(args.lora)
+    except ValueError as exc:
+        ap.error(str(exc))
 
     if args.recipe == "t2i":
-        loras = [(LORA_UNLOCKED, 0.8)]
+        loras = [(LORA_UNLOCKED, 0.8), *extra_loras]
         graph = api_graph(UNET_INT8, loras, args.prompt, w, h, steps=args.steps, seed=seed, prefix=args.prefix)
     elif args.recipe == "t2i-nvfp4":
-        loras = [(LORA_UNLOCKED, 0.8)]
+        loras = [(LORA_UNLOCKED, 0.8), *extra_loras]
         graph = api_graph(UNET_NVFP4, loras, args.prompt, w, h, steps=args.steps, seed=seed, prefix=args.prefix)
     elif args.recipe == "style-ref":
         if not args.image:
             ap.error("--image required for style-ref")
-        up = upload_image(Path(args.image).expanduser())
-        loras = [(LORA_UNLOCKED, 0.8), (LORA_STYLE_REF, 1.0)]
-        graph = api_graph(UNET_NVFP4, loras, args.prompt, w, h, steps=args.steps, seed=seed, prefix=args.prefix)
+        up = input_image(args.image, args.dry_run)
+        loras = [(LORA_UNLOCKED, 0.8), (LORA_STYLE_REF, 1.0), *extra_loras]
         # style-reference LoRA expects the ref image fed as second encode input;
         # simplest reliable path locally: img2img-style grounding at low denoise
         graph = img2img_graph(UNET_NVFP4, loras, up, w, h, args.steps, seed,
@@ -234,15 +251,18 @@ def main(argv=None) -> int:
     elif args.recipe == "upscale":
         if not args.image:
             ap.error("--image required for upscale")
-        up = upload_image(Path(args.image).expanduser())
-        graph = img2img_graph(UNET_NVFP4, [(LORA_UNLOCKED, 0.8)], up, w, h,
+        up = input_image(args.image, args.dry_run)
+        graph = img2img_graph(UNET_NVFP4,
+                              [(LORA_UNLOCKED, 0.8), *extra_loras], up, w, h,
                               args.steps, seed, args.denoise, args.prefix)
     elif args.recipe == "edit":
         if not args.image:
             ap.error("--image required for edit")
         if not args.prompt:
             ap.error("--prompt (edit instruction) required for edit")
-        up = upload_image(Path(args.image).expanduser())
+        if extra_loras:
+            ap.error("--lora is not supported by the edit recipe")
+        up = input_image(args.image, args.dry_run)
         graph = identity_edit_graph(up, args.prompt, w, h, args.steps, seed,
                                     args.prefix, ref_boost=args.ref_boost)
 

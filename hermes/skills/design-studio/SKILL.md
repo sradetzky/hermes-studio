@@ -39,8 +39,9 @@ python3 ~/repos/hermes-studio/scripts/design_studio.py generate <name> \
 # always smoke new param combos with --dry-run first
 ```
 
-Project resolution accepts exact folder name, bare name, or unique suffix
-(`smoke-test` → `2026-08-22_smoke-test`).
+After creation, pass the exact project folder id returned by the command
+(`2026-08-22_smoke-test`). Fuzzy/suffix matching is intentionally unsupported
+so output can never land in an ambiguously matched project.
 
 ## Generation rules
 

@@ -8,7 +8,7 @@ as work proceeds. Detailed docs live in `docs/` — this file stays a lean map.
 Hermes Studio: fully local, agent-orchestrated creative studio.
 Hermes profiles orchestrate → ComfyUI (`~/ComfyUI`, RTX 5060 Ti 16GB) renders
 video (MiniMax H3) and stills (Krea 2) → filesystem (`studio-root/`) is the
-database → thin FastAPI web UI (Phase 3, not started).
+database → thin FastAPI web UI (Phase 3 M1–M3 working).
 
 ## Repo map
 
@@ -20,6 +20,7 @@ database → thin FastAPI web UI (Phase 3, not started).
 | `hermes/skills/*/SKILL.md` | Skills; deployed into profile skill dirs |
 | `scripts/design_studio.py` | Project/prompt/chat CLI + generation archiving |
 | `scripts/krea2_image.py` | Krea 2 image runner (t2i / style-ref / upscale) |
+| `scripts/sync-profiles.sh` | Deploy/check repo SOULs + skills against live profiles |
 | `scripts/switch-model.sh` | Fleet-wide model/provider switching |
 | `comfyui/workflows/` | Parameterized H3 API-format workflow JSONs (empty) |
 | `studio-root/` | Default studio root: projects/, shared/, tmp/ |
@@ -45,15 +46,16 @@ database → thin FastAPI web UI (Phase 3, not started).
 - Subagent fleet created + verified: storyboarder, prompt-engineer, reviewer,
   illustrator (all cloned from studio; SOULs authored in-repo)
 - Camera doctrine revised: dynamic moves welcome with disciplined specs
-- Image pipeline: krea2_image.py (4 recipes, GPU-verified), generate-image
-  archiving, studio-illustrator live; identity-edit models downloading
+- Image pipeline: krea2_image.py (5 recipes incl. identity edit, GPU-verified),
+  generate-image archiving, studio-illustrator live
 - Docs split out of AGENTS.md into docs/
 - Phase 3 M1–M3: webapp/ FastAPI + single-page UI; chat round-trip through
   the studio profile verified live (see docs/frontend-plan.md)
+- Quality pass: exact project ids, atomic chat records, persistent per-project
+  Hermes sessions, stable incremental UI polling, profile drift checks
 
 ## Next steps
 
 - [ ] Real end-to-end video generation through generate (blocking GPU job)
-- [ ] Identity-edit recipe in krea2_image.py once downloads verified
 - [ ] Web UI M4 polish: upload endpoint (drag-drop), generation filters
 - [ ] Wire orchestrator → subagent dispatch (design-studio skill)

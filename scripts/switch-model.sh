@@ -16,9 +16,8 @@
 
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Managed fleet: keep in sync with hermes/profiles/ in this repo.
-FLEET=(studio studio-storyboarder studio-prompt-engineer studio-reviewer)
+FLEET=(studio studio-storyboarder studio-prompt-engineer studio-reviewer studio-illustrator)
 
 cmd="${1:-show}"
 case "$cmd" in
@@ -45,9 +44,7 @@ case "$cmd" in
         echo "skip $p (no profile at $cfg)" >&2
         continue
       fi
-      HERMES_HOME="$HOME/.hermes/profiles/$p" hermes config set model.provider "$provider" >/dev/null 2>&1 \
-        || { echo "WARN: hermes config set failed for $p, patching manually" >&2; }
-      # ensure both keys regardless (hermes config set writes to profile via -p)
+      # Set both fields explicitly; provider-specific auth remains profile-owned.
       python3 - "$cfg" "$provider" "$model" <<'EOF'
 import re, sys
 path, provider, model = sys.argv[1], sys.argv[2], sys.argv[3]

@@ -44,13 +44,25 @@ scripts/switch-model.sh <provider> <model> studio # single profile
 
 The FLEET array in switch-model.sh must be kept in sync when adding profiles.
 
+## Deploying repo-owned profile files
+
+```bash
+scripts/sync-profiles.sh          # deploy changed SOULs + skills
+scripts/sync-profiles.sh --check  # CI/read-only drift check (nonzero on drift)
+```
+
+The script deploys every repo SOUL plus `design-studio` to the full fleet;
+`krea2-images` is deployed only to `studio-illustrator`. Never hand-copy these
+files: the drift check is the contract.
+
 ## Adding a role
 
 1. `hermes profile create studio-<role> --clone-from studio --no-alias`
 2. Author SOUL at `hermes/profiles/studio-<role>/SOUL.md`, deploy to the
    profile dir
-3. Add to switch-model.sh FLEET, AGENTS.md table, docs/agents.md
-4. Verify: `hermes -p studio-<role> chat -q "Which SOUL role are you?"`
+3. Add to switch-model.sh and sync-profiles.sh fleet arrays, plus this table
+4. Run `scripts/sync-profiles.sh` and verify with
+   `hermes -p studio-<role> chat -q "Which SOUL role are you?"`
 
 ## Camera doctrine (video roles)
 

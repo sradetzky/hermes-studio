@@ -63,59 +63,195 @@
 <script>
 const $ = s => document.querySelector(s);
 let current = null;
+let projects = [];
+let chatCount = 0;
+let generationSignature = '';
+let referenceSignature = '';
+let polling = false;
+let pendingRefresh = false;
 
 async function j(url, opts) {
   const r = await fetch(url, opts);
-  if (!r.ok) throw new Error((await r.json()).detail || r.status);
+  if (!r.ok) {
+    let detail = r.status;
+    try { detail = (await r.json()).detail || detail; } catch (_) {}
+    throw new Error(detail);
+  }
   return r.json();
 }
 
 async function loadProjects() {
   const d = await j('/api/projects');
-  $('#projects').innerHTML = d.projects.map(p =>
-    `<div class="proj ${p.id===current?'active':''}" onclick="pick('${p.id}')">${p.id}</div>`).join('')
-    || '<div class="text-xs text-gray-600 px-2">no projects yet</div>';
-  if (!current && d.projects.length) { current = d.projects[0].id; }
+  projects = d.projects;
+  renderProjects();
+  if (!current && projects.length) await pick(projects[0].id);
 }
 
-function pick(id) { current = id; refresh(); }
+function renderProjects() {
+  const nav = $('#projects');
+  nav.replaceChildren();
+  if (!projects.length) return showEmpty(nav, 'no projects yet');
+  for (const project of projects) {
+    const item = document.createElement('div');
+    item.className = `proj ${project.id === current ? 'active' : ''}`;
+    item.textContent = project.id;
+    item.onclick = () => pick(project.id);
+    nav.append(item);
+  }
+}
+
+async function pick(id) {
+  current = id;
+  chatCount = 0;
+  generationSignature = '';
+  referenceSignature = '';
+  $('#chatlog').replaceChildren();
+  delete $('#chatlog').dataset.empty;
+  $('#gens').replaceChildren();
+  $('#refs').replaceChildren();
+  renderProjects();
+  await refreshProject();
+}
 
 async function newProject() {
   const name = prompt('Project name:');
   if (!name) return;
   const brief = prompt('Brief (optional):') || '';
-  await j('/api/projects', {method:'POST', headers:{'Content-Type':'application/json'},
+  const created = await j('/api/projects', {method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({name, brief})});
+  current = created.id;
   await loadProjects();
+  await pick(created.id);
 }
 
-async function refresh() {
-  await loadProjects();
+async function refreshProject() {
   if (!current) return;
-  const p = await j(`/api/project/${current}`);
-  $('#prompt').textContent = p.current_prompt || '—';
-  document.title = `${p.id} — Studio`;
+  if (polling) {
+    pendingRefresh = true;
+    return;
+  }
+  polling = true;
+  const selected = current;
+  const pid = encodeURIComponent(selected);
+  try {
+    const [project, chat, gens, refs] = await Promise.all([
+      j(`/api/project/${pid}`),
+      j(`/api/project/${pid}/chat?after=${chatCount}`),
+      j(`/api/project/${pid}/generations`),
+      j(`/api/project/${pid}/references`),
+    ]);
+    if (selected !== current) {
+      pendingRefresh = true;
+      return;
+    }
+    $('#prompt').textContent = project.current_prompt || '—';
+    document.title = `${project.id} — Hermes Studio`;
+    if (chat.total < chatCount) {
+      chatCount = 0;
+      $('#chatlog').replaceChildren();
+      const all = await j(`/api/project/${pid}/chat`);
+      appendMessages(all.messages);
+      chatCount = all.total;
+    } else {
+      appendMessages(chat.messages);
+      chatCount = chat.total;
+    }
+    const nextGenerationSignature = JSON.stringify(gens.generations);
+    if (nextGenerationSignature !== generationSignature) {
+      generationSignature = nextGenerationSignature;
+      renderGenerations(gens.generations);
+    }
+    const nextReferenceSignature = JSON.stringify(refs.references);
+    if (nextReferenceSignature !== referenceSignature) {
+      referenceSignature = nextReferenceSignature;
+      renderReferences(refs.references);
+    }
+  } catch (err) {
+    $('#status').textContent = `refresh error: ${err.message}`;
+  } finally {
+    polling = false;
+    if (pendingRefresh) {
+      pendingRefresh = false;
+      queueMicrotask(refreshProject);
+    }
+  }
+}
 
-  const chat = await j(`/api/project/${current}/chat`);
-  $('#chatlog').innerHTML = chat.messages.map(m =>
-    `<div><span class="role-${m.role} font-semibold">${m.role}</span> ${escapeHtml(m.content)}</div>`).join('')
-    || '<div class="text-gray-600 text-sm">Say hello to start planning…</div>';
-  $('#chatlog').scrollTop = $('#chatlog').scrollHeight;
+function appendMessages(messages) {
+  const log = $('#chatlog');
+  if (!messages.length && chatCount === 0 && !log.children.length) {
+    return showEmpty(log, 'Say hello to start planning…');
+  }
+  if (messages.length && log.dataset.empty) {
+    log.replaceChildren();
+    delete log.dataset.empty;
+  }
+  for (const message of messages) {
+    const row = document.createElement('div');
+    row.style.whiteSpace = 'pre-wrap';
+    const role = document.createElement('span');
+    role.className = `role-${message.role} font-semibold`;
+    role.textContent = message.role;
+    row.append(role, document.createTextNode(` ${message.content || ''}`));
+    log.append(row);
+  }
+  if (messages.length) log.scrollTop = log.scrollHeight;
+}
 
-  const gens = await j(`/api/project/${current}/generations`);
-  $('#gens').innerHTML = gens.generations.map(g => {
-    const vid = g.files.find(f => f.endsWith('.mp4'));
-    const img = g.files.find(f => f.endsWith('.png') || f.endsWith('.jpg'));
-    const src = `/media/projects/${current}/generations/${g.gen}/`;
-    const meta = g.meta && g.meta.seed ? `<div class="text-[10px] text-gray-500 mt-1">seed ${g.meta.seed} · ${g.meta.recipe||g.meta.kind||''}</div>` : '';
-    if (vid) return `<div><video class="thumb" controls preload="metadata" src="${src}${vid}"></video>${meta}</div>`;
-    if (img) return `<div><img class="thumb" loading="lazy" src="${src}${img}"><div class="text-[10px] text-gray-500 mt-1">${g.gen}</div>${meta}</div>`;
-    return '';
-  }).join('') || '<div class="text-xs text-gray-600">none yet</div>';
+function renderGenerations(generations) {
+  const box = $('#gens');
+  box.replaceChildren();
+  if (!generations.length) return showEmpty(box, 'none yet');
+  let rendered = 0;
+  for (const generation of generations) {
+    const video = generation.files.find(f => f.toLowerCase().endsWith('.mp4'));
+    const image = generation.files.find(f => /\.(png|jpe?g|webp)$/i.test(f));
+    if (!video && !image) continue;
+    const card = document.createElement('div');
+    const file = video || image;
+    const src = `/media/projects/${encodeURIComponent(current)}/generations/${encodeURIComponent(generation.gen)}/${encodeURIComponent(file)}`;
+    const media = document.createElement(video ? 'video' : 'img');
+    media.className = 'thumb';
+    media.src = src;
+    if (video) { media.controls = true; media.preload = 'metadata'; }
+    else { media.loading = 'lazy'; }
+    card.append(media);
+    const label = document.createElement('div');
+    label.className = 'text-[10px] text-gray-500 mt-1';
+    const meta = generation.meta || {};
+    const details = [generation.gen];
+    if (meta.seed !== undefined && meta.seed !== null) details.push(`seed ${meta.seed}`);
+    if (meta.recipe || meta.kind) details.push(meta.recipe || meta.kind);
+    label.textContent = details.join(' · ');
+    card.append(label);
+    box.append(card);
+    rendered += 1;
+  }
+  if (!rendered) showEmpty(box, 'none yet');
+}
 
-  const refs = await j(`/api/project/${current}/references`);
-  $('#refs').innerHTML = refs.references.map(f =>
-    `<img class="thumb" loading="lazy" src="/media/projects/${current}/references/${f}">`).join('');
+function renderReferences(references) {
+  const box = $('#refs');
+  box.replaceChildren();
+  for (const file of references) {
+    const src = `/media/projects/${encodeURIComponent(current)}/references/${encodeURIComponent(file)}`;
+    if (/\.(png|jpe?g|webp|gif)$/i.test(file)) {
+      const image = document.createElement('img');
+      image.className = 'thumb';
+      image.loading = 'lazy';
+      image.src = src;
+      image.alt = file;
+      box.append(image);
+    }
+  }
+}
+
+function showEmpty(element, text) {
+  const empty = document.createElement('div');
+  empty.className = 'text-xs text-gray-600 px-2';
+  empty.textContent = text;
+  element.dataset.empty = 'true';
+  element.append(empty);
 }
 
 async function sendChat(e) {
@@ -126,18 +262,16 @@ async function sendChat(e) {
   input.value = '';
   $('#status').textContent = 'studio is thinking…';
   try {
-    const d = await j(`/api/chat?pid=${encodeURIComponent(current)}`, {
+    await j(`/api/chat?pid=${encodeURIComponent(current)}`, {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({message: msg})});
     $('#status').textContent = '';
-    await refresh();
+    await refreshProject();
   } catch (err) { $('#status').textContent = 'error: ' + err.message; }
 }
 
-function escapeHtml(s){const d=document.createElement('div');d.textContent=s??'';return d.innerHTML;}
-
-refresh();
-setInterval(() => current && refresh(), 8000);
+loadProjects();
+setInterval(refreshProject, 5000);
 </script>
 </body>
 </html>
