@@ -1,0 +1,28 @@
+# Grok backup profile — credentials come from Hermes xAI OAuth.
+model:
+  provider: xai-oauth
+  default: grok-4.6
+  base_url: https://api.x.ai/v1
+
+web:
+  backend: xai
+  search_backend: xai
+  extract_backend: ""
+  xai:
+    model: grok-4.6
+    timeout: 120
+
+x_search:
+  model: grok-4.6
+  reasoning_effort: high
+  timeout_seconds: 180
+  retries: 2
+
+image_gen:
+  provider: xai
+  model: grok-imagine-image-quality
+  xai:
+    model: grok-imagine-image-quality
+    resolution: 1k
+
+# Explicitly no comfyui-mcp: this profile is cloud-only and never owns the GPU.

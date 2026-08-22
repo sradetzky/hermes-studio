@@ -11,6 +11,7 @@ Project management + generation archiving. Root resolution: `--root` flag →
 ├── chat.jsonl             # {role, content, ts} per line
 ├── current_prompt.txt     # latest structured prompt
 ├── references/            # uploaded assets (identity refs etc.)
+├── research/              # durable specialist research notes
 ├── generations/NNN/       # video.mp4|*.png + prompt.txt + meta.json
 └── final/
 ```
@@ -26,6 +27,13 @@ python3 scripts/design_studio.py create-project <name> "brief..."
 python3 scripts/design_studio.py list-projects
 python3 scripts/design_studio.py write-prompt <project-id> "<structured prompt>"
 python3 scripts/design_studio.py append-chat <project-id> <role> "content"
+
+# Grok 4.6 backup research / X search / explicitly requested Imagine work
+python3 scripts/design_studio.py dispatch-grok <project-id> "<task>"
+
+# Archive an accepted Grok Imagine cache result
+python3 scripts/design_studio.py archive-grok <project-id> <image-path> \
+  --meta-json '{"prompt":"..."}'
 
 # Archive completed comfyui-mcp output (production path)
 python3 scripts/design_studio.py archive-output <project-id> \

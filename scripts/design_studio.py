@@ -34,7 +34,10 @@ RUN_H3 = Path.home() / ".hermes/skills/minimax-h3-run/scripts/run_h3.py"
 KREA2 = Path(__file__).resolve().parent / "krea2_image.py"
 COMFY_ROOT = Path.home() / "ComfyUI"
 COMFY_OUTPUT = COMFY_ROOT / "output"
+GROK_IMAGE_OUTPUT = (Path.home() / ".hermes" / "profiles" / "studio-grok" /
+                     "cache" / "images")
 DEFAULT_ROOT = Path(__file__).resolve().parent.parent / "studio-root"
+SESSION_ID_RE = re.compile(r"session_id:\s*([A-Za-z0-9_-]+)")
 
 
 def free_comfy_vram() -> dict:
@@ -100,7 +103,7 @@ def create_project(root: Path, name: str, brief: str = "") -> Path:
     pp = project_path(root, name, must_exist=False)
     if pp.exists():
         raise FileExistsError(f"project already exists: {pp}")
-    for sub in ("references", "generations", "final"):
+    for sub in ("references", "generations", "final", "research"):
         (pp / sub).mkdir(parents=True)
     (pp / "brief.md").write_text(
         f"# {name}\n\n{brief}\n\nCreated {_dt.datetime.now().isoformat(timespec='seconds')}\n",
@@ -151,10 +154,12 @@ def next_generation_dir(pp: Path) -> Path:
 
 
 def archive_outputs(root: Path, project: str, outputs: list[str],
-                    metadata: dict | None = None) -> Path:
-    """Archive completed MCP outputs from ComfyUI/output into one generation."""
+                    metadata: dict | None = None,
+                    source_root: Path | None = None,
+                    transport: str = "comfyui-mcp") -> Path:
+    """Archive outputs from one explicit, trusted source root."""
     pp = project_path(root, project)
-    output_root = COMFY_OUTPUT.resolve()
+    output_root = (source_root or COMFY_OUTPUT).resolve()
     sources = []
     for output in outputs:
         source = Path(output).expanduser()
@@ -185,7 +190,7 @@ def archive_outputs(root: Path, project: str, outputs: list[str],
         meta = {
             **(metadata or {}),
             "generated": _dt.datetime.now().isoformat(timespec="seconds"),
-            "transport": "comfyui-mcp",
+            "transport": transport,
             "files": copied,
             "sources": [str(source) for source in sources],
         }
@@ -195,6 +200,40 @@ def archive_outputs(root: Path, project: str, outputs: list[str],
         shutil.rmtree(gen_dir, ignore_errors=True)
         raise
     return gen_dir
+
+
+def dispatch_grok(root: Path, project: str, task: str,
+                  timeout: int = 600) -> str:
+    """Run a persistent per-project task on the xAI backup profile."""
+    pp = project_path(root, project)
+    session_dir = root / "tmp" / "profile-sessions"
+    session_dir.mkdir(parents=True, exist_ok=True)
+    session_file = session_dir / f"{pp.name}.studio-grok"
+    cmd = ["hermes", "-p", "studio-grok"]
+    if session_file.exists():
+        session_id = session_file.read_text(encoding="utf-8").strip()
+        if re.fullmatch(r"[A-Za-z0-9_-]+", session_id):
+            cmd += ["-r", session_id]
+    prompt = (
+        f"Hermes Studio project id: {pp.name}\n"
+        f"Project path: {pp}\n\n"
+        f"Task from the Studio orchestrator:\n{task}"
+    )
+    cmd += ["chat", "-Q", "-t",
+            "web,x_search,image_gen,vision,file,terminal", "-q", prompt]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    if result.returncode:
+        raise RuntimeError(
+            f"studio-grok failed ({result.returncode}): {result.stderr.strip()}")
+    reply = result.stdout.strip()
+    if not reply:
+        raise RuntimeError("studio-grok returned an empty reply")
+    match = SESSION_ID_RE.search(result.stderr)
+    if match:
+        temp = session_file.with_suffix(".tmp")
+        temp.write_text(match.group(1) + "\n", encoding="utf-8")
+        temp.replace(session_file)
+    return reply
 
 
 def run_generation(root: Path, project: str, handoff: str | None = None,
@@ -365,6 +404,17 @@ def main(argv=None) -> int:
     sp.add_argument("--recipe", default="")
     sp.add_argument("--meta-json", default="{}")
 
+    sp = sub.add_parser("archive-grok")
+    sp.add_argument("project")
+    sp.add_argument("outputs", nargs="+")
+    sp.add_argument("--prompt-id", default="")
+    sp.add_argument("--meta-json", default="{}")
+
+    sp = sub.add_parser("dispatch-grok")
+    sp.add_argument("project")
+    sp.add_argument("task")
+    sp.add_argument("--timeout", type=int, default=600)
+
     args = ap.parse_args(argv)
     root = studio_root(args.root)
 
@@ -410,6 +460,22 @@ def main(argv=None) -> int:
         if args.recipe:
             meta["recipe"] = args.recipe
         print(archive_outputs(root, args.project, args.outputs, meta))
+    elif args.cmd == "archive-grok":
+        try:
+            meta = json.loads(args.meta_json)
+        except json.JSONDecodeError as exc:
+            ap.error(f"invalid --meta-json: {exc}")
+        if not isinstance(meta, dict):
+            ap.error("--meta-json must be a JSON object")
+        if args.prompt_id:
+            meta["prompt_id"] = args.prompt_id
+        meta.setdefault("kind", "image")
+        meta.setdefault("recipe", "grok-imagine-image-quality")
+        print(archive_outputs(
+            root, args.project, args.outputs, meta,
+            source_root=GROK_IMAGE_OUTPUT, transport="xai-imagine"))
+    elif args.cmd == "dispatch-grok":
+        print(dispatch_grok(root, args.project, args.task, args.timeout))
     return 0
 
 

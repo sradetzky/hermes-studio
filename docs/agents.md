@@ -1,8 +1,8 @@
 # Agent Fleet
 
-MiniMax Design-style role split as full Hermes profiles. All cloned from
-`studio` (so they inherit its skills incl. minimax-h3-*), all point at the same
-model config.
+MiniMax Design-style role split as full Hermes profiles. The local production
+fleet is cloned from `studio`; `studio-grok` is a deliberately separate cloud
+specialist.
 
 | Profile | Role | Produces | Never does |
 |---|---|---|---|
@@ -11,6 +11,7 @@ model config.
 | `studio-prompt-engineer` | H3 prompt writing | structured prompts, handoff params | renders, shot redesign |
 | `studio-reviewer` | Quality gate | PASS/REVISE/REJECT verdicts in chat.jsonl | deletes media, rewrites prompts |
 | `studio-illustrator` | Still images (Krea 2) | character sheets, style refs, refines | video/H3 work |
+| `studio-grok` | Cloud backup (Grok 4.6) | cited web/X research, Grok Imagine images | ComfyUI/GPU, X account actions |
 
 ## Dataflow
 
@@ -18,6 +19,7 @@ model config.
 brief → studio-storyboarder → storyboard.md
       → studio-prompt-engineer → current_prompt.txt (+ handoff params)
       → studio (orchestrator)  → comfyui-mcp → archive-output → clear_vram
+      → studio-grok (optional) → xAI web/X/Imagine → research/ or archive-grok
       → studio-reviewer        → PASS/REVISE/REJECT appended to chat.jsonl
 ```
 
@@ -34,7 +36,7 @@ hermes -p studio-storyboarder chat -q "Plan shots for project X: ..."
 
 ## Model switching
 
-All profiles share one model/provider so the fleet switches together:
+The local production fleet shares one model/provider and switches together:
 
 ```bash
 scripts/switch-model.sh show                      # fleet status
@@ -43,6 +45,7 @@ scripts/switch-model.sh <provider> <model> studio # single profile
 ```
 
 The FLEET array in switch-model.sh must be kept in sync when adding profiles.
+`studio-grok` is deliberately excluded: it stays fixed on Grok 4.6.
 
 ## Deploying repo-owned profile files
 
@@ -51,16 +54,19 @@ scripts/sync-profiles.sh          # deploy changed SOULs + skills
 scripts/sync-profiles.sh --check  # CI/read-only drift check (nonzero on drift)
 ```
 
-The script deploys every repo SOUL plus `design-studio` to the full fleet;
-`krea2-images` is deployed only to `studio-illustrator`. Never hand-copy these
-files: the drift check is the contract.
+The script deploys every local-fleet SOUL plus `design-studio`, deploys
+`krea2-images` only to `studio-illustrator`, and deploys the dedicated Grok
+SOUL/skill only to `studio-grok`. Never hand-copy these files: the drift check
+is the contract.
 
 ## Adding a role
 
-1. `hermes profile create studio-<role> --clone-from studio --no-alias`
+1. Create the profile from `studio` for local-fleet roles, or from `default`
+   for isolated cloud specialists.
 2. Author SOUL at `hermes/profiles/studio-<role>/SOUL.md`, deploy to the
    profile dir
-3. Add to switch-model.sh and sync-profiles.sh fleet arrays, plus this table
+3. Add local-fleet roles to switch-model.sh; keep fixed-model specialists out.
+   Add every role to sync-profiles.sh and this table.
 4. Run `scripts/sync-profiles.sh` and verify with
    `hermes -p studio-<role> chat -q "Which SOUL role are you?"`
 

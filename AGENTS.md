@@ -32,6 +32,7 @@ database → thin FastAPI web UI (Phase 3 M1–M3 working).
 - `docs/image-pipeline.md` — Krea 2 recipes, models, capabilities
 - `docs/video-pipeline.md` — H3 runner integration, proven knobs
 - `docs/comfyui-mcp.md` — production transport, queue/cleanup transaction
+- `docs/grok-backup.md` — Grok 4.6 web/X/Imagine backup profile + dispatch
 - `docs/frontend-plan.md` — web UI stack, layout, API surface, milestones
 
 ## Conventions
@@ -56,6 +57,8 @@ database → thin FastAPI web UI (Phase 3 M1–M3 working).
   Hermes sessions, stable incremental UI polling, profile drift checks
 - Phase 2 transport: studio owns pinned comfyui-mcp; MCP clear_vram verified;
   every terminal job must unload models/free memory
+- Backup specialist: studio-grok on xAI OAuth/Grok 4.6; xAI web + X search
+  verified, Imagine quality configured; persistent project dispatch available
 
 ## Next steps
 

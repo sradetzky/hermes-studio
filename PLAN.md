@@ -36,8 +36,11 @@ Folder structure on disk (source of truth for projects & media)
 - Use official Hermes **Profiles** feature.
 - Main profile remains everyday use.
 - New profile `studio` for the Design Studio agent (own SOUL.md, own memory, own sessions).
-- Optional future profiles: `creative`, `coder`, etc.
-- **Model switching strategy**: All profiles point at the *same* local OpenAI-compatible endpoint. Changing the model = restart the local server with a different model. Zero config edits across profiles. This enables easy experimentation.
+- Specialist profile `studio-grok`: Grok 4.6 backup for xAI web/X research and
+  Grok Imagine; excluded from fleet model switching and local GPU ownership.
+- **Model switching strategy**: The local Studio fleet switches together through
+  `scripts/switch-model.sh`. The cloud backup `studio-grok` is the one explicit
+  exception and remains pinned to xAI OAuth / `grok-4.6`.
 
 ### 2.2 MiniMax H3
 - Open weights (FL2VA + Ref2VA).

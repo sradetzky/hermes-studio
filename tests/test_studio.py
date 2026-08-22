@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from scripts import design_studio as ds
@@ -25,6 +26,7 @@ class ProjectPathTests(unittest.TestCase):
 
     def test_requires_exact_project_id(self):
         self.assertEqual(ds.project_path(self.root, self.project.name), self.project)
+        self.assertTrue((self.project / "research").is_dir())
         with self.assertRaises(FileNotFoundError):
             ds.project_path(self.root, "same-name")
 
@@ -76,6 +78,38 @@ class ProjectPathTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 ds.archive_outputs(
                     self.root, self.project.name, [str(outside)])
+
+    def test_archives_grok_cache_with_xai_transport(self):
+        grok_cache = Path(self.temp.name) / "grok-cache"
+        grok_cache.mkdir()
+        image = grok_cache / "imagine.png"
+        image.write_bytes(b"image")
+        generation = ds.archive_outputs(
+            self.root, self.project.name, [str(image)],
+            {"prompt": "test"}, source_root=grok_cache,
+            transport="xai-imagine")
+        meta = json.loads((generation / "meta.json").read_text())
+        self.assertEqual(meta["transport"], "xai-imagine")
+        self.assertTrue((generation / "imagine.png").is_file())
+
+    @patch.object(ds.subprocess, "run")
+    def test_grok_dispatch_persists_project_session(self, run):
+        run.return_value = SimpleNamespace(
+            returncode=0, stdout="research result\n",
+            stderr="session_id: grok-session-1\n")
+        reply = ds.dispatch_grok(self.root, self.project.name, "research this")
+        self.assertEqual(reply, "research result")
+        first_command = run.call_args.args[0]
+        self.assertNotIn("-r", first_command)
+        self.assertIn("web,x_search,image_gen,vision,file,terminal", first_command)
+
+        run.return_value = SimpleNamespace(
+            returncode=0, stdout="continued\n",
+            stderr="session_id: grok-session-1\n")
+        ds.dispatch_grok(self.root, self.project.name, "continue")
+        second_command = run.call_args.args[0]
+        self.assertIn("-r", second_command)
+        self.assertIn("grok-session-1", second_command)
 
 
 class LoraParserTests(unittest.TestCase):

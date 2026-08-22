@@ -73,6 +73,31 @@ The legacy `generate` and `generate-image` CLI commands remain for manual
 diagnostics only. They explicitly clean VRAM, and timeout paths interrupt the
 ComfyUI job before cleanup.
 
+## Grok backup dispatch
+
+Use `studio-grok` for xAI-backed current web research, read-only X/Twitter
+search, or Grok Imagine generation/editing:
+
+```bash
+python3 ~/repos/hermes-studio/scripts/design_studio.py dispatch-grok \
+  <project-id> "<self-contained research or image task>"
+```
+
+The dispatcher maintains one Grok session per project and exposes only
+`web,x_search,image_gen,vision,file,terminal`. Preserve citations and clearly
+attribute findings to the Grok backup. It is excluded from fleet model
+switching and never has comfyui-mcp/GPU ownership.
+
+If Grok returns an accepted local Imagine cache path, archive it with:
+
+```bash
+python3 ~/repos/hermes-studio/scripts/design_studio.py archive-grok \
+  <project-id> <absolute-image-path> --meta-json '{"prompt":"..."}'
+```
+
+Imagine can consume xAI quota: dispatch image generation only for an explicit
+user request. Research tasks must not generate images as a side effect.
+
 ## Output rules
 
 - Do NOT auto-extract `preview.jpg`; the user reviews renders themselves.
