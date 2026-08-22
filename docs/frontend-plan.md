@@ -19,6 +19,8 @@ no state in the UI that isn't already on disk; minimal dependencies.
 - `studio_manager.py` — FIFO scheduler, worker lease, tracked Hermes process
 - `reference_store.py` — synchronous staging + atomic no-overwrite publication
 - `routes.py` — thin HTTP boundary and guarded media serving
+- `run.sh` / `stop.sh` / `status.sh` — single-instance lock, graceful stop,
+  stale-PID cleanup and process status
 
 ## Layout (single page, three columns)
 

@@ -69,6 +69,8 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
   lifespan-owned scheduler/processes, atomic upload store, guarded media routes,
   local CSS/JS modules, continuous stale-peer recovery, locked CLI chat exports,
   and route/process/concurrency/lifecycle tests
+- Web launcher hardened: single-instance flock/PID ownership plus explicit
+  status and graceful stop scripts; duplicate starts are rejected
 
 ## Next steps
 

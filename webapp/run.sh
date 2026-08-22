@@ -1,4 +1,36 @@
 #!/usr/bin/env bash
-# Studio web UI on http://127.0.0.1:8788
-cd "$(dirname "$0")/.."
-exec .venv/bin/uvicorn webapp.app:app --host 127.0.0.1 --port 8788 "$@"
+# Single-instance Hermes Studio web UI on http://127.0.0.1:8788
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+RUNTIME="$ROOT/.runtime"
+LOCK="$RUNTIME/webapp.lock"
+PIDFILE="$RUNTIME/webapp.pid"
+mkdir -p "$RUNTIME"
+cd "$ROOT"
+
+exec 9>"$LOCK"
+if ! flock -n 9; then
+  existing="$(cat "$PIDFILE" 2>/dev/null || true)"
+  echo "Hermes Studio is already running${existing:+ (pid $existing)}" >&2
+  exit 1
+fi
+
+echo "$$" > "$PIDFILE"
+child=""
+cleanup() {
+  trap - EXIT INT TERM
+  if [[ -n "$child" ]] && kill -0 "$child" 2>/dev/null; then
+    kill -TERM "$child" 2>/dev/null || true
+    wait "$child" 2>/dev/null || true
+  fi
+  rm -f "$PIDFILE"
+}
+trap cleanup EXIT INT TERM
+
+.venv/bin/uvicorn webapp.app:app --host 127.0.0.1 --port 8788 "$@" &
+child=$!
+wait "$child"
+status=$?
+child=""
+exit "$status"

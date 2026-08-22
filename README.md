@@ -11,6 +11,14 @@ See **PLAN.md** for the full architecture and implementation order.
 Web UI dependencies are pinned in `requirements.txt`; run with
 `./webapp/run.sh` after installing them into `.venv`.
 
+The launcher is single-instance (filesystem lock + PID file):
+
+```bash
+./webapp/run.sh     # refuses a duplicate server
+./webapp/status.sh
+./webapp/stop.sh    # graceful lifespan/process cleanup
+```
+
 Development dependencies are in `requirements-dev.txt`. Rebuild the committed
 offline stylesheet after changing HTML/JS utility classes with:
 
