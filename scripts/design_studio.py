@@ -1,0 +1,223 @@
+#!/usr/bin/env python3
+"""design_studio.py — core library + CLI for the DIY MiniMax Design Studio.
+
+Manages the on-disk project structure (source of truth) and wraps H3
+generation via the proven minimax-h3-run runner.
+
+Root resolution order:
+  1. --root flag / DESIGN_STUDIO_ROOT env var
+  2. ~/repos/hermes-studio/studio-root
+
+Usage:
+  python3 scripts/design_studio.py create-project my-idea "A brief..."
+  python3 scripts/design_studio.py list-projects
+  python3 scripts/design_studio.py write-prompt my-idea - | prompt text...
+  python3 scripts/design_studio.py append-chat my-idea user "hello"
+  python3 scripts/design_studio.py generate my-idea --handoff h3_handoff_x.json
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime as _dt
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+RUN_H3 = Path.home() / ".hermes/skills/minimax-h3-run/scripts/run_h3.py"
+COMFY_ROOT = Path.home() / "ComfyUI"
+DEFAULT_ROOT = Path(__file__).resolve().parent.parent / "studio-root"
+
+
+def studio_root(override: str | None = None) -> Path:
+    root = override or os.environ.get("DESIGN_STUDIO_ROOT") or str(DEFAULT_ROOT)
+    p = Path(root).expanduser().resolve()
+    for sub in ("projects", "shared", "tmp"):
+        (p / sub).mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def slugify(name: str) -> str:
+    s = re.sub(r"[^a-z0-9-_]+", "-", name.strip().lower()).strip("-")
+    if not s:
+        raise ValueError(f"cannot slugify project name: {name!r}")
+    return s
+
+
+def project_path(root: Path, name: str, must_exist: bool = True) -> Path:
+    """Resolve a project by exact folder name, date-prefixed name, or unique suffix."""
+    projects = root / "projects"
+    candidates = [projects / name]
+    today = _dt.date.today().isoformat()
+    candidates.append(projects / f"{today}_{slugify(name)}")
+    # suffix match on existing dirs (e.g. 'my-idea' -> '2026-08-22_my-idea')
+    if must_exist and (projects / name).is_dir():
+        return (projects / name).resolve()
+    matches = sorted(d for d in projects.iterdir() if d.is_dir() and d.name.endswith(f"_{slugify(name)}")) if projects.is_dir() else []
+    if matches:
+        return matches[-1].resolve()
+    if not must_exist:
+        return (projects / f"{today}_{slugify(name)}").resolve()
+    raise FileNotFoundError(f"project {name!r} not found under {projects}")
+
+
+# ---------------------------------------------------------------- project mgmt
+
+def create_project(root: Path, name: str, brief: str = "") -> Path:
+    pp = project_path(root, name, must_exist=False)
+    if pp.exists():
+        raise FileExistsError(f"project already exists: {pp}")
+    for sub in ("references", "generations", "final"):
+        (pp / sub).mkdir(parents=True)
+    (pp / "brief.md").write_text(
+        f"# {name}\n\n{brief}\n\nCreated {_dt.datetime.now().isoformat(timespec='seconds')}\n",
+        encoding="utf-8")
+    (pp / "chat.jsonl").touch()
+    (pp / "current_prompt.txt").touch()
+    print(pp)
+    return pp
+
+
+def list_projects(root: Path) -> list[str]:
+    projects = root / "projects"
+    if not projects.is_dir():
+        return []
+    return sorted(d.name for d in projects.iterdir() if d.is_dir())
+
+
+# ------------------------------------------------------------- prompt & chat
+
+def write_prompt(root: Path, project: str, prompt: str) -> Path:
+    pp = project_path(root, project)
+    out = pp / "current_prompt.txt"
+    out.write_text(prompt.rstrip() + "\n", encoding="utf-8")
+    return out
+
+
+def append_chat(root: Path, project: str, role: str, content: str) -> None:
+    pp = project_path(root, project)
+    entry = {"role": role,
+             "content": content,
+             "ts": _dt.datetime.now().isoformat(timespec="seconds")}
+    with (pp / "chat.jsonl").open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+# ---------------------------------------------------------------- generation
+
+def next_generation_dir(pp: Path) -> Path:
+    gens = pp / "generations"
+    nums = [int(d.name) for d in gens.iterdir() if d.is_dir() and d.name.isdigit()]
+    return gens / f"{max(nums, default=0) + 1:03d}"
+
+
+def run_generation(root: Path, project: str, handoff: str | None = None,
+                   extra_args: list[str] | None = None,
+                   timeout: int = 7200, dry_run: bool = False) -> dict:
+    """Submit an H3 generation via the proven run_h3.py runner, then archive."""
+    pp = project_path(root, project)
+    cmd = [sys.executable, str(RUN_H3), "--comfy-root", str(COMFY_ROOT),
+           "-o", "/dev/stdout"]
+    if handoff:
+        h = Path(handoff).expanduser()
+        if not h.exists():  # same archive fallback run_h3.py uses
+            h = Path.home() / "Documents/MinimaxH3" / h.name
+        if not h.exists():
+            raise FileNotFoundError(f"handoff not found: {handoff}")
+        cmd += ["--handoff", str(h)]
+    if extra_args:
+        cmd += extra_args
+
+    if dry_run:
+        result = subprocess.run(cmd + ["--dry-run"], capture_output=True, text=True)
+        return {"dry_run": True, "stdout": result.stdout[-4000:], "stderr": result.stderr[-2000:]}
+
+    print(f"[design-studio] submitting: {' '.join(cmd)}", file=sys.stderr)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+
+    summary = {}
+    try:  # runner writes its summary JSON via -o /dev/stdout
+        summary = json.loads(result.stdout[result.stdout.index("{"):])
+    except Exception:
+        pass
+    if result.returncode != 0:
+        return {"ok": False, "returncode": result.returncode,
+                "stderr": result.stderr[-3000:], "summary": summary}
+
+    gen_dir = next_generation_dir(pp)
+    gen_dir.mkdir()
+    meta = {"generated": _dt.datetime.now().isoformat(timespec="seconds"),
+            "handoff": str(handoff or ""), "runner": str(RUN_H3), **summary}
+
+    video = None
+    for key in ("video", "output", "path"):  # locate produced file in summary
+        v = summary.get(key)
+        if v and Path(v).exists():
+            video = Path(v)
+            break
+    if video:
+        shutil.copy2(video, gen_dir / "video.mp4")
+        meta["source"] = str(video)
+    (gen_dir / "prompt.txt").write_text(
+        (pp / "current_prompt.txt").read_text(encoding="utf-8"), encoding="utf-8")
+    (gen_dir / "meta.json").write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+    # preview.jpg is created by the reviewer/user; do not extract frames automatically.
+    return {"ok": True, "generation": str(gen_dir), "meta": meta}
+
+
+# ---------------------------------------------------------------------- main
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--root", help="studio root (default: $DESIGN_STUDIO_ROOT or repo studio-root/)")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    sp = sub.add_parser("create-project")
+    sp.add_argument("name"); sp.add_argument("brief", nargs="*", default=[])
+
+    sub.add_parser("list-projects")
+
+    sp = sub.add_parser("write-prompt")
+    sp.add_argument("project"); sp.add_argument("prompt", nargs="+")
+
+    sp = sub.add_parser("append-chat")
+    sp.add_argument("project"); sp.add_argument("role"); sp.add_argument("content")
+
+    sp = sub.add_parser("generate")
+    sp.add_argument("project")
+    sp.add_argument("--handoff")
+    sp.add_argument("--arg", action="append", default=[],
+                    help="extra run_h3.py arg, repeatable. '--arg --turbo' style: use e.g. --arg=--mp --arg=0.9")
+    sp.add_argument("--timeout", type=int, default=7200)
+    sp.add_argument("--dry-run", action="store_true")
+
+    args = ap.parse_args(argv)
+    root = studio_root(args.root)
+
+    if args.cmd == "create-project":
+        create_project(root, args.name, " ".join(args.brief))
+    elif args.cmd == "list-projects":
+        print("\n".join(list_projects(root)) or "(no projects)")
+    elif args.cmd == "write-prompt":
+        print(write_prompt(root, args.project, " ".join(args.prompt)))
+    elif args.cmd == "append-chat":
+        append_chat(root, args.project, args.role, args.content)
+        print("appended")
+    elif args.cmd == "generate":
+        import shlex
+        extra = []
+        for a in args.arg:
+            extra.extend(shlex.split(a))
+        out = run_generation(root, args.project, args.handoff, extra,
+                             timeout=args.timeout, dry_run=args.dry_run)
+        print(json.dumps(out, indent=2))
+        return 0 if out.get("ok") or out.get("dry_run") else 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
