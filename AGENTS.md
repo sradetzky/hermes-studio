@@ -30,6 +30,7 @@ database → thin FastAPI web UI (Phase 3, not started).
 - `docs/studio-cli.md` — design_studio.py commands & folder contract
 - `docs/image-pipeline.md` — Krea 2 recipes, models, capabilities
 - `docs/video-pipeline.md` — H3 runner integration, proven knobs
+- `docs/frontend-plan.md` — web UI stack, layout, API surface, milestones
 
 ## Conventions
 
@@ -45,12 +46,14 @@ database → thin FastAPI web UI (Phase 3, not started).
   illustrator (all cloned from studio; SOULs authored in-repo)
 - Camera doctrine revised: dynamic moves welcome with disciplined specs
 - Image pipeline: krea2_image.py (4 recipes, GPU-verified), generate-image
-  archiving, studio-illustrator live; identity-edit models downloaded
+  archiving, studio-illustrator live; identity-edit models downloading
 - Docs split out of AGENTS.md into docs/
+- Phase 3 M1–M3: webapp/ FastAPI + single-page UI; chat round-trip through
+  the studio profile verified live (see docs/frontend-plan.md)
 
 ## Next steps
 
 - [ ] Real end-to-end video generation through generate (blocking GPU job)
 - [ ] Identity-edit recipe in krea2_image.py once downloads verified
+- [ ] Web UI M4 polish: upload endpoint (drag-drop), generation filters
 - [ ] Wire orchestrator → subagent dispatch (design-studio skill)
-- [ ] Phase 3: FastAPI web UI
