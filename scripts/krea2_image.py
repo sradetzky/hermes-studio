@@ -10,11 +10,11 @@ Recipes:
   t2i-nvfp4  same on darkBeastKREA2nvfp4 (smaller VRAM footprint)
   style-ref  character sheet w/ krea2_style_reference LoRA + reference image
   upscale    NO8D high-quality portrait "upscale" (img2img refine @ denoise)
-             [edit recipe: identity-edit needs krea2_turbo_fp8_scaled +
-              qwen3vl_4b_fp8_scaled + Krea2/krea2_identity_edit_v1_2 LoRA,
-              NOT yet downloaded — see AGENTS.md]
+  edit       Krea2 identity edit: instruction-based edit of an image with
+             identity preservation (turbo fp8 UNET + identity_edit LoRA,
+             NO8D server-side reference patch + grounded encode)
 
-Usage:
+  Usage:
   python3 scripts/krea2_image.py --recipe t2i --prompt "..." [--aspect 16:9]
       [--steps 8] [--seed N] [--lora NAME:STRENGTH ...] [--output-prefix pfx]
   python3 scripts/krea2_image.py --recipe style-ref --prompt "..." \
@@ -42,10 +42,13 @@ HOST = "http://127.0.0.1:8188"
 # Local model files (verified 2026-08-22)
 UNET_INT8 = "darkBeast_v1.1_int8_convrot.safetensors"
 UNET_NVFP4 = "darkBeastKREA2nvfp4.safetensors"
+UNET_TURBO_FP8 = "krea2_turbo_fp8_scaled.safetensors"
 CLIP = "qwen3-vl-4b-heretic_nvfp4.safetensors"
+CLIP_EDIT = "qwen3vl_4b_fp8_scaled.safetensors"
 VAE = "qwen_image_vae.safetensors"
 LORA_UNLOCKED = "Krea-2-unlocked.safetensors"
 LORA_STYLE_REF = "krea2_style_reference.safetensors"
+LORA_IDENTITY_EDIT = "Krea2/krea2_identity_edit_v1_2.safetensors"
 
 ASPECTS = {  # ~1MP canvas discipline, same ceiling as H3
     "1:1": (1024, 1024), "4:3": (1152, 864), "3:2": (1248, 832),
@@ -83,6 +86,43 @@ def api_graph(unet: str, loras: list[tuple[str, float]], prompt: str,
         prev, prev_out = key, 0
     g["sample"]["inputs"]["model"] = [prev, prev_out]
     return {k: v for k, v in g.items() if not k.startswith("_")}
+
+
+def identity_edit_graph(image_file: str, instruction: str, width: int, height: int,
+                        steps: int, seed: int, prefix: str,
+                        ref_boost: float = 1.0) -> dict:
+    """Krea2 identity edit via NO8D server-side nodes.
+
+    Mirrors the no8d_krea2_high_quality_portrait_upscale wiring:
+    source image -> VAEEncode (latent) + NO8DReferenceModel patch;
+    instruction + source image -> grounded conditioning; empty target latent.
+    """
+    g = {
+        "unet": {"class_type": "UNETLoader", "inputs": {"unet_name": UNET_TURBO_FP8, "weight_dtype": "default"}},
+        "clip": {"class_type": "CLIPLoader", "inputs": {"clip_name": CLIP_EDIT, "type": "krea2", "device": "default"}},
+        "vae": {"class_type": "VAELoader", "inputs": {"vae_name": VAE}},
+        "lora": {"class_type": "LoraLoaderModelOnly",
+                 "inputs": {"model": ["unet", 0], "lora_name": LORA_IDENTITY_EDIT,
+                            "strength_model": 1.0}},
+        "load": {"class_type": "LoadImage", "inputs": {"image": image_file}},
+        "encode_src": {"class_type": "VAEEncode", "inputs": {"pixels": ["load", 0], "vae": ["vae", 0]}},
+        "ref_patch": {"class_type": "NO8DKrea2ReferenceModel",
+                      "inputs": {"model": ["lora", 0], "source_latent": ["encode_src", 0],
+                                 "ref_boost": ref_boost, "vae": ["vae", 0],
+                                 "source_image": ["load", 0]}},
+        "pos": {"class_type": "NO8DKrea2GroundedEncode",
+                "inputs": {"clip": ["clip", 0], "text": instruction, "image": ["load", 0]}},
+        "neg": {"class_type": "ConditioningZeroOut", "inputs": {"conditioning": ["pos", 0]}},
+        "latent": {"class_type": "EmptyLatentImage", "inputs": {"width": width, "height": height, "batch_size": 1}},
+        "sample": {"class_type": "KSampler", "inputs": {
+            "model": ["ref_patch", 0], "seed": seed, "steps": steps, "cfg": 1.0,
+            "sampler_name": "euler", "scheduler": "simple",
+            "positive": ["pos", 0], "negative": ["neg", 0],
+            "latent_image": ["latent", 0], "denoise": 1.0}},
+        "decode": {"class_type": "VAEDecode", "inputs": {"samples": ["sample", 0], "vae": ["vae", 0]}},
+        "save": {"class_type": "SaveImage", "inputs": {"images": ["decode", 0], "filename_prefix": prefix}},
+    }
+    return g
 
 
 def upload_image(path: Path) -> str:
@@ -156,12 +196,13 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--recipe", required=True,
-                    choices=["t2i", "t2i-nvfp4", "style-ref", "upscale"])
+                    choices=["t2i", "t2i-nvfp4", "style-ref", "upscale", "edit"])
     ap.add_argument("--prompt", default="")
-    ap.add_argument("--image", help="input image (style-ref / upscale)")
+    ap.add_argument("--image", help="input image (style-ref / upscale / edit)")
     ap.add_argument("--aspect", default="1:1", choices=sorted(ASPECTS))
     ap.add_argument("--steps", type=int, default=8)
     ap.add_argument("--denoise", type=float, default=0.35, help="upscale recipe")
+    ap.add_argument("--ref-boost", type=float, default=1.0, help="edit recipe")
     ap.add_argument("--seed", type=int, default=None)
     ap.add_argument("--lora", action="append", default=[],
                     help="extra lora as name:strength (repeatable)")
@@ -196,6 +237,14 @@ def main(argv=None) -> int:
         up = upload_image(Path(args.image).expanduser())
         graph = img2img_graph(UNET_NVFP4, [(LORA_UNLOCKED, 0.8)], up, w, h,
                               args.steps, seed, args.denoise, args.prefix)
+    elif args.recipe == "edit":
+        if not args.image:
+            ap.error("--image required for edit")
+        if not args.prompt:
+            ap.error("--prompt (edit instruction) required for edit")
+        up = upload_image(Path(args.image).expanduser())
+        graph = identity_edit_graph(up, args.prompt, w, h, args.steps, seed,
+                                    args.prefix, ref_boost=args.ref_boost)
 
     if args.dry_run:
         assert graph is not None

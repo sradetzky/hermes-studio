@@ -13,6 +13,11 @@ is NOT used.
 | `t2i-nvfp4` | text→image, less VRAM | darkBeastKREA2nvfp4 |
 | `style-ref` | image-grounded gen w/ style LoRA | + krea2_style_reference, high-denoise img2img grounding |
 | `upscale` | refine existing image | grounded encode img2img @ denoise ~0.35 |
+| `edit` | instruction-based identity edit | krea2_turbo_fp8 + identity_edit LoRA + NO8D ref patch/grounded encode |
+
+Extra flags: `edit` takes an edit `--prompt` (instruction) and optional
+`--ref-boost` (default 1.0). Verified live: background swap with subject
+identity preserved (prompt_id f9740e08).
 
 Common flags: `--prompt`, `--image`, `--aspect` (1:1 4:3 3:2 16:9 9:16 3:4 2:3
 4:5 — all ≤~1MP), `--steps`, `--seed`, `--lora name:strength`, `--denoise`,
@@ -32,12 +37,13 @@ Sources: Comfy-Org/Krea-2 (HF), conradlocke/krea2-identity-edit (LoRA).
 
 ## Identity edit
 
-The `krea2_identity_edit.json` UI workflow (in
-~/ComfyUI/user/default/workflows/krea2/) does instruction-based image editing
-with identity preservation. Not yet wired as a recipe in krea2_image.py — its
-graph uses Krea2EditGroundedEncode/Krea2EditModelPatch (frontend nodes) plus
-the turbo fp8 UNET + qwen3vl_4b CLIP + identity-edit LoRA. Port it to API
-format when needed.
+Available as `--recipe edit` (verified live). Uses the downloaded
+`krea2_turbo_fp8_scaled.safetensors` UNET, `qwen3vl_4b_fp8_scaled` CLIP and
+`Krea2/krea2_identity_edit_v1_2.safetensors` LoRA through the NO8D
+server-side nodes (`NO8DKrea2ReferenceModel` + `NO8DKrea2GroundedEncode`) —
+the same internals as the original `krea2_identity_edit.json` UI workflow,
+whose Krea2Edit* nodes are frontend-only. `--ref-boost` scales reference
+attention (default 1.0; raise if identity drifts, lower if edits won't take).
 
 ## Project integration
 

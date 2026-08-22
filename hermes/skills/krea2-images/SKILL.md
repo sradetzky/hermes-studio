@@ -14,7 +14,7 @@ studio's runner.
 python3 ~/repos/hermes-studio/scripts/krea2_image.py --recipe <r> [opts]
 ```
 
-Recipes (all verified working 2026-08-22):
+Recipes (all verified working):
 
 | Recipe | Purpose | Models |
 |---|---|---|
@@ -22,8 +22,9 @@ Recipes (all verified working 2026-08-22):
 | `t2i-nvfp4` | text→image, less VRAM | darkBeastKREA2nvfp4 |
 | `style-ref` | image-grounded gen w/ style ref | + krea2_style_reference LoRA (runs as high-denoise img2img grounding) |
 | `upscale` | refine existing image | img2img @ denoise 0.35, grounded encode |
+| `edit` | instruction-based identity edit | krea2_turbo_fp8 + qwen3vl_4b_fp8 + identity_edit_v1_2 LoRA; `--prompt` = edit instruction, `--ref-boost` tunes identity lock |
 
-Key flags: `--prompt`, `--image` (style-ref/upscale), `--aspect`
+Key flags: `--prompt`, `--image` (style-ref/upscale/edit), `--aspect`
 (1:1,4:3,3:2,16:9,9:16,3:4,2:3,4:5 — all ≤~1MP), `--steps` (default 8,
 turbo-range), `--seed`, `--lora name:strength` (repeatable), `--denoise`,
 `--prefix`, `--dry-run`.
@@ -35,12 +36,12 @@ turbo-range), `--seed`, `--lora name:strength` (repeatable), `--denoise`,
   project (`design_studio.py`) yourself after review.
 - ALWAYS sequential: one ComfyUI job at a time, ever.
 
-## Not yet available locally
+## Identity edit
 
-Identity/multi-image edit (the `krea2_identity_edit.json` workflow) needs
-models not yet downloaded: `krea2_turbo_fp8_scaled.safetensors`,
-`qwen3vl_4b_fp8_scaled.safetensors`, LoRA `Krea2/krea2_identity_edit_v1_2.safetensors`.
-Do NOT promise this capability until they exist under ~/ComfyUI/models.
+Available as `--recipe edit` (verified live). Write the instruction in
+`--prompt` ("Change her outfit to…", "Replace the background with…").
+`--ref-boost` >1 strengthens identity preservation, <1 lets edits act more
+freely. Sequential GPU jobs only.
 
 ## Prompting tips
 
