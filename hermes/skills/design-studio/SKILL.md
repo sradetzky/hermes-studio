@@ -5,7 +5,7 @@ description: Use when working in the hermes-studio repo — creating studio proj
 
 # design-studio skill
 
-Manages the on-disk project structure for the DIY MiniMax Design Studio and
+Manages the on-disk project structure for the Hermes Studio and
 runs H3 generations through the proven `minimax-h3-run` runner.
 
 ## Repo & Paths

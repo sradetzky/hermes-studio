@@ -1,4 +1,4 @@
-# DIY MiniMax Design Studio — Skeleton
+# Hermes Studio — Skeleton
 
 This is a starter skeleton + decision log for a fully local creative studio built around:
 

@@ -26,7 +26,7 @@ HERMES = "hermes"
 STUDIO_PROFILE = "studio"
 COMFY_OUTPUT = Path.home() / "ComfyUI" / "output"
 
-app = FastAPI(title="MiniMax Design Studio")
+app = FastAPI(title="Hermes Studio")
 
 
 # ------------------------------------------------------------------ helpers

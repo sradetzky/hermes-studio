@@ -5,7 +5,7 @@ as work proceeds. Detailed docs live in `docs/` — this file stays a lean map.
 
 ## What this is
 
-DIY MiniMax Design Studio: fully local, agent-orchestrated creative studio.
+Hermes Studio: fully local, agent-orchestrated creative studio.
 Hermes profiles orchestrate → ComfyUI (`~/ComfyUI`, RTX 5060 Ti 16GB) renders
 video (MiniMax H3) and stills (Krea 2) → filesystem (`studio-root/`) is the
 database → thin FastAPI web UI (Phase 3, not started).

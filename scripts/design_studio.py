@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""design_studio.py — core library + CLI for the DIY MiniMax Design Studio.
+"""design_studio.py — core library + CLI for the Hermes Studio.
 
 Manages the on-disk project structure (source of truth) and wraps H3
 generation via the proven minimax-h3-run runner.

@@ -1,4 +1,4 @@
-# PLAN.md — DIY MiniMax Design Studio
+# PLAN.md — Hermes Studio
 
 **Status**: Skeleton ready for agent implementation  
 **Owner**: Sven (local setup on RTX 5060 Ti 16GB)  
