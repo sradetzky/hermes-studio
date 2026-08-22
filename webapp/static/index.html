@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MiniMax Design Studio</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { background:#0b0d10; color:#e6e8eb; }
+  .panel { background:#12151a; border:1px solid #232830; border-radius:.75rem; }
+  .btn { background:#1c2129; border:1px solid #2c333e; padding:.35rem .8rem; border-radius:.5rem; font-size:.85rem; }
+  .btn:hover { background:#242b35; }
+  .proj { padding:.45rem .7rem; border-radius:.5rem; cursor:pointer; font-size:.9rem; }
+  .proj:hover, .proj.active { background:#1c2129; }
+  #chatlog div { margin-bottom:.6rem; line-height:1.45; }
+  .role-user { color:#7ab7ff; } .role-assistant { color:#9be29b; }
+  pre.prompt { white-space:pre-wrap; font-size:.78rem; color:#b9c0c9; max-height:16rem; overflow:auto; }
+  img.thumb, video.thumb { width:100%; border-radius:.5rem; display:block; }
+</style>
+</head>
+<body class="h-screen flex flex-col">
+<header class="px-4 py-3 border-b border-[#232830] flex items-center gap-3">
+  <span class="font-semibold tracking-wide">MiniMax Design Studio</span>
+  <span class="text-xs text-gray-500" id="status"></span>
+</header>
+
+<main class="flex-1 grid grid-cols-[220px_1fr_360px] gap-3 p-3 min-h-0">
+
+  <!-- projects rail -->
+  <aside class="panel p-2 overflow-auto">
+    <div class="flex justify-between items-center mb-2 px-1">
+      <span class="text-xs uppercase tracking-wider text-gray-500">Projects</span>
+      <button class="btn" onclick="newProject()">+</button>
+    </div>
+    <nav id="projects"></nav>
+  </aside>
+
+  <!-- chat + prompt -->
+  <section class="flex flex-col gap-3 min-h-0">
+    <div class="panel flex-1 p-3 overflow-auto min-h-0" id="chatlog"></div>
+    <div class="panel p-3">
+      <details open>
+        <summary class="text-xs uppercase tracking-wider text-gray-500 cursor-pointer mb-2">Current prompt</summary>
+        <pre class="prompt" id="prompt">—</pre>
+      </details>
+    </div>
+    <form class="panel p-2 flex gap-2" onsubmit="sendChat(event)">
+      <input id="chatinput" class="flex-1 bg-transparent outline-none text-sm px-2"
+             placeholder="Message the studio agent…" autocomplete="off">
+      <button class="btn">Send</button>
+    </form>
+  </section>
+
+  <!-- media -->
+  <aside class="panel p-3 overflow-auto">
+    <div class="text-xs uppercase tracking-wider text-gray-500 mb-2">Generations</div>
+    <div id="gens" class="space-y-3"></div>
+    <div class="text-xs uppercase tracking-wider text-gray-500 mt-4 mb-2">References</div>
+    <div id="refs" class="grid grid-cols-3 gap-2"></div>
+  </aside>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+let current = null;
+
+async function j(url, opts) {
+  const r = await fetch(url, opts);
+  if (!r.ok) throw new Error((await r.json()).detail || r.status);
+  return r.json();
+}
+
+async function loadProjects() {
+  const d = await j('/api/projects');
+  $('#projects').innerHTML = d.projects.map(p =>
+    `<div class="proj ${p.id===current?'active':''}" onclick="pick('${p.id}')">${p.id}</div>`).join('')
+    || '<div class="text-xs text-gray-600 px-2">no projects yet</div>';
+  if (!current && d.projects.length) { current = d.projects[0].id; }
+}
+
+function pick(id) { current = id; refresh(); }
+
+async function newProject() {
+  const name = prompt('Project name:');
+  if (!name) return;
+  const brief = prompt('Brief (optional):') || '';
+  await j('/api/projects', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({name, brief})});
+  await loadProjects();
+}
+
+async function refresh() {
+  await loadProjects();
+  if (!current) return;
+  const p = await j(`/api/project/${current}`);
+  $('#prompt').textContent = p.current_prompt || '—';
+  document.title = `${p.id} — Studio`;
+
+  const chat = await j(`/api/project/${current}/chat`);
+  $('#chatlog').innerHTML = chat.messages.map(m =>
+    `<div><span class="role-${m.role} font-semibold">${m.role}</span> ${escapeHtml(m.content)}</div>`).join('')
+    || '<div class="text-gray-600 text-sm">Say hello to start planning…</div>';
+  $('#chatlog').scrollTop = $('#chatlog').scrollHeight;
+
+  const gens = await j(`/api/project/${current}/generations`);
+  $('#gens').innerHTML = gens.generations.map(g => {
+    const vid = g.files.find(f => f.endsWith('.mp4'));
+    const img = g.files.find(f => f.endsWith('.png') || f.endsWith('.jpg'));
+    const src = `/media/projects/${current}/generations/${g.gen}/`;
+    const meta = g.meta && g.meta.seed ? `<div class="text-[10px] text-gray-500 mt-1">seed ${g.meta.seed} · ${g.meta.recipe||g.meta.kind||''}</div>` : '';
+    if (vid) return `<div><video class="thumb" controls preload="metadata" src="${src}${vid}"></video>${meta}</div>`;
+    if (img) return `<div><img class="thumb" loading="lazy" src="${src}${img}"><div class="text-[10px] text-gray-500 mt-1">${g.gen}</div>${meta}</div>`;
+    return '';
+  }).join('') || '<div class="text-xs text-gray-600">none yet</div>';
+
+  const refs = await j(`/api/project/${current}/references`);
+  $('#refs').innerHTML = refs.references.map(f =>
+    `<img class="thumb" loading="lazy" src="/media/projects/${current}/references/${f}">`).join('');
+}
+
+async function sendChat(e) {
+  e.preventDefault();
+  const input = $('#chatinput');
+  const msg = input.value.trim();
+  if (!msg || !current) return alert('Pick a project first');
+  input.value = '';
+  $('#status').textContent = 'studio is thinking…';
+  try {
+    const d = await j(`/api/chat?pid=${encodeURIComponent(current)}`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({message: msg})});
+    $('#status').textContent = '';
+    await refresh();
+  } catch (err) { $('#status').textContent = 'error: ' + err.message; }
+}
+
+function escapeHtml(s){const d=document.createElement('div');d.textContent=s??'';return d.innerHTML;}
+
+refresh();
+setInterval(() => current && refresh(), 8000);
+</script>
+</body>
+</html>
