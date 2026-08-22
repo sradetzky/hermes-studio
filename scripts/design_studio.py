@@ -29,7 +29,9 @@ import sys
 from pathlib import Path
 
 RUN_H3 = Path.home() / ".hermes/skills/minimax-h3-run/scripts/run_h3.py"
+KREA2 = Path(__file__).resolve().parent / "krea2_image.py"
 COMFY_ROOT = Path.home() / "ComfyUI"
+COMFY_OUTPUT = COMFY_ROOT / "output"
 DEFAULT_ROOT = Path(__file__).resolve().parent.parent / "studio-root"
 
 
@@ -169,6 +171,65 @@ def run_generation(root: Path, project: str, handoff: str | None = None,
     return {"ok": True, "generation": str(gen_dir), "meta": meta}
 
 
+def run_image_generation(root: Path, project: str, recipe: str, prompt: str = "",
+                         image: str | None = None, extra_args: list[str] | None = None,
+                         timeout: int = 900) -> dict:
+    """Krea 2 still image via scripts/krea2_image.py, archived like generations."""
+    pp = project_path(root, project)
+    prefix = f"studio_{slugify(project)}"
+    cmd = [sys.executable, str(KREA2), "--recipe", recipe, "--prefix", prefix]
+    if prompt:
+        cmd += ["--prompt", prompt]
+    if image:
+        cmd += ["--image", str(Path(image).expanduser())]
+    if extra_args:
+        cmd += extra_args
+
+    print(f"[design-studio] submitting: {' '.join(cmd)}", file=sys.stderr)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+
+    seed, prompt_id, files = None, None, []
+    # runner prints a one-line summary JSON then an indented result JSON
+    dec, pos = json.JSONDecoder(), 0
+    while True:
+        start = result.stdout.find("{", pos)
+        if start < 0:
+            break
+        try:
+            obj, end = dec.raw_decode(result.stdout[start:])
+        except ValueError:
+            pos = start + 1
+            continue
+        if isinstance(obj, dict):
+            seed = obj.get("seed", seed)
+            prompt_id = obj.get("prompt_id", prompt_id)
+            f = obj.get("files")
+            if isinstance(f, list) and f:
+                files = [x for x in f if isinstance(x, str)]
+        pos = start + end
+    if result.returncode != 0:
+        return {"ok": False, "returncode": result.returncode,
+                "stderr": result.stderr[-2000:] or result.stdout[-2000:]}
+
+    gen_dir = next_generation_dir(pp)
+    gen_dir.mkdir()
+    copied = []
+    for fname in files:
+        src = COMFY_OUTPUT / fname
+        if src.exists():
+            dst = gen_dir / fname
+            shutil.copy2(src, dst)
+            copied.append(dst.name)
+    meta = {"generated": _dt.datetime.now().isoformat(timespec="seconds"),
+            "kind": "image", "recipe": recipe, "prompt": prompt,
+            "input_image": str(image or ""), "seed": seed,
+            "prompt_id": prompt_id, "files": copied}
+    if prompt:
+        (gen_dir / "prompt.txt").write_text(prompt.rstrip() + "\n", encoding="utf-8")
+    (gen_dir / "meta.json").write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+    return {"ok": True, "generation": str(gen_dir), "meta": meta}
+
+
 # ---------------------------------------------------------------------- main
 
 def main(argv=None) -> int:
@@ -195,6 +256,16 @@ def main(argv=None) -> int:
     sp.add_argument("--timeout", type=int, default=7200)
     sp.add_argument("--dry-run", action="store_true")
 
+    sp = sub.add_parser("generate-image")
+    sp.add_argument("project")
+    sp.add_argument("--recipe", required=True,
+                    choices=["t2i", "t2i-nvfp4", "style-ref", "upscale"])
+    sp.add_argument("--prompt", default="")
+    sp.add_argument("--image", help="input image for style-ref / upscale")
+    sp.add_argument("--arg", action="append", default=[],
+                    help="extra krea2_image.py arg, e.g. --arg=--aspect --arg=16:9")
+    sp.add_argument("--timeout", type=int, default=900)
+
     args = ap.parse_args(argv)
     root = studio_root(args.root)
 
@@ -216,6 +287,16 @@ def main(argv=None) -> int:
                              timeout=args.timeout, dry_run=args.dry_run)
         print(json.dumps(out, indent=2))
         return 0 if out.get("ok") or out.get("dry_run") else 1
+    elif args.cmd == "generate-image":
+        import shlex
+        extra = []
+        for a in args.arg:
+            extra.extend(shlex.split(a))
+        out = run_image_generation(root, args.project, args.recipe, args.prompt,
+                                   image=args.image, extra_args=extra,
+                                   timeout=args.timeout)
+        print(json.dumps(out, indent=2))
+        return 0 if out.get("ok") else 1
     return 0
 
 

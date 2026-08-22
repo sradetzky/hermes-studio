@@ -23,9 +23,13 @@ hermes-studio/
 │   ├── profiles/studio/config.yaml.example
 │   ├── profiles/studio-storyboarder/SOUL.md    # deployed to ~/.hermes/profiles/studio-storyboarder/
 │   ├── profiles/studio-prompt-engineer/SOUL.md # deployed to ~/.hermes/profiles/studio-prompt-engineer/
-│   └── skills/design-studio/SKILL.md      # deployed to ~/.hermes/profiles/studio/skills/
+│   ├── profiles/studio-reviewer/SOUL.md        # deployed to ~/.hermes/profiles/studio-reviewer/
+│   ├── profiles/studio-illustrator/SOUL.md     # deployed to ~/.hermes/profiles/studio-illustrator/
+│   ├── skills/design-studio/SKILL.md      # deployed to ~/.hermes/profiles/studio/skills/
+│   └── skills/krea2-images/SKILL.md       # deployed to ~/.hermes/profiles/studio-illustrator/skills/
 ├── scripts/
 │   ├── design_studio.py       # core library + CLI (projects, prompts, chat, generation archiving)
+│   ├── krea2_image.py         # Krea 2 image runner (t2i / t2i-nvfp4 / style-ref / upscale via ComfyUI API)
 │   └── switch-model.sh        # placeholder reminder for local-server model switching
 ├── comfyui/workflows/         # parameterized H3 API-format workflow JSONs (empty yet)
 ├── studio-root/               # DEFAULT_STUDIO_ROOT: projects/, shared/{characters,styles,workflows}/, tmp/
@@ -52,10 +56,26 @@ hermes-studio/
 | `studio-storyboarder` | Shot planning | `storyboard.md` per project | final prompts, renders |
 | `studio-prompt-engineer` | H3 prompt writing | structured prompts, handoff params | renders, shot redesign |
 | `studio-reviewer` | Quality gate | PASS/REVISE/REJECT verdicts in chat.jsonl | deletes media, rewrites prompts |
+| `studio-illustrator` | Still images (Krea 2) | character sheets, style refs, refines | video/H3 work |
 
 All share one model config (switch together via switch-model.sh). Spawned by
 the studio orchestrator via `hermes -p <profile> chat -q ...` (background for
 long work). More roles can be added when a need is proven.
+
+## Image pipeline (Krea 2, local ComfyUI)
+
+- Runner: `scripts/krea2_image.py`; projects integrate via
+  `design_studio.py generate-image <project> --recipe <r>` → archives into the
+  same `generations/NNN/` tree with meta.json + prompt.txt.
+- Recipes: `t2i`, `t2i-nvfp4` (darkBeast checkpoints + qwen3-vl-4b-heretic +
+  qwen_image_vae + Krea-2-unlocked LoRA), `style-ref` (+ krea2_style_reference),
+  `upscale` (grounded img2img @ denoise ~0.35).
+- NOT available yet: identity/multi-image edit — needs downloads:
+  `krea2_turbo_fp8_scaled.safetensors`, `qwen3vl_4b_fp8_scaled.safetensors`,
+  LoRA `Krea2/krea2_identity_edit_v1_2.safetensors`. UI workflows referencing
+  them live in ~/ComfyUI/user/default/workflows/krea2/.
+- Krea2ImageNode/Krea2StyleReferenceNode are Comfy cloud API nodes (paid) —
+  not used by the studio; everything runs local.
 
 ## Conventions
 
@@ -86,6 +106,18 @@ long work). More roles can be added when a need is proven.
   studio-prompt-engineer, studio-reviewer — role SOULs written in-repo and
   deployed; each verified live via `hermes -p <profile> chat -q`
 - switch-model.sh rewritten: manages whole fleet's model/provider at once
+
+### 2026-08-22 — Image pipeline (Krea 2) + illustrator agent
+- Audited local Krea 2 assets: darkBeast int8 + nvfp4 checkpoints, heretic
+  qwen3-vl-4b CLIP, qwen_image_vae, LoRAs (unlocked/style-ref/nsfw) all present;
+  identity-edit models NOT downloaded yet; native Krea2ImageNode = cloud API (unused)
+- Implemented `scripts/krea2_image.py` (t2i / t2i-nvfp4 / style-ref / upscale);
+  verified live end-to-end: t2i-nvfp4 render + upscale refine both completed on GPU
+- Added `generate-image` to design_studio.py — archives into the same
+  generations/NNN/ tree (meta.json + prompt.txt + files); verified with a real
+  render archived into project image-test/generations/001/
+- New profile `studio-illustrator` (SOUL in repo, krea2-images skill deployed);
+  verified live via one-shot chat
 
 ## Next steps
 
