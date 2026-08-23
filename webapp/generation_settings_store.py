@@ -3,6 +3,7 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import json
+import math
 import os
 import uuid
 from datetime import datetime, timezone
@@ -44,7 +45,10 @@ def _bool(value: Any, field: str) -> bool:
 def _number(value: Any, field: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise GenerationSettingsError(f"{field} must be a number")
-    return float(value)
+    number = float(value)
+    if not math.isfinite(number):
+        raise GenerationSettingsError(f"{field} must be finite")
+    return number
 
 
 def _integer(value: Any, field: str) -> int:
@@ -338,6 +342,15 @@ class GenerationSettingsStore:
                 reasons.append("R2V requires between 1 and 9 ordered references")
             if manifest["turbo"] and not manifest["turbo_lora"]:
                 reasons.append("Turbo requires a LoRA filename")
+            installed_loras = set(self._installed_models("loras", "minimax_h3"))
+            if (manifest["turbo"] and manifest["turbo_lora"]
+                    and manifest["turbo_lora"] not in installed_loras):
+                reasons.append(
+                    f"Turbo LoRA is not installed: {manifest['turbo_lora']}")
+            installed_unets = set(self._installed_models(
+                "diffusion_models", "minimax_h3"))
+            if manifest["unet"] and manifest["unet"] not in installed_unets:
+                reasons.append(f"UNET is not installed: {manifest['unet']}")
             if manifest["turbo"] and not 4 <= manifest["steps"] <= 10:
                 warnings.append("Turbo is normally used with 4–10 steps")
             if manifest["upscale"]:

@@ -100,7 +100,9 @@ class HermesSessionEventBridge:
         self.session_id = session_id
         self.database_path = settings.profile_state_path(job.profile)
         self.cursor = 0
-        self._open_tools: dict[str, deque[tuple[float, dict]]] = defaultdict(deque)
+        self._open_tools: dict[
+            str, deque[tuple[str | None, float, dict]]
+        ] = defaultdict(deque)
         self._disabled = False
         self._connected = False
 
@@ -137,7 +139,7 @@ class HermesSessionEventBridge:
                     )
                     self._connected = True
                 rows = connection.execute(
-                    "SELECT id, role, content, tool_name, tool_calls, "
+                    "SELECT id, role, content, tool_call_id, tool_name, tool_calls, "
                     "reasoning, reasoning_content, timestamp "
                     "FROM messages WHERE session_id = ? AND id > ? "
                     "ORDER BY id",
@@ -191,9 +193,9 @@ class HermesSessionEventBridge:
                     status="running",
                     detail={"text": content[:4000]},
                 )
-            for tool_name, arguments in calls:
+            for call_id, tool_name, arguments in calls:
                 safe = _safe_arguments(arguments)
-                self._open_tools[tool_name].append((timestamp, safe))
+                self._open_tools[tool_name].append((call_id, timestamp, safe))
                 self.store.append_job_event(
                     self.job.id,
                     self.job.profile,
@@ -205,8 +207,15 @@ class HermesSessionEventBridge:
         elif role == "tool":
             tool_name = row["tool_name"] or "tool"
             content = row["content"] or ""
-            if self._open_tools[tool_name]:
-                started, safe = self._open_tools[tool_name].popleft()
+            call_id = row["tool_call_id"]
+            opened = self._open_tools[tool_name]
+            match = next((index for index, item in enumerate(opened)
+                          if call_id and item[0] == call_id), None)
+            if match is not None:
+                _, started, safe = opened[match]
+                del opened[match]
+            elif opened:
+                _, started, safe = opened.popleft()
             else:
                 started, safe = timestamp, {}
             failed = _tool_failed(content)
@@ -224,7 +233,7 @@ class HermesSessionEventBridge:
             )
 
     @staticmethod
-    def _tool_calls(value: Any) -> list[tuple[str, Any]]:
+    def _tool_calls(value: Any) -> list[tuple[str | None, str, Any]]:
         if not value:
             return []
         try:
@@ -238,5 +247,9 @@ class HermesSessionEventBridge:
             function = call.get("function") or {}
             tool_name = function.get("name") or call.get("name")
             if tool_name:
-                result.append((str(tool_name), function.get("arguments") or call.get("arguments")))
+                result.append((
+                    str(call["id"]) if call.get("id") else None,
+                    str(tool_name),
+                    function.get("arguments") or call.get("arguments"),
+                ))
         return result

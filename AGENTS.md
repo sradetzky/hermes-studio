@@ -84,6 +84,12 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
 - Web M4.1 generation contract: typed prompt-bound `current_generation.json`,
   readiness/staleness display, safe MP/explicit-canvas validation, editable
   steps/accel/turbo/model/upscale knobs, and ordered mode-aware references
+- Preview-release hardening: public setup/release docs, corrected custom-provider
+  example, local dependency/security/browser gates, and specialist lease recovery
+  that cannot cancel Studio-owned ComfyUI work
+- Release-candidate audit: trusted localhost boundary, private runtime state,
+  symlink-safe metadata, atomic generation publication, resilient scheduling,
+  exact tool-call projection, and stale settings-form protection
 
 ## Next steps
 

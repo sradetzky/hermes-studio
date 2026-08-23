@@ -1,11 +1,12 @@
 # PLAN.md — Hermes Studio
 
-**Status**: Skeleton ready for agent implementation  
+**Status**: v0.1 preview candidate; web M1–M4.1 complete, real H3 E2E pending
 **Owner**: Sven (local setup on RTX 5060 Ti 16GB)  
 **Date**: 2026-08-22  
 **Goal**: Fully local, agent-orchestrated creative studio centered on MiniMax H3 + Hermes, with a simple self-hosted web UI.
 
-This document is the single source of truth for decisions made so far. A cheaper/local agent should follow this plan to implement the system.
+This document is the single source of truth for architecture decisions and
+implementation status.
 
 ---
 
@@ -126,17 +127,17 @@ Hermes (via design-studio skill) is responsible for creating projects and writin
 
 ### Phase 2 – ComfyUI Wiring
 - [x] Connect the `studio` profile to pinned `comfyui-mcp` and verify tools.
-- Submit API-format workflows via MCP; always archive output and call
+- [ ] Verify a real H3 API-format workflow submission through MCP; always archive output and call
   `clear_vram` after every terminal success/error/cancel/timeout.
-- Parameter injection must be reliable.
-- After generation, skill must cleanly archive into `generations/`.
+- [ ] Verify parameter injection against the real workflow.
+- [ ] Verify completed media is archived into `generations/` before release.
 
 ### Phase 3 – Minimal Web UI
 - FastAPI app that:
   - Serves static index.html
   - `/api/chat` → asynchronous persisted jobs on Hermes studio profile
-  - `/api/projects` + `/api/project/{id}/media`
-  - Mounts the studio-root safely for media serving
+  - Project, generation, reference, settings, job, chat, and activity APIs
+  - Serves only guarded project media from references/generations/final
 - Single page with: project list, chat, video player, prompt viewer, references.
 - Auto-refresh or simple polling for new generations.
 - [x] Async per-project job state + visible queued/running/completed/failed status.

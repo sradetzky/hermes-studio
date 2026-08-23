@@ -40,7 +40,7 @@ class ProjectIn(BaseModel):
 
 class ChatIn(BaseModel):
     message: str
-    profile: str = "studio"
+    profile: str | None = None
 
 
 class MediaActionIn(BaseModel):
@@ -119,12 +119,8 @@ def list_projects(request: Request):
     return {"projects": [
         {
             "id": name,
-            "brief": (
-                (root / "projects" / name / "brief.md")
-                .read_text(encoding="utf-8")[:200]
-                if (root / "projects" / name / "brief.md").exists()
-                else ""
-            ),
+            "brief": ds.read_project_text(
+                root / "projects" / name, "brief.md", limit=200),
         }
         for name in reversed(ds.list_projects(root))
     ]}
@@ -163,13 +159,10 @@ def get_project(request: Request, project_id: str):
     store = _store(request)
     store.import_chat_if_empty(project.name, project / "chat.jsonl")
     chat_count, _ = store.chat_events(project.name)
-    prompt = project / "current_prompt.txt"
-    brief = project / "brief.md"
     return {
         "id": project.name,
-        "brief": brief.read_text(encoding="utf-8") if brief.exists() else "",
-        "current_prompt": (
-            prompt.read_text(encoding="utf-8") if prompt.exists() else ""),
+        "brief": ds.read_project_text(project, "brief.md"),
+        "current_prompt": ds.read_project_text(project, "current_prompt.txt"),
         "chat_count": chat_count,
         "generation_settings": _generation_settings(request).describe(project),
     }
@@ -260,9 +253,12 @@ def use_generation_as_reference(request: Request, project_id: str,
 def get_references(request: Request, project_id: str):
     project = resolve_project(request, project_id)
     directory = project / "references"
+    if directory.is_symlink():
+        return {"references": []}
     references = sorted(
         item.name for item in directory.iterdir()
-        if item.is_file() and not item.name.startswith(".")
+        if item.is_file() and not item.is_symlink()
+        and not item.name.startswith(".")
     ) if directory.is_dir() else []
     return {"references": references}
 
@@ -289,11 +285,12 @@ def chat(request: Request, body: ChatIn,
     message = body.message.strip()
     if not message:
         raise HTTPException(400, "empty message")
-    if body.profile not in _settings(request).profiles:
-        raise HTTPException(400, f"unknown Studio profile: {body.profile}")
+    profile = body.profile or _settings(request).studio_profile
+    if profile not in _settings(request).profiles:
+        raise HTTPException(400, f"unknown Studio profile: {profile}")
     try:
         job = _manager(request).submit_chat(
-            project.name, message, body.profile)
+            project.name, message, profile)
     except ActiveJobError as exc:
         raise HTTPException(409, str(exc))
     return job.to_dict()

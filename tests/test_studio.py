@@ -38,6 +38,23 @@ class ProjectPathTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 ds.project_path(self.root, value)
 
+    def test_rejects_project_and_prompt_symlinks(self):
+        outside = Path(self.temp.name) / "outside"
+        outside.mkdir()
+        alias = self.root / "projects" / "alias"
+        alias.symlink_to(outside, target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, "symlink"):
+            ds.project_path(self.root, alias.name)
+
+        target = Path(self.temp.name) / "outside-prompt.txt"
+        target.write_text("secret")
+        prompt = self.project / "current_prompt.txt"
+        prompt.unlink()
+        prompt.symlink_to(target)
+        with self.assertRaisesRegex(ValueError, "regular project file"):
+            ds.write_prompt(self.root, self.project.name, "replacement")
+        self.assertEqual(target.read_text(), "secret")
+
     def test_atomic_concurrent_chat_appends(self):
         count = 100
         with ThreadPoolExecutor(max_workers=16) as pool:
@@ -145,6 +162,55 @@ class ProjectPathTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 ds.archive_outputs(
                     self.root, self.project.name, [str(outside)])
+
+    def test_archive_rejects_symlinked_output(self):
+        comfy_output = Path(self.temp.name) / "comfy-output"
+        comfy_output.mkdir()
+        outside = Path(self.temp.name) / "outside.png"
+        outside.write_bytes(b"image")
+        (comfy_output / "linked.png").symlink_to(outside)
+        with self.assertRaisesRegex(ValueError, "symlink"):
+            ds.archive_outputs(
+                self.root, self.project.name, ["linked.png"],
+                source_root=comfy_output)
+
+    def test_archive_rejects_symlinked_generation_directory(self):
+        comfy_output = Path(self.temp.name) / "comfy-output"
+        comfy_output.mkdir()
+        (comfy_output / "result.png").write_bytes(b"image")
+        outside = Path(self.temp.name) / "outside-generations"
+        outside.mkdir()
+        (self.project / "generations").rmdir()
+        (self.project / "generations").symlink_to(
+            outside, target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, "generations directory"):
+            ds.archive_outputs(
+                self.root, self.project.name, ["result.png"],
+                source_root=comfy_output)
+        self.assertEqual(list(outside.iterdir()), [])
+
+    def test_archive_is_hidden_until_atomic_publication(self):
+        comfy_output = Path(self.temp.name) / "comfy-output"
+        comfy_output.mkdir()
+        source = comfy_output / "result.png"
+        source.write_bytes(b"image")
+        visible_during_copy = []
+        real_copy = ds.shutil.copy2
+
+        def inspect_copy(source_path, target_path):
+            visible_during_copy.append([
+                item.name for item in (self.project / "generations").iterdir()
+                if item.name.isdigit()
+            ])
+            return real_copy(source_path, target_path)
+
+        with patch.object(ds.shutil, "copy2", side_effect=inspect_copy):
+            generation = ds.archive_outputs(
+                self.root, self.project.name, ["result.png"],
+                source_root=comfy_output)
+        self.assertEqual(visible_during_copy, [[]])
+        self.assertEqual(generation.name, "001")
+        self.assertTrue((generation / "meta.json").is_file())
 
     def test_archives_grok_cache_with_xai_transport(self):
         grok_cache = Path(self.temp.name) / "grok-cache"

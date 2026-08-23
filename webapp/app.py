@@ -8,10 +8,12 @@ from __future__ import annotations
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from typing import Protocol
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from scripts import design_studio as ds
 from webapp.config import Settings
@@ -59,6 +61,26 @@ def create_app(settings: Settings | None = None,
 
     application = FastAPI(title="Hermes Studio", lifespan=lifespan)
     application.state.settings = settings
+    application.add_middleware(
+        TrustedHostMiddleware,
+        allowed_hosts=["127.0.0.1", "localhost", "testserver"],
+    )
+
+    @application.middleware("http")
+    async def protect_local_writes(request, call_next):
+        if request.method not in {"GET", "HEAD", "OPTIONS"}:
+            origin = request.headers.get("origin")
+            if origin and urlsplit(origin).hostname not in {"127.0.0.1", "localhost"}:
+                return JSONResponse(
+                    {"detail": "cross-origin writes are not allowed"},
+                    status_code=403,
+                )
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        return response
+
     application.include_router(router)
     application.mount(
         "/static",

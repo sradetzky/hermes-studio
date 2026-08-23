@@ -5,9 +5,9 @@
 model:
   # Keep this the same across main + studio + any other profiles
   # so you can switch models by only restarting the local server.
-  default: "http://127.0.0.1:8000/v1"   # or whatever your local server is
-  # model name as exposed by the local server, e.g. "qwen3-32b" or "hermes-..."
-  # name: "your-local-model-name"
+  provider: custom
+  default: "your-local-model-name"
+  base_url: "http://127.0.0.1:8000/v1"  # or your OpenAI-compatible endpoint
 
 # Optional: restrict tools / enable the design-studio skill explicitly
 # skills:

@@ -21,7 +21,7 @@ from scripts import design_studio as ds
 from webapp.app import create_app
 from webapp.config import Settings
 from webapp.hermes_events import HermesSessionEventBridge
-from webapp.job_store import ActiveJobError, JobStore
+from webapp.job_store import ActiveJobError, JobStore, JobStoreError
 from webapp.models import JobStatus
 from webapp.studio_manager import StudioJobManager
 
@@ -104,6 +104,35 @@ class WebAppTestCase(unittest.TestCase):
 
 
 class LauncherScriptTests(unittest.TestCase):
+    def test_profile_sync_allows_missing_optional_grok_profile(self):
+        with tempfile.TemporaryDirectory() as directory:
+            hermes_home = Path(directory)
+            for profile in (
+                "studio", "studio-storyboarder", "studio-prompt-engineer",
+                "studio-reviewer", "studio-illustrator",
+            ):
+                config = hermes_home / "profiles" / profile / "config.yaml"
+                config.parent.mkdir(parents=True)
+                config.write_text("model: {}\n")
+            script = (
+                Path(__file__).resolve().parent.parent /
+                "scripts" / "sync-profiles.sh")
+            result = subprocess.run(
+                [script], capture_output=True, text=True, check=False,
+                env={**os.environ, "HERMES_HOME": str(hermes_home)},
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("skipped optional studio-grok", result.stdout)
+
+    def test_run_rejects_uvicorn_overrides(self):
+        script = Path(__file__).resolve().parent.parent / "webapp" / "run.sh"
+        result = subprocess.run(
+            [script, "--host", "0.0.0.0"],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("usage", result.stderr)
+
     def test_stop_refuses_active_jobs_without_force(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -120,7 +149,7 @@ class LauncherScriptTests(unittest.TestCase):
             (webapp / "stop.sh").chmod(0o755)
             (python_dir / "python").symlink_to(sys.executable)
             database = runtime / "studio.db"
-            with sqlite3.connect(database) as connection:
+            with closing(sqlite3.connect(database)) as connection, connection:
                 connection.execute(
                     "CREATE TABLE jobs (id TEXT, project TEXT, profile TEXT, "
                     "status TEXT, created_at TEXT)")
@@ -142,7 +171,7 @@ class LauncherScriptTests(unittest.TestCase):
                 self.assertIn("jobs are active", refused.stderr)
                 self.assertIsNone(process.poll())
 
-                with sqlite3.connect(database) as connection:
+                with closing(sqlite3.connect(database)) as connection, connection:
                     connection.execute("DELETE FROM jobs")
                 reaper = Thread(target=process.wait)
                 reaper.start()
@@ -161,6 +190,17 @@ class LauncherScriptTests(unittest.TestCase):
 
 
 class AppFactoryTests(WebAppTestCase):
+    def test_rejects_untrusted_hosts_and_cross_origin_writes(self):
+        with TestClient(self.app()) as client:
+            self.assertEqual(client.get(
+                "/api/projects", headers={"Host": "attacker.example"}
+            ).status_code, 400)
+            self.assertEqual(client.post(
+                "/api/projects",
+                headers={"Origin": "https://attacker.example"},
+                json={"name": "blocked", "brief": ""},
+            ).status_code, 403)
+
     def test_default_job_timeout_covers_long_h3_runs(self):
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("HERMES_STUDIO_JOB_TIMEOUT_SECONDS", None)
@@ -217,6 +257,15 @@ class AppFactoryTests(WebAppTestCase):
             )
             self.assertEqual(rejected.status_code, 400)
 
+    def test_chat_defaults_to_configured_studio_profile(self):
+        settings = replace(self.settings, studio_profile="custom-studio")
+        with TestClient(create_app(settings, PassiveManager)) as client:
+            project = self.create_project(client, "custom-profile")
+            accepted = client.post(
+                f"/api/chat?pid={project}", json={"message": "hello"})
+            self.assertEqual(accepted.status_code, 202)
+            self.assertEqual(accepted.json()["profile"], "custom-studio")
+
     def test_generation_settings_manifest_and_prompt_readiness(self):
         with TestClient(self.app()) as client:
             project = self.create_project(client, "generation-settings")
@@ -265,6 +314,9 @@ class AppFactoryTests(WebAppTestCase):
             root = self.settings.studio_root / "projects" / project
             (root / "current_prompt.txt").write_text("reference prompt\n")
             (root / "references" / "character.png").write_bytes(b"image")
+            loras = self.settings.comfy_output.parent / "models" / "loras"
+            loras.mkdir(parents=True)
+            (loras / "minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors").touch()
 
             blocked = client.put(
                 f"/api/project/{project}/generation-settings",
@@ -313,7 +365,27 @@ class AppFactoryTests(WebAppTestCase):
                         json=payload,
                     )
                     self.assertEqual(response.status_code, 400)
+            nan_payload = _generation_settings_payload(mp=float("nan"))
+            response = client.put(
+                f"/api/project/{project}/generation-settings",
+                content=json.dumps(nan_payload),
+                headers={"Content-Type": "application/json"},
+            )
+            self.assertEqual(response.status_code, 400)
             self.assertFalse((root / "current_generation.json").exists())
+
+    def test_project_metadata_symlinks_are_not_read(self):
+        with TestClient(self.app()) as client:
+            project = self.create_project(client, "metadata-symlink")
+            root = self.settings.studio_root / "projects" / project
+            outside = Path(self.temp.name) / "outside.txt"
+            outside.write_text("outside secret")
+            (root / "brief.md").unlink()
+            (root / "brief.md").symlink_to(outside)
+            listing = client.get("/api/projects").json()["projects"]
+            self.assertEqual(listing[0]["brief"], "")
+            self.assertEqual(
+                client.get(f"/api/project/{project}").json()["brief"], "")
 
     def test_media_route_exposes_only_media_areas(self):
         with TestClient(self.app()) as client:
@@ -530,6 +602,28 @@ class JobStoreTests(WebAppTestCase):
         store.initialize()
         return store
 
+    def test_runtime_database_permissions_are_private(self):
+        self.store()
+        self.assertEqual(
+            self.settings.runtime_root.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(
+            self.settings.database_path.stat().st_mode & 0o777, 0o600)
+
+    def test_runtime_database_rejects_symlinked_paths(self):
+        outside = Path(self.temp.name) / "outside"
+        outside.mkdir()
+        self.settings.runtime_root.symlink_to(outside, target_is_directory=True)
+        with self.assertRaisesRegex(JobStoreError, "runtime directory"):
+            self.store()
+
+        self.settings.runtime_root.unlink()
+        self.settings.runtime_root.mkdir()
+        outside_database = outside / "outside.db"
+        outside_database.touch()
+        self.settings.database_path.symlink_to(outside_database)
+        with self.assertRaisesRegex(JobStoreError, "database files"):
+            self.store()
+
     def test_profile_sessions_are_isolated_per_project(self):
         store = self.store()
         first = store.create_chat_job(
@@ -584,7 +678,7 @@ class JobStoreTests(WebAppTestCase):
                 );
                 CREATE TABLE messages (
                     id INTEGER PRIMARY KEY, session_id TEXT, role TEXT,
-                    content TEXT, tool_name TEXT, tool_calls TEXT,
+                    content TEXT, tool_call_id TEXT, tool_name TEXT, tool_calls TEXT,
                     reasoning TEXT, reasoning_content TEXT, timestamp REAL
                 );
                 """
@@ -594,21 +688,34 @@ class JobStoreTests(WebAppTestCase):
                 ("session-1", "studio-web", started_at),
             )
             connection.execute(
-                "INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
-                    1, "session-1", "assistant", "", None,
-                    json.dumps([{"function": {
-                        "name": "read_file",
-                        "arguments": json.dumps({"path": "/tmp/example"}),
-                    }}]),
+                    1, "session-1", "assistant", "", None, None,
+                    json.dumps([
+                        {"id": "call-a", "function": {
+                            "name": "read_file",
+                            "arguments": json.dumps({"path": "/tmp/a"}),
+                        }},
+                        {"id": "call-b", "function": {
+                            "name": "read_file",
+                            "arguments": json.dumps({"path": "/tmp/b"}),
+                        }},
+                    ]),
                     "Inspecting the project", None, started_at + 1,
                 ),
             )
             connection.execute(
-                "INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     2, "session-1", "tool", json.dumps({"success": True}),
-                    "read_file", None, None, None, started_at + 2,
+                    "call-b", "read_file", None, None, None, started_at + 2,
+                ),
+            )
+            connection.execute(
+                "INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    3, "session-1", "tool", json.dumps({"success": True}),
+                    "call-a", "read_file", None, None, None, started_at + 3,
                 ),
             )
             connection.commit()
@@ -624,9 +731,13 @@ class JobStoreTests(WebAppTestCase):
         self.assertIn("reasoning", event_types)
         self.assertIn("tool.started", event_types)
         self.assertIn("tool.completed", event_types)
-        completed = next(
-            event for event in events if event.event_type == "tool.completed")
-        self.assertEqual(completed.detail["duration"], 1.0)
+        completed = [
+            event for event in events if event.event_type == "tool.completed"]
+        self.assertEqual(completed[0].detail["duration"], 1.0)
+        self.assertEqual(
+            [event.detail["arguments"]["path"] for event in completed],
+            ["/tmp/b", "/tmp/a"],
+        )
 
     def test_cross_connection_active_job_claim_is_atomic(self):
         first_store = self.store()
@@ -860,6 +971,43 @@ class StudioManagerTests(WebAppTestCase):
             [event.role for event in events], ["user", "system"])
         self.assertIn("failed", events[1].content.lower())
 
+    def test_scheduler_survives_transient_store_error(self):
+        project = ds.create_project(self.settings.studio_root, "scheduler-retry")
+        store = JobStore(self.settings.database_path)
+        manager = StudioJobManager(
+            self.settings, store,
+            command_builder=lambda *_: [
+                sys.executable, "-c", "print('recovered')"],
+            cleanup_callback=lambda: None,
+        )
+        store.initialize()
+        store.register_worker(manager.owner_id)
+        job = manager.submit_chat(project.name, "question")
+        real_heartbeat = store.heartbeat_worker
+        calls = 0
+
+        def flaky_heartbeat(owner_id):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise OSError("temporary database failure")
+            real_heartbeat(owner_id)
+
+        with (
+            patch.object(store, "heartbeat_worker", side_effect=flaky_heartbeat),
+            self.assertLogs("webapp.studio_manager", level="ERROR"),
+        ):
+            scheduler = Thread(target=manager._scheduler_loop)
+            manager._scheduler = scheduler
+            scheduler.start()
+            try:
+                completed = self.wait_for_terminal(store, job.id)
+            finally:
+                manager.stop()
+        self.assertEqual(completed.status, JobStatus.COMPLETED)
+        _, chat = store.chat_events(project.name)
+        self.assertEqual(chat[-1].content, "recovered")
+
     def test_specialist_failure_does_not_interrupt_comfyui(self):
         project = ds.create_project(self.settings.studio_root, "specialist-failure")
         store = JobStore(self.settings.database_path)
@@ -903,6 +1051,29 @@ class StudioManagerTests(WebAppTestCase):
             manager.stop()
         self.assertEqual(recovered.status, JobStatus.FAILED)
         self.assertEqual(cleanup_calls, [True])
+
+    def test_startup_recovers_specialist_without_interrupting_comfyui(self):
+        ds.studio_root(str(self.settings.studio_root))
+        project = ds.create_project(
+            self.settings.studio_root, "specialist-recovery")
+        store = JobStore(self.settings.database_path)
+        store.initialize()
+        job = store.create_chat_job(
+            project.name, "plan", "studio-storyboarder")
+        store.claim_next("dead-worker")
+        cleanup_calls = []
+        manager = StudioJobManager(
+            self.settings, store,
+            command_builder=lambda *_: [sys.executable, "-c", "pass"],
+            cleanup_callback=lambda: cleanup_calls.append(True),
+        )
+        manager.start()
+        try:
+            recovered = store.get_job(job.id)
+        finally:
+            manager.stop()
+        self.assertEqual(recovered.status, JobStatus.FAILED)
+        self.assertEqual(cleanup_calls, [])
 
     def test_cleanup_finishes_before_next_global_job_starts(self):
         ds.studio_root(str(self.settings.studio_root))

@@ -74,6 +74,10 @@ async function openGenerationSettings(opener = null) {
   if (!state.current) return;
   state.settingsOpener = opener || state.settingsOpener;
   const dialog = $('#generation-settings-dialog');
+  const save = $('#generation-settings-save');
+  save.disabled = true;
+  state.generationSettingsOptions = null;
+  state.settingsReferences = [];
   $('#generation-settings-status').textContent = 'Loading settings…';
   if (!dialog.open) dialog.showModal();
   const selectedProject = state.current;
@@ -85,6 +89,7 @@ async function openGenerationSettings(opener = null) {
     state.generationSettingsOptions = contract.options;
     state.settingsReferences = [...contract.settings.references];
     populateGenerationSettings(contract);
+    save.disabled = false;
     $('#generation-settings-status').textContent = '';
   } catch (error) {
     $('#generation-settings-status').textContent = `Unable to load: ${error.message}`;
@@ -268,6 +273,9 @@ async function saveGenerationSettings(event) {
   const form = $('#generation-settings-form');
   if (!form.reportValidity()) return;
   const status = $('#generation-settings-status');
+  const save = $('#generation-settings-save');
+  if (save.disabled || !state.generationSettingsOptions) return;
+  save.disabled = true;
   status.textContent = 'Saving settings…';
   const selectedProject = state.current;
   try {
@@ -282,6 +290,7 @@ async function saveGenerationSettings(event) {
     closeGenerationSettings();
     await refreshProject();
   } catch (error) {
+    save.disabled = false;
     status.textContent = `Save failed: ${error.message}`;
   }
 }
@@ -300,6 +309,7 @@ function closeGenerationSettings(restoreFocus = true) {
   state.settingsOpener = null;
   state.generationSettingsOptions = null;
   state.settingsReferences = [];
+  $('#generation-settings-save').disabled = true;
   if (dialog.open) dialog.close();
   if (restoreFocus && opener?.isConnected) queueMicrotask(() => opener.focus());
 }

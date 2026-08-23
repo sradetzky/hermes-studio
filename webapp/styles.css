@@ -7,6 +7,11 @@ body { background:#0b0d10; color:#e6e8eb; }
 .panel { background:#12151a; border:1px solid #232830; border-radius:.75rem; }
 .btn { background:#1c2129; border:1px solid #2c333e; padding:.35rem .8rem; border-radius:.5rem; font-size:.85rem; }
 .btn:hover { background:#242b35; }
+button:focus-visible, input:focus-visible, select:focus-visible,
+textarea:focus-visible, video:focus-visible {
+  outline:2px solid #6ea8ef;
+  outline-offset:2px;
+}
 .proj { width:100%; padding:.45rem .7rem; border-radius:.5rem; cursor:pointer; font-size:.9rem; text-align:left; }
 .proj:hover, .proj.active { background:#1c2129; }
 #chatlog > div { margin-bottom:.6rem; line-height:1.45; }

@@ -31,6 +31,7 @@ import subprocess
 import sys
 import time
 import urllib.request
+import uuid
 from dataclasses import replace
 from pathlib import Path
 
@@ -105,13 +106,19 @@ def slugify(name: str) -> str:
 
 def project_path(root: Path, name: str, must_exist: bool = True) -> Path:
     """Resolve a project by exact folder name. No fuzzy matching."""
-    projects = (root / "projects").resolve()
+    projects_path = root / "projects"
+    if projects_path.is_symlink():
+        raise ValueError("projects directory may not be a symlink")
+    projects = projects_path.resolve()
     if not must_exist:
         today = _dt.date.today().isoformat()
-        return (projects / f"{today}_{slugify(name)}").resolve()
+        return projects / f"{today}_{slugify(name)}"
     if not name or Path(name).name != name or name in {".", ".."}:
         raise ValueError(f"invalid project id: {name!r}")
-    p = (projects / name).resolve()
+    candidate = projects / name
+    if candidate.is_symlink():
+        raise ValueError(f"project may not be a symlink: {name!r}")
+    p = candidate.resolve()
     if p.parent != projects:
         raise ValueError(f"project escapes projects directory: {name!r}")
     if p.is_dir():
@@ -124,7 +131,7 @@ def project_path(root: Path, name: str, must_exist: bool = True) -> Path:
 
 def create_project(root: Path, name: str, brief: str = "") -> Path:
     pp = project_path(root, name, must_exist=False)
-    if pp.exists():
+    if os.path.lexists(pp):
         raise FileExistsError(f"project already exists: {pp}")
     for sub in ("references", "generations", "final", "research"):
         (pp / sub).mkdir(parents=True)
@@ -149,7 +156,14 @@ def list_projects(root: Path) -> list[str]:
 def write_prompt(root: Path, project: str, prompt: str) -> Path:
     pp = project_path(root, project)
     out = pp / "current_prompt.txt"
-    out.write_text(prompt.rstrip() + "\n", encoding="utf-8")
+    if os.path.lexists(out) and (out.is_symlink() or not out.is_file()):
+        raise ValueError("current prompt is not a regular project file")
+    temp = pp / f".{uuid.uuid4().hex}.current-prompt"
+    try:
+        temp.write_text(prompt.rstrip() + "\n", encoding="utf-8")
+        temp.replace(out)
+    finally:
+        temp.unlink(missing_ok=True)
     return out
 
 
@@ -178,13 +192,18 @@ def append_chat(root: Path, project: str, role: str, content: str) -> None:
     # concurrent writers (threads / CLI + webapp).
     data = json.dumps(entry, ensure_ascii=False).encode("utf-8") + b"\n"
     lock_path = pp / ".chat.lock"
-    with lock_path.open("a+b") as lock:
+    chat_path = pp / "chat.jsonl"
+    if lock_path.is_symlink() or chat_path.is_symlink():
+        raise ValueError("project chat files may not be symlinks")
+    lock_fd = os.open(
+        lock_path, os.O_RDWR | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(lock_fd, "a+b") as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         try:
             fd = os.open(
-                pp / "chat.jsonl",
-                os.O_WRONLY | os.O_CREAT | os.O_APPEND,
-                0o644,
+                chat_path,
+                os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW,
+                0o600,
             )
             try:
                 os.write(fd, data)
@@ -202,10 +221,22 @@ def next_generation_dir(pp: Path) -> Path:
     return gens / f"{max(nums, default=0) + 1:03d}"
 
 
+def read_project_text(project: Path, filename: str, limit: int | None = None) -> str:
+    """Read one regular project metadata file without following symlinks."""
+    if Path(filename).name != filename:
+        raise ValueError(f"invalid project filename: {filename!r}")
+    path = project / filename
+    if not os.path.lexists(path) or path.is_symlink() or not path.is_file():
+        return ""
+    value = path.read_text(encoding="utf-8")
+    return value[:limit] if limit is not None else value
+
+
 def archive_outputs(root: Path, project: str, outputs: list[str],
                     metadata: dict | None = None,
                     source_root: Path | None = None,
-                    transport: str = "comfyui-mcp") -> Path:
+                    transport: str = "comfyui-mcp",
+                    prompt_text: str | None = None) -> Path:
     """Archive outputs from one explicit, trusted source root."""
     pp = project_path(root, project)
     output_root = (source_root or COMFY_OUTPUT).resolve()
@@ -214,6 +245,8 @@ def archive_outputs(root: Path, project: str, outputs: list[str],
         source = Path(output).expanduser()
         if not source.is_absolute():
             source = output_root / source
+        if source.is_symlink():
+            raise ValueError(f"output may not be a symlink: {output!r}")
         source = source.resolve()
         if not source.is_relative_to(output_root):
             raise ValueError(f"output escapes ComfyUI output directory: {output!r}")
@@ -223,31 +256,51 @@ def archive_outputs(root: Path, project: str, outputs: list[str],
     if not sources:
         raise ValueError("at least one output file is required")
 
-    gen_dir = next_generation_dir(pp)
-    gen_dir.mkdir()
-    copied = []
-    try:
-        for source in sources:
-            target = gen_dir / source.name
-            if target.exists():
-                raise FileExistsError(f"duplicate output filename: {source.name}")
-            shutil.copy2(source, target)
-            copied.append(target.name)
-        prompt_file = pp / "current_prompt.txt"
-        if prompt_file.exists():
-            shutil.copy2(prompt_file, gen_dir / "prompt.txt")
-        meta = {
-            **(metadata or {}),
-            "generated": _dt.datetime.now().isoformat(timespec="seconds"),
-            "transport": transport,
-            "files": copied,
-            "sources": [str(source) for source in sources],
-        }
-        (gen_dir / "meta.json").write_text(
-            json.dumps(meta, indent=2) + "\n", encoding="utf-8")
-    except Exception:
-        shutil.rmtree(gen_dir, ignore_errors=True)
-        raise
+    generations = pp / "generations"
+    if (generations.is_symlink() or not generations.is_dir()
+            or generations.resolve().parent != pp):
+        raise ValueError("generations directory is not a regular project directory")
+    lock_path = pp / ".generation-archive.lock"
+    if lock_path.is_symlink():
+        raise ValueError("generation archive lock may not be a symlink")
+    lock_fd = os.open(
+        lock_path, os.O_RDWR | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(lock_fd, "a+b") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        gen_dir = next_generation_dir(pp)
+        staging = generations / f".publishing-{uuid.uuid4().hex}"
+        staging.mkdir()
+        copied = []
+        try:
+            for source in sources:
+                target = staging / source.name
+                if target.exists():
+                    raise FileExistsError(
+                        f"duplicate output filename: {source.name}")
+                shutil.copy2(source, target)
+                copied.append(target.name)
+            archived_prompt = (
+                read_project_text(pp, "current_prompt.txt")
+                if prompt_text is None else prompt_text.rstrip() + "\n"
+            )
+            if archived_prompt:
+                (staging / "prompt.txt").write_text(
+                    archived_prompt, encoding="utf-8")
+            meta = {
+                **(metadata or {}),
+                "generated": _dt.datetime.now().isoformat(timespec="seconds"),
+                "transport": transport,
+                "files": copied,
+                "sources": [str(source) for source in sources],
+            }
+            (staging / "meta.json").write_text(
+                json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+            staging.replace(gen_dir)
+        except Exception:
+            shutil.rmtree(staging, ignore_errors=True)
+            raise
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
     return gen_dir
 
 
@@ -420,7 +473,7 @@ def run_generation(root: Path, project: str, handoff: str | None = None,
                    extra_args: list[str] | None = None,
                    timeout: int = 7200, dry_run: bool = False) -> dict:
     """Submit an H3 generation via the proven run_h3.py runner, then archive."""
-    pp = project_path(root, project)
+    project_path(root, project)
     cmd = [sys.executable, str(RUN_H3), "--comfy-root", str(COMFY_ROOT),
            "-o", "/dev/stdout"]
     if handoff:
@@ -435,7 +488,9 @@ def run_generation(root: Path, project: str, handoff: str | None = None,
 
     if dry_run:
         result = subprocess.run(cmd + ["--dry-run"], capture_output=True, text=True)
-        return {"dry_run": True, "stdout": result.stdout[-4000:], "stderr": result.stderr[-2000:]}
+        return {"dry_run": True, "ok": result.returncode == 0,
+                "returncode": result.returncode,
+                "stdout": result.stdout[-4000:], "stderr": result.stderr[-2000:]}
 
     print(f"[design-studio] submitting: {' '.join(cmd)}", file=sys.stderr)
     try:
@@ -457,8 +512,6 @@ def run_generation(root: Path, project: str, handoff: str | None = None,
                 "stderr": result.stderr[-3000:], "summary": summary,
                 "vram_cleanup": cleanup}
 
-    gen_dir = next_generation_dir(pp)
-    gen_dir.mkdir()
     meta = {"generated": _dt.datetime.now().isoformat(timespec="seconds"),
             "handoff": str(handoff or ""), "runner": str(RUN_H3),
             "vram_cleanup": cleanup, **summary}
@@ -469,12 +522,13 @@ def run_generation(root: Path, project: str, handoff: str | None = None,
         if v and Path(v).exists():
             video = Path(v)
             break
-    if video:
-        shutil.copy2(video, gen_dir / "video.mp4")
-        meta["source"] = str(video)
-    (gen_dir / "prompt.txt").write_text(
-        (pp / "current_prompt.txt").read_text(encoding="utf-8"), encoding="utf-8")
-    (gen_dir / "meta.json").write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+    if not video:
+        return {"ok": False, "error": "runner completed without a video output",
+                "summary": summary, "vram_cleanup": cleanup}
+    meta["source"] = str(video)
+    gen_dir = archive_outputs(
+        root, project, [str(video)], meta, source_root=COMFY_OUTPUT,
+        transport="legacy-direct")
     # preview.jpg is created by the reviewer/user; do not extract frames automatically.
     return {"ok": cleanup.get("ok", False), "generation": str(gen_dir),
             "meta": meta}
@@ -484,7 +538,7 @@ def run_image_generation(root: Path, project: str, recipe: str, prompt: str = ""
                          image: str | None = None, extra_args: list[str] | None = None,
                          timeout: int = 900) -> dict:
     """Krea 2 still image via scripts/krea2_image.py, archived like generations."""
-    pp = project_path(root, project)
+    project_path(root, project)
     prefix = f"studio_{slugify(project)}"
     cmd = [sys.executable, str(KREA2), "--recipe", recipe, "--prefix", prefix]
     if prompt:
@@ -520,22 +574,17 @@ def run_image_generation(root: Path, project: str, recipe: str, prompt: str = ""
         return {"ok": False, "returncode": result.returncode,
                 "stderr": result.stderr[-2000:] or result.stdout[-2000:]}
 
-    gen_dir = next_generation_dir(pp)
-    gen_dir.mkdir()
-    copied = []
-    for fname in files:
-        src = COMFY_OUTPUT / fname
-        if src.exists():
-            dst = gen_dir / fname
-            shutil.copy2(src, dst)
-            copied.append(dst.name)
+    if not files:
+        return {"ok": False, "error": "runner completed without image outputs",
+                "prompt_id": prompt_id}
     meta = {"generated": _dt.datetime.now().isoformat(timespec="seconds"),
             "kind": "image", "recipe": recipe, "prompt": prompt,
             "input_image": str(image or ""), "seed": seed,
-            "prompt_id": prompt_id, "files": copied}
-    if prompt:
-        (gen_dir / "prompt.txt").write_text(prompt.rstrip() + "\n", encoding="utf-8")
-    (gen_dir / "meta.json").write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+            "prompt_id": prompt_id}
+    gen_dir = archive_outputs(
+        root, project, files, meta, source_root=COMFY_OUTPUT,
+        transport="legacy-direct", prompt_text=prompt)
+    meta = json.loads((gen_dir / "meta.json").read_text(encoding="utf-8"))
     return {"ok": True, "generation": str(gen_dir), "meta": meta}
 
 

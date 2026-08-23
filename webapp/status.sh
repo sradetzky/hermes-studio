@@ -7,8 +7,11 @@ PIDFILE="$ROOT/.runtime/webapp.pid"
 if [[ -f "$PIDFILE" ]]; then
   pid="$(cat "$PIDFILE")"
   if [[ "$pid" =~ ^[0-9]+$ ]] && [[ -d "/proc/$pid" ]]; then
-    echo "Hermes Studio running (pid $pid) — http://127.0.0.1:8788"
-    exit 0
+    command="$(tr '\0' ' ' < "/proc/$pid/cmdline")"
+    if [[ "$command" == *"webapp/run.sh"* ]]; then
+      echo "Hermes Studio running (pid $pid) — http://127.0.0.1:8788"
+      exit 0
+    fi
   fi
 fi
 echo "Hermes Studio not running"

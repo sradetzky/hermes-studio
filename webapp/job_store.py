@@ -64,8 +64,17 @@ class JobStore:
                 connection.commit()
 
     def initialize(self) -> None:
-        self.database_path.parent.mkdir(parents=True, exist_ok=True)
+        if self.database_path.parent.is_symlink():
+            raise JobStoreError("runtime directory may not be a symlink")
+        self.database_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.database_path.parent.chmod(0o700)
+        for suffix in ("", "-wal", "-shm"):
+            if Path(f"{self.database_path}{suffix}").is_symlink():
+                raise JobStoreError("runtime database files may not be symlinks")
+        if self.database_path.exists():
+            self.database_path.chmod(0o600)
         with self._connection() as connection:
+            self.database_path.chmod(0o600)
             connection.execute("PRAGMA journal_mode = WAL")
             connection.executescript(
                 """
@@ -185,6 +194,10 @@ class JobStore:
                 "SELECT project, 'studio', session_id, updated_at FROM sessions"
             )
             connection.commit()
+        for suffix in ("", "-wal", "-shm"):
+            path = Path(f"{self.database_path}{suffix}")
+            if path.exists():
+                path.chmod(0o600)
 
     def register_worker(self, owner_id: str) -> None:
         with self._transaction() as connection:
@@ -534,9 +547,11 @@ class JobStore:
             return row["session_id"] if row else None
 
     def import_chat_if_empty(self, project: str, chat_path: Path) -> None:
-        if not chat_path.is_file():
+        if chat_path.is_symlink() or not chat_path.is_file():
             return
         lock_path = chat_path.with_name(".chat.lock")
+        if lock_path.is_symlink():
+            raise ValueError("chat lock may not be a symlink")
         with lock_path.open("a+b") as lock:
             fcntl.flock(lock.fileno(), fcntl.LOCK_SH)
             try:
@@ -663,6 +678,8 @@ class JobStore:
     def export_chat(self, project: str, chat_path: Path) -> None:
         chat_path.parent.mkdir(parents=True, exist_ok=True)
         lock_path = chat_path.with_name(".chat.lock")
+        if lock_path.is_symlink():
+            raise ValueError("chat lock may not be a symlink")
         with lock_path.open("a+b") as lock:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
             try:

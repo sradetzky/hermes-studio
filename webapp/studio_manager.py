@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import signal
+import sqlite3
 import subprocess
 import threading
 import time
@@ -14,7 +15,7 @@ from pathlib import Path
 from webapp.config import Settings
 from webapp.hermes_events import HermesSessionEventBridge
 from webapp.job_store import JobStore, JobStoreError
-from webapp.models import Job, JobStatus
+from webapp.models import Job
 
 
 log = logging.getLogger(__name__)
@@ -101,8 +102,8 @@ class StudioJobManager:
 
     def _scheduler_loop(self) -> None:
         while not self._stop.is_set():
-            self.store.heartbeat_worker(self.owner_id)
             try:
+                self.store.heartbeat_worker(self.owner_id)
                 stale = self.store.claim_stale_running(
                     self.owner_id,
                     time.time() - self.settings.worker_lease_timeout_seconds,
@@ -111,7 +112,7 @@ class StudioJobManager:
                     self._recover_claimed_job(stale)
                     continue
                 job = self.store.claim_next(self.owner_id)
-            except JobStoreError:
+            except (JobStoreError, OSError, sqlite3.Error):
                 log.exception("Could not claim next Studio job")
                 self._stop.wait(0.5)
                 continue
@@ -278,7 +279,8 @@ class StudioJobManager:
     def _recover_claimed_job(self, job: Job) -> None:
         if job.pid:
             self._terminate_orphan_pid(job.pid)
-        self._cleanup_safely()
+        if job.profile == self.settings.studio_profile:
+            self._cleanup_safely()
         self.store.fail(
             job.id, "Studio worker lease expired during execution",
             self.owner_id)

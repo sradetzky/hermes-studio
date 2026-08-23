@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Hermes Studio</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/studio.css">
   <script type="module" src="/static/app.js"></script>
 </head>
@@ -286,7 +287,8 @@
         <div class="settings-status" id="generation-settings-status"
              role="status" aria-live="polite"></div>
         <button class="btn" id="generation-settings-cancel" type="button">Cancel</button>
-        <button class="btn primary" type="submit">Save settings</button>
+        <button class="btn primary" id="generation-settings-save"
+                type="submit">Save settings</button>
       </footer>
     </form>
   </dialog>

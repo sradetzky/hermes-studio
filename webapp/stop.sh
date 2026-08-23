@@ -36,8 +36,9 @@ if [[ "$FORCE" == false && -f "$DATABASE" ]]; then
   active="$($ROOT/.venv/bin/python - "$DATABASE" <<'PY'
 import sqlite3
 import sys
+from contextlib import closing
 
-with sqlite3.connect(sys.argv[1]) as connection:
+with closing(sqlite3.connect(sys.argv[1])) as connection:
     rows = connection.execute(
         "SELECT id, project, profile, status FROM jobs "
         "WHERE status IN ('queued', 'running') ORDER BY created_at"

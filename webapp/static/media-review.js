@@ -313,7 +313,15 @@ export function initializeMediaReview(refresh) {
     if (event.target === dialog) closeGenerationDialog();
   });
   dialog.addEventListener('keydown', event => {
-    if (event.key === 'ArrowLeft') navigateGeneration(1);
-    if (event.key === 'ArrowRight') navigateGeneration(-1);
+    if (event.target.closest(
+      'video,audio,input,select,textarea,button,a,[contenteditable="true"]')) return;
+    if (event.key === 'ArrowLeft') {
+      event.preventDefault();
+      navigateGeneration(1);
+    }
+    if (event.key === 'ArrowRight') {
+      event.preventDefault();
+      navigateGeneration(-1);
+    }
   });
 }

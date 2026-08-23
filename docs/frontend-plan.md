@@ -58,7 +58,7 @@ no state in the UI that isn't already on disk; minimal dependencies.
 | GET | `/api/projects` | list projects |
 | GET | `/api/profiles` | dispatchable Studio profiles |
 | POST | `/api/projects` | create project {name, brief} |
-| GET | `/api/project/{id}` | brief, chat tail, current_prompt |
+| GET | `/api/project/{id}` | brief, current prompt, chat count, settings readiness |
 | GET | `/api/project/{id}/generation-settings` | settings, readiness and installed options |
 | PUT | `/api/project/{id}/generation-settings` | validate and atomically save current run contract |
 | GET | `/api/project/{id}/generations` | listing w/ meta.json contents |
@@ -70,9 +70,9 @@ no state in the UI that isn't already on disk; minimal dependencies.
 | GET | `/api/jobs/{id}` | one job's queued/running/completed/failed state |
 | GET | `/api/project/{id}/jobs` | recent project activity |
 | GET | `/api/project/{id}/events?after=N` | incremental profile/tool/reasoning activity |
+| GET | `/api/project/{id}/references` | list current project references |
 | POST | `/api/project/{id}/references` | multi-file drag/drop upload |
-| GET | `/media/...` | static mount of studio-root |
-| GET | `/comfy/...` | static mount of ComfyUI/output |
+| GET | `/media/projects/{id}/{area}/{path}` | guarded references/generations/final media |
 
 ## Chat → Hermes wiring
 
@@ -80,7 +80,8 @@ POST /api/chat accepts an explicit allowlisted profile, rejects a second active
 project job, returns HTTP 202 immediately, and atomically inserts the user turn,
 job and queued activity event. A lifespan-owned scheduler atomically claims
 the oldest global job and spawns
-`hermes -p PROFILE [-r SESSION] chat -Q -t all --source studio-web -q "<msg>"`.
+`hermes -p PROFILE [-r SESSION] chat -Q -t TOOLSETS --source studio-web -q "<msg>"`.
+The orchestrator receives `all`; specialists receive fixed minimal toolsets.
 While the subprocess remains isolated, the manager reads that profile's
 structured SQLite session messages to project model reasoning, commentary and
 tool start/completion records into `job_events`; formatted terminal output is

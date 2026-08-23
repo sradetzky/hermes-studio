@@ -58,12 +58,12 @@ sync_file "$ROOT/hermes/skills/krea2-images/SKILL.md" \
 # Cloud specialist: intentionally excluded from design-studio skill deployment
 # and fleet-wide model switching; it stays fixed on Grok 4.6.
 grok_live="$HERMES_PROFILES/studio-grok"
-[[ -f "$grok_live/config.yaml" ]] || {
-  echo "missing live profile: $grok_live" >&2
-  exit 1
-}
-sync_file "$ROOT/hermes/profiles/studio-grok/SOUL.md" "$grok_live/SOUL.md"
-sync_file "$ROOT/hermes/skills/grok-research-imagine/SKILL.md" \
-          "$grok_live/skills/grok-research-imagine/SKILL.md"
+if [[ -f "$grok_live/config.yaml" ]]; then
+  sync_file "$ROOT/hermes/profiles/studio-grok/SOUL.md" "$grok_live/SOUL.md"
+  sync_file "$ROOT/hermes/skills/grok-research-imagine/SKILL.md" \
+            "$grok_live/skills/grok-research-imagine/SKILL.md"
+else
+  echo "skipped optional studio-grok profile"
+fi
 
 exit "$drift"

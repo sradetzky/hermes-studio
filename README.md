@@ -1,60 +1,186 @@
-# Hermes Studio — Skeleton
+# Hermes Studio
 
-This is a starter skeleton + decision log for a fully local creative studio built around:
+Hermes Studio is a fully local, agent-orchestrated creative workspace for
+planning, generating, and reviewing MiniMax H3 video and Krea 2 still images.
+Hermes profiles handle creative direction and specialist handoffs, ComfyUI owns
+GPU execution, and the project filesystem remains the media source of truth.
 
-- **Hermes Agent** (orchestration + personalities via Profiles)
-- **MiniMax H3** (open-weight omni-modal video + native audio) running in local ComfyUI
-- Simple self-hosted web UI (chat + media player + folder-backed projects)
+> **Preview status:** the planning, settings, activity, and media-review workflow
+> is operational and locally tested on Linux with an RTX 5060 Ti 16 GB. The web
+> UI is localhost-only, has no auth, and still requires an explicit chat
+> instruction to start a generation. The real web-to-ComfyUI H3 path is not yet
+> verified end to end. Models and ComfyUI workflows are not bundled.
 
-See **PLAN.md** for the full architecture and implementation order.
+## What works
 
-Web UI dependencies are pinned in `requirements.txt`; run with
-`./webapp/run.sh` after installing them into `.venv`.
+- Folder-backed projects with briefs, prompts, references, generations, and final media
+- Persistent per-project Hermes sessions and serialized global job execution
+- Live profile reasoning summaries, tool activity, handoffs, and job status
+- Safe multi-file reference uploads with atomic non-overwriting publication
+- Typed prompt-bound H3 generation settings with readiness/staleness validation
+- Editable mode, duration, MP or explicit canvas, steps, accel, turbo, model,
+  ordered-reference, W4A8, and SeedVR2 settings
+- Media/recipe/review filters and a full generation detail viewer
+- Promote-to-final and use-as-reference actions with provenance
+- Guarded media routes, symlink/path traversal protection, lifecycle cleanup,
+  stale-worker recovery, and a single-instance launcher
 
-The launcher is single-instance (filesystem lock + PID file):
+## Architecture
 
-```bash
-./webapp/run.sh     # refuses a duplicate server
-./webapp/status.sh
-./webapp/stop.sh    # graceful lifespan/process cleanup
+```text
+Browser (FastAPI + vanilla ES modules + local Tailwind CSS)
+  → transactional SQLite jobs/chat/activity
+  → Hermes profile `studio` and allowlisted specialists
+  → pinned comfyui-mcp
+  → local ComfyUI
+  → studio-root/projects/<project-id>/ (source of truth)
 ```
 
-Development dependencies are in `requirements-dev.txt`. Rebuild the committed
-offline stylesheet after changing HTML/JS utility classes with:
+`PLAN.md` is the architecture decision record. `AGENTS.md` is the concise repo
+map and contributor contract; detailed operational docs live under `docs/`.
+
+## Requirements
+
+- Linux (the launcher uses `flock` and `/proc`)
+- Python 3.11+ and `venv`
+- Hermes Agent with the Studio profiles configured
+- The external `minimax-h3-run` Hermes skill installed for legacy/manual H3 runs
+- Node.js/npm only when rebuilding the committed CSS bundle
+- A running local ComfyUI installation with the required H3/Krea models
+- Optional: xAI OAuth for the isolated `studio-grok` backup profile
+
+This repository does **not** download or redistribute model weights.
+
+## Quick start
+
+### 1. Install Python dependencies
+
+```bash
+python -m venv .venv
+.venv/bin/python -m pip install -r requirements-dev.txt
+```
+
+### 2. Create Hermes profiles
+
+Create `studio`, then create or clone the specialist profiles listed in
+`docs/agents.md`:
+
+```bash
+hermes profile create studio --clone
+hermes profile create studio-storyboarder --clone-from studio
+hermes profile create studio-prompt-engineer --clone-from studio
+hermes profile create studio-reviewer --clone-from studio
+hermes profile create studio-illustrator --clone-from studio
+```
+
+The optional cloud backup uses a separate profile:
+
+```bash
+hermes profile create studio-grok --clone
+```
+
+Review the examples under `hermes/profiles/*/config.yaml.example`. In particular,
+replace machine-specific ComfyUI paths and configure your model/provider. Then
+deploy the repo-owned SOUL and skill files:
+
+```bash
+scripts/sync-profiles.sh
+scripts/sync-profiles.sh --check
+```
+
+### 3. Configure the studio root
+
+The default is the repo's `studio-root/`. Override it when desired:
+
+```bash
+export DESIGN_STUDIO_ROOT="$HOME/design-studio"
+```
+
+### 4. Start the web UI
+
+```bash
+./webapp/run.sh
+./webapp/status.sh
+```
+
+Open <http://127.0.0.1:8788>.
+
+Stop it gracefully with:
+
+```bash
+./webapp/stop.sh
+```
+
+The stop command refuses while a job is queued or running. After deliberately
+deciding to cancel active work, use `./webapp/stop.sh --force`; Studio then
+terminates its tracked Hermes process, cancels ComfyUI work, and clears VRAM.
+
+The server intentionally binds only to localhost. Do not expose it on a network
+without adding authentication and reviewing the media/write endpoints.
+
+## Development
+
+Run the complete test suite:
+
+```bash
+.venv/bin/python -m unittest tests.test_webapp tests.test_studio
+```
+
+Compile-check Python and JavaScript:
+
+```bash
+python -m compileall -q webapp scripts tests
+node --check webapp/static/app.js
+```
+
+Rebuild the committed stylesheet after HTML/JS utility-class changes:
 
 ```bash
 scripts/build-web-css.sh
+git diff --exit-code -- webapp/static/studio.css
 ```
 
-## Quick Start for Implementing Agent
+Runtime data, project media, `.venv/`, bytecode, and `.runtime/` are ignored.
+Never commit credentials, live profile configs, model files, project media, or
+reference images.
 
-1. Read `PLAN.md` completely.
-2. Create the Hermes profile:
-   ```bash
-   hermes profile create studio --clone
-   ```
-3. Replace the SOUL in the new profile with the one in `hermes/profiles/studio/SOUL.md`.
-4. Implement / expand the skill in `hermes/skills/design-studio/`.
-5. Set up the folder root (copy `studio-root/` or point to your preferred location).
-6. Verify the pinned comfyui-mcp server and test generation → folder placement.
-7. Only then build the minimal FastAPI + single-page UI.
-
-## Key Files
+## Repository map
 
 | Path | Purpose |
-|------|---------|
-| `PLAN.md` | Single source of truth for all decisions |
-| `hermes/profiles/studio/SOUL.md` | Starting personality for the studio agent |
-| `hermes/skills/design-studio/SKILL.md` | Skill skeleton the agent should expand |
-| `studio-root/` | Example on-disk project layout |
-| `comfyui/workflows/` | Place for your parameterized H3 API JSONs |
-| `scripts/` | Helper scripts (model switch, etc.) |
+|---|---|
+| `PLAN.md` | Architecture decisions, scope, and milestones |
+| `AGENTS.md` | Contributor entry point and operational conventions |
+| `docs/` | Agent, frontend, CLI, image/video, MCP, and backup-profile docs |
+| `hermes/profiles/` | Repo-owned SOUL files and safe config examples |
+| `hermes/skills/` | Studio, H3/Krea, and Grok workflow skills |
+| `scripts/design_studio.py` | Project CLI, specialist dispatch, and generation archiving |
+| `scripts/krea2_image.py` | Legacy/manual Krea 2 runner |
+| `webapp/` | FastAPI application, runtime stores, process manager, and frontend |
+| `tests/` | Route, storage, concurrency, lifecycle, and CLI tests |
+| `studio-root/` | Ignored local project/media root skeleton |
 
-## Model Switching Strategy
+## Safety boundaries
 
-All Hermes profiles (main + studio + any others) should point at the **same** local OpenAI-compatible endpoint.  
-Changing models = restart the local server. No need to edit every `config.yaml`.
+- Only the `studio` profile owns the ComfyUI queue and GPU execution.
+- One job runs globally at a time; specialist handoffs are serialized.
+- Generation settings are prompt-hash-bound and must be re-approved after edits.
+- Upload, media, promotion, and reference paths reject traversal and symlink escapes.
+- Trusted-host and origin checks preserve the localhost-only write boundary.
+- Review actions copy rather than move and never overwrite an existing file.
+- Generation workflows must archive output and release VRAM after terminal state.
+- The user remains the final judge of generated media; automated deletion is forbidden.
+- Prompts are passed to local Hermes/runner processes as command arguments; do not
+  include credentials or other secrets in Studio prompts.
 
----
+## Preview limitations
 
-Created 2026-08-22 for local RTX 5060 Ti 16GB setup.
+- No authentication or multi-user support
+- No direct typed **Generate with this prompt** button yet
+- Real web-to-ComfyUI H3 generation is not yet verified end to end
+- No mobile-first replacement for the fixed three-pane workspace
+- No packaged installer or model/workflow downloader
+- No guarantee outside the documented local Linux/ComfyUI setup
+
+## License
+
+[MIT](LICENSE)

@@ -1,12 +1,23 @@
 #!/usr/bin/env bash
 # Single-instance Hermes Studio web UI on http://127.0.0.1:8788
 set -euo pipefail
+umask 077
+
+if [[ $# -gt 0 ]]; then
+  echo "usage: $0" >&2
+  exit 2
+fi
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 RUNTIME="$ROOT/.runtime"
 LOCK="$RUNTIME/webapp.lock"
 PIDFILE="$RUNTIME/webapp.pid"
+if [[ -L "$RUNTIME" ]]; then
+  echo "refusing symlinked runtime directory: $RUNTIME" >&2
+  exit 1
+fi
 mkdir -p "$RUNTIME"
+chmod 700 "$RUNTIME"
 cd "$ROOT"
 
 exec 9>"$LOCK"
@@ -28,7 +39,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-.venv/bin/uvicorn webapp.app:app --host 127.0.0.1 --port 8788 "$@" &
+.venv/bin/uvicorn webapp.app:app --host 127.0.0.1 --port 8788 &
 child=$!
 wait "$child"
 status=$?
