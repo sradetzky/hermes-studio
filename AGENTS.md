@@ -44,6 +44,7 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
 - Studio root override: `$DESIGN_STUDIO_ROOT` (defaults to repo's `studio-root/`)
 - Git author: Sven Radetzky <sven.radetzky@gmx.de>
 - Sequential GPU jobs only — never two ComfyUI jobs at once
+- Automatically commit every completed, verified feature slice; never push
 
 ## Progress log
 
