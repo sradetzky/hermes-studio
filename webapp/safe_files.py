@@ -12,6 +12,7 @@ from typing import Iterator
 
 
 _RENAME_NOREPLACE = 1
+_RENAME_EXCHANGE = 2
 _DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 _FILE_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
 _COPY_CHUNK_SIZE = 1024 * 1024
@@ -363,6 +364,123 @@ def atomic_move_no_replace_at(
         source_label=source_name, destination_label=destination_name,
         expected_source_identity=expected_source_identity,
     )
+
+
+def _named_regular_identity(
+        parent_fd: int, name: str, *, label: str) -> tuple[int, int]:
+    """Open one retained-parent name and return its regular-file identity."""
+    descriptor = None
+    try:
+        named = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        if not stat.S_ISREG(named.st_mode):
+            raise SafeFilesystemError(f"{label} is not a safe regular file")
+        descriptor = os.open(name, _FILE_FLAGS, dir_fd=parent_fd)
+        opened = os.fstat(descriptor)
+        identity = (opened.st_dev, opened.st_ino)
+        if (not stat.S_ISREG(opened.st_mode)
+                or identity != (named.st_dev, named.st_ino)):
+            raise SafeFilesystemError(f"{label} changed while opening")
+        return identity
+    except (FileNotFoundError, SafeFilesystemError):
+        raise
+    except OSError as exc:
+        raise SafeFilesystemError(f"{label} is not a safe regular file") from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _rename_exchange_at(
+        parent_fd: int, source: str, target: str, *, label: str) -> None:
+    if _renameat2 is None:
+        raise AtomicPublicationUnavailable(
+            "renameat2(RENAME_EXCHANGE) is unavailable")
+    result = _renameat2(
+        parent_fd,
+        os.fsencode(source),
+        parent_fd,
+        os.fsencode(target),
+        _RENAME_EXCHANGE,
+    )
+    if result == 0:
+        return
+    error = ctypes.get_errno()
+    if error in {errno.ENOSYS, errno.EINVAL, errno.ENOTSUP}:
+        raise AtomicPublicationUnavailable(
+            "renameat2(RENAME_EXCHANGE) is unavailable")
+    raise SafeFilesystemError(f"{label} exchange failed") from OSError(
+        error, os.strerror(error), target)
+
+
+def atomic_exchange_regular_file_at(
+        parent_fd: int, source_name: str, target_name: str, *,
+        expected_source_identity: tuple[int, int],
+        expected_target_identity: tuple[int, int],
+        label: str,
+) -> tuple[int, int]:
+    """CAS-publish a regular temp over an expected regular target.
+
+    ``RENAME_EXCHANGE`` makes the target check atomic with publication. The
+    displaced target is verified under the source name. A mismatch is exchanged
+    back and both entries are retained; only a verified expected target is
+    removed, via the quarantine deletion primitive.
+    """
+    source_name = _component(source_name, "exchange source entry")
+    target_name = _component(target_name, "exchange target entry")
+    source_identity = _named_regular_identity(
+        parent_fd, source_name, label=f"{label} source")
+    if source_identity != expected_source_identity:
+        raise SafeFilesystemError(
+            f"{label} source identity does not match the expected source")
+
+    # Reject links and special targets here, but check the expected identity
+    # only after exchange. A last-instant replacement must be displaced and
+    # detected at the atomic boundary, not accidentally blessed.
+    _named_regular_identity(parent_fd, target_name, label=f"{label} target")
+    exchanged = False
+    published_identity = displaced_identity = None
+    try:
+        _rename_exchange_at(parent_fd, source_name, target_name, label=label)
+        exchanged = True
+        _fsync_directory(parent_fd)
+        published_identity = _named_regular_identity(
+            parent_fd, target_name, label=f"{label} published target")
+        displaced_identity = _named_regular_identity(
+            parent_fd, source_name, label=f"{label} displaced target")
+        if (published_identity != source_identity
+                or displaced_identity != expected_target_identity):
+            reason = (
+                "published source identity changed"
+                if published_identity != source_identity
+                else "expected target identity changed")
+            raise SafeFilesystemError(f"{label} {reason} during exchange")
+    except BaseException as exc:
+        if exchanged:
+            try:
+                _rename_exchange_at(
+                    parent_fd, source_name, target_name,
+                    label=f"{label} rollback")
+                _fsync_directory(parent_fd)
+                rolled_source = _named_regular_identity(
+                    parent_fd, source_name, label=f"{label} rolled-back source")
+                rolled_target = _named_regular_identity(
+                    parent_fd, target_name, label=f"{label} rolled-back target")
+                if (rolled_source != published_identity
+                        or rolled_target != displaced_identity):
+                    raise SafeFilesystemError(
+                        f"{label} rollback identity could not be verified")
+            except BaseException as rollback_exc:
+                raise SafeFilesystemError(
+                    f"{label} exchange failed and rollback could not be verified"
+                ) from rollback_exc
+        raise exc
+
+    assert published_identity == source_identity
+    assert displaced_identity == expected_target_identity
+    atomic_remove_regular_file_at(
+        parent_fd, source_name, expected_target_identity,
+        label=f"{label} displaced target")
+    return source_identity
 
 
 def _preserve_quarantined_regular_file(

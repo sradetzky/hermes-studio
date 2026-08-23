@@ -37,7 +37,7 @@ import time
 import urllib.request
 import uuid
 from contextlib import ExitStack, closing
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -49,6 +49,7 @@ if __package__ in {None, ""} and str(REPO_ROOT) not in sys.path:
 from webapp.clip_store import ClipStore
 from webapp.safe_files import (
     SafeFilesystemError,
+    atomic_exchange_regular_file_at,
     atomic_move_no_replace,
     atomic_move_no_replace_at,
     atomic_remove_regular_file_at,
@@ -86,12 +87,28 @@ CLIP_STORE = ClipStore()
 CLIP_MIGRATION_JOURNAL = ".clip-migration.json"
 CLIP_MIGRATION_RESTORE_RE = re.compile(
     r"\.[0-9a-f]{32}\.clip-migration\.restore")
+CLIP_MIGRATION_TEMP_RE = re.compile(
+    r"\.[0-9a-f]{32}\.\.clip-migration\.json\.tmp")
 CLIP_MIGRATION_SCHEMA_VERSION = 1
 CLIP_MIGRATION_MAPPINGS = (
     ("current_prompt.txt", "clips/clip-001/current_prompt.txt", False, "file"),
     ("current_generation.json", "clips/clip-001/current_generation.json", True, "file"),
     ("generations", "clips/clip-001/generations", False, "directory"),
 )
+
+
+@dataclass(frozen=True)
+class _MigrationJournalState:
+    value: dict
+    content: bytes
+    identity: tuple[int, int]
+
+
+_MIGRATION_PHASES = (
+    "prepared", "moving", "targets_verified", "manifest_published", "finalizing")
+_MIGRATION_PHASE_RANK = {
+    phase: index for index, phase in enumerate(_MIGRATION_PHASES)
+}
 
 
 def _migration_checkpoint(_name: str) -> None:
@@ -324,9 +341,7 @@ def _validate_migration_journal(project: Path, value: object) -> dict:
         raise ValueError("clip migration journal schema is unsupported")
     if value["project"] != project.name:
         raise ValueError("clip migration journal belongs to another project")
-    if value["phase"] not in {
-            "prepared", "moving", "targets_verified", "manifest_published",
-            "finalizing"}:
+    if value["phase"] not in _MIGRATION_PHASE_RANK:
         raise ValueError("clip migration journal phase is invalid")
     if value["manifest"] != _migration_manifest(project):
         raise ValueError("clip migration journal manifest is invalid")
@@ -381,19 +396,87 @@ def _validate_migration_journal(project: Path, value: object) -> dict:
             or completed != list(dict.fromkeys(completed))
             or any(item not in expected_sources for item in completed)):
         raise ValueError("clip migration completed list is invalid")
+    present_sources = [
+        mapping["source"] for mapping in mappings if mapping["present"]
+    ]
+    if completed != present_sources[:len(completed)]:
+        raise ValueError("clip migration completed list is not monotonic")
+    if value["phase"] == "prepared" and completed:
+        raise ValueError("prepared clip migration journal is already completed")
+    if value["phase"] == "moving" and not completed:
+        raise ValueError("moving clip migration journal has no completed entry")
+    if (_MIGRATION_PHASE_RANK[value["phase"]]
+            >= _MIGRATION_PHASE_RANK["targets_verified"]
+            and completed != present_sources):
+        raise ValueError("verified clip migration journal is incomplete")
     return value
 
 
-def _read_migration_journal(project: Path) -> dict:
-    path = project / CLIP_MIGRATION_JOURNAL
+def _migration_json_bytes(value: dict) -> bytes:
+    return (json.dumps(value, indent=2, ensure_ascii=False, sort_keys=True)
+            + "\n").encode("utf-8")
+
+
+def _read_migration_journal_state_at(
+        project: Path, project_fd: int, name: str,
+        *, label: str) -> _MigrationJournalState:
+    descriptor = None
     try:
-        with open_regular_file(path) as opened:
-            value = json.loads(read_opened_text(opened))
+        named = os.stat(name, dir_fd=project_fd, follow_symlinks=False)
+        if not stat.S_ISREG(named.st_mode):
+            raise SafeFilesystemError(f"{label} is unsafe")
+        descriptor, opened = _open_migration_regular_file(
+            project_fd, name, label=label)
+        if ((named.st_dev, named.st_ino)
+                != (opened.st_dev, opened.st_ino)):
+            raise SafeFilesystemError(f"{label} changed while opening")
+        content = _read_migration_descriptor_bytes(descriptor)
+        _verify_migration_named_regular_descriptor(
+            project_fd, name, descriptor, opened, content, label=label)
+        try:
+            value = _validate_migration_journal(project, json.loads(content))
+        except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
+            raise SafeFilesystemError(f"{label} is invalid") from exc
+        if content != _migration_json_bytes(value):
+            raise SafeFilesystemError(f"{label} is not deterministic JSON")
+        return _MigrationJournalState(
+            value=value,
+            content=content,
+            identity=(opened.st_dev, opened.st_ino),
+        )
+    except (FileNotFoundError, SafeFilesystemError):
+        raise
+    except OSError as exc:
+        raise SafeFilesystemError(f"{label} is unsafe") from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _read_migration_journal_state(project: Path) -> _MigrationJournalState:
+    with open_directory(project.parent) as parent_fd:
+        project_fd = None
+        try:
+            project_fd = _open_migration_directory(
+                parent_fd, project.name, label="migration project")
+            state = _read_migration_journal_state_at(
+                project, project_fd, CLIP_MIGRATION_JOURNAL,
+                label="clip migration journal")
+            verify_absolute_directory_identity(
+                project.parent, parent_fd, label="projects parent")
+            _verify_migration_directory_identity(
+                parent_fd, project.name, project_fd, label="migration project")
+            return state
+        finally:
+            if project_fd is not None:
+                os.close(project_fd)
+
+
+def _read_migration_journal(project: Path) -> dict:
+    try:
+        return _read_migration_journal_state(project).value
     except (FileNotFoundError, SafeFilesystemError) as exc:
-        raise ValueError("clip migration journal is missing or unsafe") from exc
-    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
-        raise ValueError("clip migration journal is invalid") from exc
-    return _validate_migration_journal(project, value)
+        raise ValueError("clip migration journal is missing, invalid, or unsafe") from exc
 
 
 def _validate_migration_tree(project: Path, *, journal_exists: bool) -> None:
@@ -482,21 +565,24 @@ def _report_from_journal(project: Path, journal: dict, status: str) -> dict:
     }
 
 
-def _assess_migration_project(project: Path) -> tuple[dict, dict | None]:
+def _assess_migration_project(
+        project: Path,
+) -> tuple[dict, _MigrationJournalState | None]:
     lock_kind = _entry_kind(project / ".project.lock")
     if lock_kind not in {"missing", "file"}:
         raise ValueError("project lock is unsafe")
     journal_kind = _entry_kind(project / CLIP_MIGRATION_JOURNAL)
     if journal_kind not in {"missing", "file"}:
         raise ValueError("clip migration journal is unsafe")
-    if journal_kind == "missing":
-        _require_no_migration_restore_artifacts_for_project(project)
     manifest_kind = _entry_kind(project / "project.json")
     if manifest_kind not in {"missing", "file"}:
         raise ValueError("project manifest is unsafe")
+    temp_names = _migration_temp_names_for_project(project)
 
     if journal_kind == "file":
-        journal = _read_migration_journal(project)
+        state = _read_migration_journal_state(project)
+        _inspect_migration_journal_temps(project, state)
+        journal = state.value
         _validate_migration_tree(project, journal_exists=True)
         if manifest_kind == "file":
             manifest = CLIP_STORE.describe(project)
@@ -504,13 +590,17 @@ def _assess_migration_project(project: Path) -> tuple[dict, dict | None]:
                 raise ValueError(
                     "published manifest does not match the migration journal")
         report = _report_from_journal(project, journal, "resumable")
-        return report, journal
+        return report, state
 
+    _require_no_migration_restore_artifacts_for_project(project)
     source_kinds = {
         source: _entry_kind(project / source)
         for source, _target, _optional, _kind in CLIP_MIGRATION_MAPPINGS
     }
     if manifest_kind == "file":
+        if temp_names:
+            raise SafeFilesystemError(
+                "clip migration journal temp remains without a journal")
         if any(kind != "missing" for kind in source_kinds.values()):
             raise ValueError("legacy sources remain without a migration journal")
         _validate_completed_migration(project)
@@ -525,9 +615,19 @@ def _assess_migration_project(project: Path) -> tuple[dict, dict | None]:
             "active_jobs": [],
         }, None)
 
+    if temp_names:
+        candidates = _inspect_migration_journal_temps(project, None)
+        if len(candidates) != 1:
+            raise SafeFilesystemError(
+                "clip migration journal temp recovery is ambiguous")
+        candidate = candidates[0][1]
+        journal = candidate.value
+        _validate_recoverable_journal_state(project, journal)
+        return _report_from_journal(project, journal, "resumable"), candidate
+
     _validate_migration_tree(project, journal_exists=False)
     journal = _new_migration_journal(project)
-    return _report_from_journal(project, journal, "planned"), journal
+    return _report_from_journal(project, journal, "planned"), None
 
 
 def _active_migration_jobs(project_ids: list[str]) -> dict[str, list[dict]]:
@@ -564,18 +664,31 @@ def _active_migration_jobs(project_ids: list[str]) -> dict[str, list[dict]]:
     return result
 
 
-def _atomic_json_file(project: Path, filename: str, value: dict, *,
-                      replace: bool) -> None:
+def _atomic_json_file(
+        project: Path, filename: str, value: dict, *, replace: bool,
+        expected: _MigrationJournalState | None = None,
+) -> _MigrationJournalState | None:
     target_kind = _entry_kind(project / filename)
     if replace:
+        if filename != CLIP_MIGRATION_JOURNAL or expected is None:
+            raise ValueError("atomic JSON replacement requires expected journal state")
         if target_kind != "file":
             raise ValueError(f"atomic JSON target is missing or unsafe: {filename}")
+        if (expected.content != _migration_json_bytes(expected.value)
+                or _validate_migration_journal(project, expected.value)
+                != expected.value):
+            raise ValueError("expected clip migration journal state is invalid")
+    elif expected is not None:
+        raise ValueError("atomic no-replace JSON publication has no expected target")
     elif target_kind != "missing":
         raise ValueError(f"atomic JSON target already exists: {filename}")
     project_fd = os.open(
         project, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
     temporary = f".{uuid.uuid4().hex}.{filename}.tmp"
     descriptor = None
+    temporary_identity = None
+    publication_attempted = False
+    published = False
     try:
         descriptor = os.open(
             temporary,
@@ -583,8 +696,11 @@ def _atomic_json_file(project: Path, filename: str, value: dict, *,
             0o600,
             dir_fd=project_fd,
         )
-        data = (json.dumps(value, indent=2, ensure_ascii=False, sort_keys=True)
-                + "\n").encode("utf-8")
+        details = os.fstat(descriptor)
+        if not stat.S_ISREG(details.st_mode):
+            raise SafeFilesystemError("atomic JSON temp is unsafe")
+        temporary_identity = (details.st_dev, details.st_ino)
+        data = _migration_json_bytes(value)
         view = memoryview(data)
         while view:
             written = os.write(descriptor, view)
@@ -593,20 +709,67 @@ def _atomic_json_file(project: Path, filename: str, value: dict, *,
         os.close(descriptor)
         descriptor = None
         if replace:
-            os.replace(
-                temporary, filename,
-                src_dir_fd=project_fd, dst_dir_fd=project_fd)
+            assert expected is not None
+            current = _read_migration_journal_state_at(
+                project, project_fd, filename, label="clip migration journal")
+            if (current.identity != expected.identity
+                    or current.content != expected.content
+                    or current.value != expected.value):
+                raise SafeFilesystemError(
+                    "clip migration journal changed before CAS publication")
+            publication_attempted = True
+            published_identity = atomic_exchange_regular_file_at(
+                project_fd, temporary, filename,
+                expected_source_identity=temporary_identity,
+                expected_target_identity=expected.identity,
+                label="clip migration journal CAS",
+            )
+            if published_identity != temporary_identity:
+                raise SafeFilesystemError(
+                    "clip migration journal CAS published the wrong identity")
         else:
-            atomic_move_no_replace(project / temporary, project / filename)
+            publication_attempted = True
+            published_identity = atomic_move_no_replace_at(
+                project_fd, temporary, filename,
+                expected_source_identity=temporary_identity)
+            if published_identity != temporary_identity:
+                raise SafeFilesystemError("atomic JSON publication identity changed")
+        published = True
         os.fsync(project_fd)
+        if filename == CLIP_MIGRATION_JOURNAL:
+            state = _read_migration_journal_state_at(
+                project, project_fd, filename, label="clip migration journal")
+            if (state.identity != temporary_identity
+                    or state.content != data or state.value != value):
+                raise SafeFilesystemError(
+                    "published clip migration journal changed")
+            return state
+        return None
     finally:
         if descriptor is not None:
             os.close(descriptor)
-        try:
-            os.unlink(temporary, dir_fd=project_fd)
-        except FileNotFoundError:
-            pass
+        if (not published and not publication_attempted
+                and temporary_identity is not None):
+            try:
+                atomic_remove_regular_file_at(
+                    project_fd, temporary, temporary_identity,
+                    label="atomic JSON temp")
+            except FileNotFoundError:
+                pass
         os.close(project_fd)
+
+
+def _write_migration_journal(
+        project: Path, value: dict, *,
+        expected: _MigrationJournalState | None = None,
+) -> _MigrationJournalState:
+    state = _atomic_json_file(
+        project, CLIP_MIGRATION_JOURNAL, value,
+        replace=expected is not None, expected=expected)
+    if state is None:
+        raise SafeFilesystemError(
+            "clip migration journal publication returned no state")
+    return state
 
 
 _MIGRATION_DIRECTORY_FLAGS = (
@@ -1248,6 +1411,7 @@ def _validate_completed_migration(project: Path) -> None:
                     label="clip migration journal"):
                 raise SafeFilesystemError(
                     "clip migration journal appeared during assessment")
+            _require_no_migration_temp_artifacts(project_fd)
             for source, _target, _optional, _kind in CLIP_MIGRATION_MAPPINGS:
                 if not _migration_entry_is_absent(
                         project_fd, source, label=f"legacy source {source}"):
@@ -1336,6 +1500,7 @@ def _validate_completed_migration(project: Path) -> None:
                     != _migration_stat_signature(project_before)):
                 raise SafeFilesystemError(
                     "migration project changed during canonical validation")
+            _require_no_migration_temp_artifacts(project_fd)
             _require_migration_journal_absent(project_fd)
         finally:
             for descriptor in (manifest_fd, clips_fd, project_fd):
@@ -1348,6 +1513,222 @@ def _migration_restore_names(project_fd: int) -> list[str]:
         name for name in _migration_directory_names(
             project_fd, label="migration project")
         if CLIP_MIGRATION_RESTORE_RE.fullmatch(name))
+
+
+def _migration_temp_names(project_fd: int) -> list[str]:
+    return sorted(
+        name for name in _migration_directory_names(
+            project_fd, label="migration project")
+        if CLIP_MIGRATION_TEMP_RE.fullmatch(name))
+
+
+def _migration_temp_names_for_project(project: Path) -> list[str]:
+    with open_directory(project.parent) as parent_fd:
+        project_fd = None
+        try:
+            project_fd = _open_migration_directory(
+                parent_fd, project.name, label="migration project")
+            names = _migration_temp_names(project_fd)
+            verify_absolute_directory_identity(
+                project.parent, parent_fd, label="projects parent")
+            _verify_migration_directory_identity(
+                parent_fd, project.name, project_fd, label="migration project")
+            return names
+        finally:
+            if project_fd is not None:
+                os.close(project_fd)
+
+
+def _journals_share_migration(value: dict, other: dict) -> bool:
+    return all(value[key] == other[key] for key in (
+        "schema_version", "project", "manifest", "mappings"))
+
+
+def _journal_is_immediate_predecessor(previous: dict, current: dict) -> bool:
+    if not _journals_share_migration(previous, current):
+        return False
+    previous_phase = previous["phase"]
+    current_phase = current["phase"]
+    previous_completed = previous["completed"]
+    current_completed = current["completed"]
+    if previous_phase == current_phase == "moving":
+        return (len(current_completed) == len(previous_completed) + 1
+                and current_completed[:-1] == previous_completed)
+    if previous_phase == "prepared" and current_phase == "moving":
+        return len(current_completed) == 1 and not previous_completed
+    return (
+        _MIGRATION_PHASE_RANK[current_phase]
+        == _MIGRATION_PHASE_RANK[previous_phase] + 1
+        and previous_completed == current_completed
+    )
+
+
+def _validate_recoverable_journal_state(project: Path, journal: dict) -> None:
+    """Prove a journal inventory agrees with the current source/target tree."""
+    _validate_migration_tree(project, journal_exists=True)
+    states = {
+        mapping["source"]: _mapping_state(project, mapping)
+        for mapping in journal["mappings"]
+    }
+    for source in journal["completed"]:
+        if states[source] != "target":
+            raise SafeFilesystemError(
+                "clip migration journal completed state does not match inventory")
+    for mapping in journal["mappings"]:
+        source = mapping["source"]
+        expected = (
+            "missing-optional" if not mapping["present"] else
+            "target" if source in journal["completed"] else "source")
+        if states[source] != expected:
+            raise SafeFilesystemError(
+                "clip migration journal state does not match current inventory")
+    if (_MIGRATION_PHASE_RANK[journal["phase"]]
+            >= _MIGRATION_PHASE_RANK["targets_verified"]
+            and any(state not in {"target", "missing-optional"}
+                    for state in states.values())):
+        raise SafeFilesystemError(
+            "clip migration journal phase does not match inventory")
+
+
+def _inspect_migration_journal_temps(
+        project: Path, canonical: _MigrationJournalState | None,
+) -> list[tuple[str, _MigrationJournalState]]:
+    """Read-only validation of every exact atomic journal-temp name."""
+    with open_directory(project.parent) as parent_fd:
+        project_fd = None
+        try:
+            project_fd = _open_migration_directory(
+                parent_fd, project.name, label="migration project")
+            names = _migration_temp_names(project_fd)
+            if canonical is None and len(names) > 1:
+                raise SafeFilesystemError(
+                    "multiple clip migration journal temps are ambiguous")
+            states = []
+            for name in names:
+                state = _read_migration_journal_state_at(
+                    project, project_fd, name,
+                    label="clip migration journal temp")
+                if canonical is not None and not (
+                        state.content == canonical.content
+                        and state.value == canonical.value
+                        or _journal_is_immediate_predecessor(
+                            state.value, canonical.value)):
+                    raise SafeFilesystemError(
+                        "clip migration journal temp is not a provable prior state")
+                states.append((name, state))
+            verify_absolute_directory_identity(
+                project.parent, parent_fd, label="projects parent")
+            _verify_migration_directory_identity(
+                parent_fd, project.name, project_fd, label="migration project")
+            return states
+        finally:
+            if project_fd is not None:
+                os.close(project_fd)
+
+
+def _recover_migration_journal_temps(
+        project: Path) -> _MigrationJournalState | None:
+    """Recover only provable crash remnants while holding the project lock."""
+    with open_directory(project.parent) as parent_fd:
+        project_fd = None
+        try:
+            project_fd = _open_migration_directory(
+                parent_fd, project.name, label="migration project")
+
+            def verify_project_identity() -> None:
+                verify_absolute_directory_identity(
+                    project.parent, parent_fd, label="projects parent")
+                _verify_migration_directory_identity(
+                    parent_fd, project.name, project_fd,
+                    label="migration project")
+
+            names = _migration_temp_names(project_fd)
+            canonical = None
+            if not _migration_entry_is_absent(
+                    project_fd, CLIP_MIGRATION_JOURNAL,
+                    label="clip migration journal"):
+                canonical = _read_migration_journal_state_at(
+                    project, project_fd, CLIP_MIGRATION_JOURNAL,
+                    label="clip migration journal")
+            if not names:
+                verify_project_identity()
+                return canonical
+            if canonical is None and len(names) != 1:
+                raise SafeFilesystemError(
+                    "multiple clip migration journal temps are ambiguous")
+
+            candidates = []
+            for name in names:
+                candidate = _read_migration_journal_state_at(
+                    project, project_fd, name,
+                    label="clip migration journal temp")
+                if canonical is not None and not (
+                        candidate.content == canonical.content
+                        and candidate.value == canonical.value
+                        or _journal_is_immediate_predecessor(
+                            candidate.value, canonical.value)):
+                    raise SafeFilesystemError(
+                        "clip migration journal temp is not a provable prior state")
+                candidates.append((name, candidate))
+
+            if canonical is None:
+                name, candidate = candidates[0]
+                _validate_recoverable_journal_state(project, candidate.value)
+                verify_project_identity()
+                retained = _read_migration_journal_state_at(
+                    project, project_fd, name,
+                    label="clip migration journal temp")
+                if retained != candidate:
+                    raise SafeFilesystemError(
+                        "clip migration journal temp changed before promotion")
+                atomic_move_no_replace_at(
+                    project_fd, name, CLIP_MIGRATION_JOURNAL,
+                    expected_source_identity=candidate.identity)
+                canonical = _read_migration_journal_state_at(
+                    project, project_fd, CLIP_MIGRATION_JOURNAL,
+                    label="clip migration journal")
+                if canonical != candidate:
+                    raise SafeFilesystemError(
+                        "promoted clip migration journal temp changed")
+                verify_project_identity()
+                return canonical
+
+            for name, candidate in candidates:
+                retained_canonical = _read_migration_journal_state_at(
+                    project, project_fd, CLIP_MIGRATION_JOURNAL,
+                    label="clip migration journal")
+                if retained_canonical != canonical:
+                    raise SafeFilesystemError(
+                        "clip migration journal changed during temp recovery")
+                retained_candidate = _read_migration_journal_state_at(
+                    project, project_fd, name,
+                    label="clip migration journal temp")
+                if retained_candidate != candidate:
+                    raise SafeFilesystemError(
+                        "clip migration journal temp changed before cleanup")
+                verify_project_identity()
+                atomic_remove_regular_file_at(
+                    project_fd, name, candidate.identity,
+                    label="clip migration journal temp")
+            if _migration_temp_names(project_fd):
+                raise SafeFilesystemError(
+                    "clip migration journal temp remains after recovery")
+            retained_canonical = _read_migration_journal_state_at(
+                project, project_fd, CLIP_MIGRATION_JOURNAL,
+                label="clip migration journal")
+            if retained_canonical != canonical:
+                raise SafeFilesystemError(
+                    "clip migration journal changed during temp recovery")
+            verify_project_identity()
+            return retained_canonical
+        finally:
+            if project_fd is not None:
+                os.close(project_fd)
+
+
+def _require_no_migration_temp_artifacts(project_fd: int) -> None:
+    if _migration_temp_names(project_fd):
+        raise SafeFilesystemError("clip migration journal temp remains")
 
 
 def _require_no_migration_restore_artifacts(project_fd: int) -> None:
@@ -1556,8 +1937,10 @@ def _restore_migration_journal(project_fd: int, content: bytes) -> None:
                 project_fd, temporary, temporary_identity)
 
 
-def _finalize_migration(project: Path, journal: dict) -> None:
+def _finalize_migration(
+        project: Path, journal_state: _MigrationJournalState) -> None:
     """Validate and remove the journal through one retained descriptor chain."""
+    journal = journal_state.value
     with open_directory(project.parent) as parent_fd:
         project_fd = clips_fd = clip_fd = journal_fd = None
         try:
@@ -1590,10 +1973,15 @@ def _finalize_migration(project: Path, journal: dict) -> None:
             except (json.JSONDecodeError, UnicodeDecodeError) as exc:
                 raise SafeFilesystemError(
                     "clip migration journal is invalid during finalization") from exc
-            if retained_journal != journal:
+            if ((journal_details.st_dev, journal_details.st_ino)
+                    != journal_state.identity
+                    or journal_bytes != journal_state.content
+                    or retained_journal != journal):
                 raise SafeFilesystemError(
                     "clip migration journal changed before finalization")
 
+            _require_no_migration_temp_artifacts(project_fd)
+            _require_no_migration_restore_artifacts(project_fd)
             _validate_migration_destination_descriptors(
                 project_fd, clips_fd, clip_fd, journal,
                 require_all_targets=True)
@@ -1615,6 +2003,7 @@ def _finalize_migration(project: Path, journal: dict) -> None:
                     require_all_targets=True)
                 _verify_migration_descriptor_chain(
                     project, parent_fd, project_fd, clips_fd, clip_fd)
+                _require_no_migration_temp_artifacts(project_fd)
                 _require_no_migration_restore_artifacts(project_fd)
                 # This canonical no-follow absence check must remain last.
                 _require_migration_journal_absent(project_fd)
@@ -1679,18 +2068,20 @@ def _apply_migration_project(project: Path) -> dict:
             raise ValueError(
                 f"project {project.name} has active jobs: "
                 + ", ".join(job["id"] for job in active))
-        report, journal = _assess_migration_project(project)
+        report, journal_state = _assess_migration_project(project)
         if report["status"] == "already-migrated":
             return report
-        assert journal is not None
         if report["status"] == "resumable":
+            journal_state = _recover_migration_journal_temps(project)
+            if journal_state is None:
+                raise SafeFilesystemError(
+                    "resumable clip migration has no recoverable journal")
             _cleanup_migration_restore_artifacts(project)
-        journal_exists = _entry_kind(
-            project / CLIP_MIGRATION_JOURNAL) == "file"
-        if not journal_exists:
-            _atomic_json_file(
-                project, CLIP_MIGRATION_JOURNAL, journal, replace=False)
+        else:
+            journal = _new_migration_journal(project)
+            journal_state = _write_migration_journal(project, journal)
             _migration_checkpoint("journal-prepared")
+        journal = journal_state.value
 
         _create_migration_directories(project)
         _migration_checkpoint("directories-created")
@@ -1703,10 +2094,14 @@ def _apply_migration_project(project: Path) -> dict:
                 state = _mapping_state(project, mapping)
                 assert state == "target"
             if state == "target" and mapping["source"] not in journal["completed"]:
-                journal["completed"].append(mapping["source"])
-                journal["phase"] = "moving"
-                _atomic_json_file(
-                    project, CLIP_MIGRATION_JOURNAL, journal, replace=True)
+                updated = {
+                    **journal,
+                    "completed": [*journal["completed"], mapping["source"]],
+                    "phase": "moving",
+                }
+                journal_state = _write_migration_journal(
+                    project, updated, expected=journal_state)
+                journal = journal_state.value
             if state != "missing-optional":
                 _migration_checkpoint(f"moved:{mapping['source']}")
             _validate_migration_destination_tree(project, journal)
@@ -1717,9 +2112,10 @@ def _apply_migration_project(project: Path) -> dict:
                 raise ValueError("migration target verification failed")
         _validate_migration_destination_tree(
             project, journal, require_all_targets=True)
-        journal["phase"] = "targets_verified"
-        _atomic_json_file(
-            project, CLIP_MIGRATION_JOURNAL, journal, replace=True)
+        updated = {**journal, "phase": "targets_verified"}
+        journal_state = _write_migration_journal(
+            project, updated, expected=journal_state)
+        journal = journal_state.value
         _migration_checkpoint("targets-verified")
 
         manifest_path = project / "project.json"
@@ -1739,9 +2135,10 @@ def _apply_migration_project(project: Path) -> dict:
             raise ValueError("project manifest is unsafe")
         _migration_checkpoint("manifest-published")
 
-        journal["phase"] = "manifest_published"
-        _atomic_json_file(
-            project, CLIP_MIGRATION_JOURNAL, journal, replace=True)
+        updated = {**journal, "phase": "manifest_published"}
+        journal_state = _write_migration_journal(
+            project, updated, expected=journal_state)
+        journal = journal_state.value
         _migration_checkpoint("journal-manifest-published")
         if CLIP_STORE.describe(project) != journal["manifest"]:
             raise ValueError("published manifest verification failed")
@@ -1749,12 +2146,13 @@ def _apply_migration_project(project: Path) -> dict:
             if _mapping_state(project, mapping) not in {
                     "target", "missing-optional"}:
                 raise ValueError("migration target verification failed")
-        journal["phase"] = "finalizing"
-        _atomic_json_file(
-            project, CLIP_MIGRATION_JOURNAL, journal, replace=True)
+        updated = {**journal, "phase": "finalizing"}
+        journal_state = _write_migration_journal(
+            project, updated, expected=journal_state)
+        journal = journal_state.value
         _migration_checkpoint("journal-finalizing")
         report = _report_from_journal(project, journal, "migrated")
-        _finalize_migration(project, journal)
+        _finalize_migration(project, journal_state)
         report["phase"] = "complete"
         return report
 

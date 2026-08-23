@@ -536,6 +536,88 @@ class SafeFilesystemTests(unittest.TestCase):
         self.assertEqual(source.read_bytes(), b"source")
         self.assertFalse((self.parent / "destination.txt").exists())
 
+    def test_atomic_exchange_cas_publishes_new_file_and_removes_expected_old(self):
+        temporary = self.parent / ".new.tmp"
+        canonical = self.parent / "journal.json"
+        temporary.write_bytes(b"new")
+        canonical.write_bytes(b"old")
+        new_identity = (temporary.stat().st_dev, temporary.stat().st_ino)
+        old_identity = (canonical.stat().st_dev, canonical.stat().st_ino)
+        parent_fd = os.open(
+            self.parent,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            published = safe_files.atomic_exchange_regular_file_at(
+                parent_fd, temporary.name, canonical.name,
+                expected_source_identity=new_identity,
+                expected_target_identity=old_identity,
+                label="test journal",
+            )
+        finally:
+            os.close(parent_fd)
+
+        self.assertEqual(published, new_identity)
+        self.assertEqual(canonical.read_bytes(), b"new")
+        self.assertFalse(temporary.exists())
+
+    def test_atomic_exchange_cas_rolls_back_target_replacement_and_preserves_both(self):
+        temporary = self.parent / ".new.tmp"
+        canonical = self.parent / "journal.json"
+        displaced = self.parent / ".expected-old"
+        temporary.write_bytes(b"new")
+        canonical.write_bytes(b"old")
+        new_identity = (temporary.stat().st_dev, temporary.stat().st_ino)
+        old_identity = (canonical.stat().st_dev, canonical.stat().st_ino)
+        replacement = b"replacement"
+        real_renameat2 = safe_files._renameat2
+        assert real_renameat2 is not None
+        injected = False
+
+        def replace_before_exchange(
+                source_fd, source_name, destination_fd, destination_name, flags):
+            nonlocal injected
+            if not injected and flags == safe_files._RENAME_EXCHANGE:
+                injected = True
+                os.rename(
+                    canonical.name, displaced.name,
+                    src_dir_fd=destination_fd, dst_dir_fd=destination_fd)
+                descriptor = os.open(
+                    canonical.name,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                    0o600,
+                    dir_fd=destination_fd,
+                )
+                try:
+                    os.write(descriptor, replacement)
+                finally:
+                    os.close(descriptor)
+            return real_renameat2(
+                source_fd, source_name, destination_fd, destination_name, flags)
+
+        parent_fd = os.open(
+            self.parent,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            with (
+                patch.object(
+                    safe_files, "_renameat2", side_effect=replace_before_exchange),
+                self.assertRaisesRegex(
+                    safe_files.SafeFilesystemError, "expected target identity"),
+            ):
+                safe_files.atomic_exchange_regular_file_at(
+                    parent_fd, temporary.name, canonical.name,
+                    expected_source_identity=new_identity,
+                    expected_target_identity=old_identity,
+                    label="test journal",
+                )
+        finally:
+            os.close(parent_fd)
+
+        self.assertTrue(injected)
+        self.assertEqual(canonical.read_bytes(), replacement)
+        self.assertEqual(temporary.read_bytes(), b"new")
+        self.assertEqual(displaced.read_bytes(), b"old")
+
     def test_atomic_remove_regular_file_deletes_exact_identity_without_quarantine(self):
         target = self.parent / "target.txt"
         target.write_bytes(b"target")
@@ -1815,6 +1897,176 @@ class LegacyClipMigrationTests(unittest.TestCase):
         ):
             self.migrate(project.name, apply=True)
 
+    @staticmethod
+    def journal_bytes(journal):
+        return (json.dumps(
+            journal, indent=2, ensure_ascii=False, sort_keys=True) + "\n").encode(
+                "utf-8")
+
+    @staticmethod
+    def journal_temp(project, character, journal):
+        temporary = project / (
+            "." + character * 32 + "..clip-migration.json.tmp")
+        temporary.write_bytes(LegacyClipMigrationTests.journal_bytes(journal))
+        return temporary
+
+    def test_recovers_crash_temp_before_initial_journal_publication(self):
+        project = self.legacy_project()
+        temporary = self.journal_temp(project, "a", ds._new_migration_journal(project))
+
+        report = self.migrate(project.name, apply=True)
+
+        self.assertEqual(report["projects"][0]["status"], "migrated")
+        self.assertFalse(temporary.exists())
+        self.assertFalse((project / ds.CLIP_MIGRATION_JOURNAL).exists())
+        self.assertEqual(
+            [path.name for path in project.glob(".*clip-migration*")], [])
+
+    def test_recovers_valid_prior_journal_temp_after_successful_cas(self):
+        project = self.legacy_project()
+        self._prepare_journal(project)
+        prepared = json.loads((project / ds.CLIP_MIGRATION_JOURNAL).read_bytes())
+
+        def interrupt(checkpoint):
+            if checkpoint == "moved:current_prompt.txt":
+                raise RuntimeError("stop after first journal CAS")
+
+        with (
+            patch.object(ds, "_migration_checkpoint", side_effect=interrupt),
+            self.assertRaisesRegex(RuntimeError, "first journal CAS"),
+        ):
+            self.migrate(project.name, apply=True)
+        canonical = json.loads((project / ds.CLIP_MIGRATION_JOURNAL).read_bytes())
+        self.assertEqual(canonical["phase"], "moving")
+        temporary = self.journal_temp(project, "b", prepared)
+
+        report = self.migrate(project.name, apply=True)
+
+        self.assertEqual(report["projects"][0]["status"], "migrated")
+        self.assertFalse(temporary.exists())
+        self.assertFalse((project / ds.CLIP_MIGRATION_JOURNAL).exists())
+        self.assertEqual(
+            [path.name for path in project.glob(".*clip-migration*")], [])
+
+    def test_invalid_symlink_and_special_journal_temps_fail_and_are_preserved(self):
+        for index, case in enumerate(("invalid", "symlink", "fifo")):
+            with self.subTest(case=case):
+                project = self.legacy_project(f"2026-08-23_journal-temp-{index}")
+                self._prepare_journal(project)
+                temporary = project / (
+                    "." + str(index) * 32 + "..clip-migration.json.tmp")
+                outside = Path(self.temp.name) / f"outside-journal-temp-{index}"
+                outside.write_bytes(b"outside")
+                if case == "invalid":
+                    temporary.write_bytes(b"not a journal")
+                elif case == "symlink":
+                    temporary.symlink_to(outside)
+                else:
+                    os.mkfifo(temporary)
+                before = temporary.lstat()
+
+                with self.assertRaises((ValueError, safe_files.SafeFilesystemError)):
+                    self.migrate(project.name, apply=True)
+
+                after = temporary.lstat()
+                self.assertEqual(
+                    (after.st_mode, after.st_dev, after.st_ino),
+                    (before.st_mode, before.st_dev, before.st_ino))
+                self.assertEqual(outside.read_bytes(), b"outside")
+                self.assertTrue((project / ds.CLIP_MIGRATION_JOURNAL).is_file())
+
+    def test_multiple_journal_temps_without_canonical_fail_and_are_preserved(self):
+        project = self.legacy_project()
+        journal = ds._new_migration_journal(project)
+        temporaries = [
+            self.journal_temp(project, character, journal)
+            for character in ("c", "d")
+        ]
+        before = self.metadata_snapshot(project)
+
+        with self.assertRaises((ValueError, safe_files.SafeFilesystemError)):
+            self.migrate(project.name, apply=True)
+
+        self.assertEqual(self.metadata_snapshot(project), before)
+        self.assertTrue(all(path.is_file() for path in temporaries))
+        self.assertFalse((project / ".project.lock").exists())
+
+    def test_completed_project_journal_temp_fails_read_only_without_lock(self):
+        project = self.legacy_project()
+        prepared = ds._new_migration_journal(project)
+        self.migrate(project.name, apply=True)
+        (project / ".project.lock").unlink()
+        temporary = self.journal_temp(project, "e", prepared)
+        before = self.metadata_snapshot(project)
+
+        with self.assertRaisesRegex(
+                safe_files.SafeFilesystemError, "journal temp"):
+            self.migrate(project.name, apply=True)
+
+        self.assertEqual(self.metadata_snapshot(project), before)
+        self.assertTrue(temporary.is_file())
+        self.assertFalse((project / ".project.lock").exists())
+
+    def test_replacement_before_every_journal_cas_is_preserved_and_fails(self):
+        for update_index in range(1, 7):
+            with self.subTest(update_index=update_index):
+                project = self.legacy_project(
+                    f"2026-08-23_journal-cas-{update_index}")
+                canonical = project / ds.CLIP_MIGRATION_JOURNAL
+                preserved = project / f".preserved-journal-{update_index}"
+                replacement = f"replacement-{update_index}".encode()
+                real_renameat2 = safe_files._renameat2
+                assert real_renameat2 is not None
+                exchanges = 0
+                injected = False
+
+                def replace_before_exchange(
+                        source_fd, source_name, destination_fd,
+                        destination_name, flags):
+                    nonlocal exchanges, injected
+                    source = os.fsdecode(source_name)
+                    destination = os.fsdecode(destination_name)
+                    if (flags == safe_files._RENAME_EXCHANGE
+                            and destination == ds.CLIP_MIGRATION_JOURNAL):
+                        exchanges += 1
+                        if exchanges == update_index:
+                            injected = True
+                            os.rename(
+                                destination, preserved.name,
+                                src_dir_fd=destination_fd,
+                                dst_dir_fd=destination_fd)
+                            descriptor = os.open(
+                                destination,
+                                os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                                | os.O_NOFOLLOW,
+                                0o600,
+                                dir_fd=destination_fd,
+                            )
+                            try:
+                                os.write(descriptor, replacement)
+                            finally:
+                                os.close(descriptor)
+                    return real_renameat2(
+                        source_fd, source_name, destination_fd,
+                        destination_name, flags)
+
+                with (
+                    patch.object(
+                        safe_files, "_renameat2",
+                        side_effect=replace_before_exchange),
+                    self.assertRaisesRegex(
+                        safe_files.SafeFilesystemError,
+                        "expected target identity"),
+                ):
+                    result = self.migrate(project.name, apply=True)
+                    self.fail(f"migration unexpectedly reported: {result}")
+
+                self.assertTrue(injected)
+                self.assertEqual(canonical.read_bytes(), replacement)
+                self.assertTrue(preserved.is_file())
+                self.assertGreaterEqual(len(list(
+                    project.glob(".*.clip-migration.json.tmp"))), 1)
+
     def test_rename_fsync_failure_does_not_advance_journal_and_resumes(self):
         project = self.legacy_project()
         self._prepare_journal(project)
@@ -2482,15 +2734,21 @@ class LegacyClipMigrationTests(unittest.TestCase):
             nonlocal retained_journal, interrupted
             name = os.fsdecode(path)
             if not interrupted and "safe-delete" in name:
-                interrupted = True
                 descriptor = os.open(
                     name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=dir_fd)
                 try:
-                    retained_journal = os.read(descriptor, 1024 * 1024)
+                    candidate = os.read(descriptor, 1024 * 1024)
                 finally:
                     os.close(descriptor)
-                real_unlink(path, *args, dir_fd=dir_fd)
-                raise OSError("interrupted after actual journal unlink")
+                try:
+                    phase = json.loads(candidate)["phase"]
+                except (json.JSONDecodeError, KeyError, TypeError):
+                    phase = None
+                if phase == "finalizing":
+                    interrupted = True
+                    retained_journal = candidate
+                    real_unlink(path, *args, dir_fd=dir_fd)
+                    raise OSError("interrupted after actual journal unlink")
             return real_unlink(path, *args, dir_fd=dir_fd)
 
         with (
