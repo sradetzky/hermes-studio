@@ -24,7 +24,7 @@ from webapp.hermes_events import HermesSessionEventBridge
 from webapp.job_store import ActiveJobError, JobStore, JobStoreError
 from webapp.models import JobStatus
 from webapp.runtime_schema import CURRENT_SCHEMA_VERSION, LEGACY_CLIP_ERROR
-from webapp import safe_files
+from webapp import runtime_schema, safe_files
 from webapp.studio_manager import StudioJobManager, process_start_time
 
 
@@ -145,6 +145,33 @@ class JobStoreTests(WebAppTestCase):
                     "UPDATE jobs SET status = 'queued', clip_id = '' WHERE id = ?",
                     (job.id,),
                 )
+
+    def test_runtime_schema_rejects_newer_database_versions(self):
+        self.settings.runtime_root.mkdir()
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            connection.execute(
+                f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION + 1}")
+        with self.assertRaisesRegex(JobStoreError, "newer than supported"):
+            JobStore(self.settings.database_path).initialize()
+
+    def test_runtime_schema_migration_rolls_back_failed_version(self):
+        def fail_migration(connection):
+            connection.execute("CREATE TABLE migration_must_rollback (id INTEGER)")
+            raise RuntimeError("injected migration failure")
+
+        migrations = (*runtime_schema.MIGRATIONS[:2], fail_migration)
+        with patch.object(runtime_schema, "MIGRATIONS", migrations), \
+                self.assertRaisesRegex(RuntimeError, "injected migration failure"):
+            JobStore(self.settings.database_path).initialize()
+
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            version = connection.execute("PRAGMA user_version").fetchone()[0]
+            partial = connection.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type = 'table' AND name = 'migration_must_rollback'"
+            ).fetchone()
+        self.assertEqual(version, 2)
+        self.assertIsNone(partial)
 
     def test_runtime_database_rejects_symlinked_paths(self):
         outside = Path(self.temp.name) / "outside"

@@ -177,21 +177,24 @@ def _migration_3_exact_active_clips(connection: sqlite3.Connection) -> None:
             (row["project"], row["id"], row["profile"],
              LEGACY_CLIP_ERROR, now, row["id"]),
         )
-    connection.executescript(
+    connection.execute(
         """
         CREATE TRIGGER IF NOT EXISTS jobs_require_active_clip_on_insert
         BEFORE INSERT ON jobs
         WHEN NEW.status IN ('queued', 'running') AND trim(NEW.clip_id) = ''
         BEGIN
             SELECT RAISE(ABORT, 'active jobs require an exact clip binding');
-        END;
-
+        END
+        """
+    )
+    connection.execute(
+        """
         CREATE TRIGGER IF NOT EXISTS jobs_require_active_clip_on_update
         BEFORE UPDATE OF status, clip_id ON jobs
         WHEN NEW.status IN ('queued', 'running') AND trim(NEW.clip_id) = ''
         BEGIN
             SELECT RAISE(ABORT, 'active jobs require an exact clip binding');
-        END;
+        END
         """
     )
 
@@ -212,11 +215,16 @@ def initialize_runtime_schema(connection: sqlite3.Connection) -> None:
             f"version {CURRENT_SCHEMA_VERSION}")
     connection.executescript(BASE_SCHEMA)
     for target_version in range(version + 1, CURRENT_SCHEMA_VERSION + 1):
-        MIGRATIONS[target_version - 1](connection)
-        connection.execute(f"PRAGMA user_version = {target_version}")
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            MIGRATIONS[target_version - 1](connection)
+            connection.execute(f"PRAGMA user_version = {target_version}")
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
     required = {"profile", "clip_id", "pid_start_time"}
     missing = required - _columns(connection, "jobs")
     if missing:
         raise RuntimeSchemaError(
             f"runtime jobs schema is missing columns: {sorted(missing)}")
-    connection.commit()
