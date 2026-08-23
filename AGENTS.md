@@ -97,9 +97,12 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
 - Project → Clips → Takes transition completed end to end: exact clip-scoped
   jobs, nested settings/media APIs, ordered clip web controls, selected-take
   provenance, explicit verified legacy migration, and synchronized Studio docs
+- Real clip-bound H3 E2E verified through the web-owned Studio session and
+  comfyui-mcp: exact 1280x704 R2V graph parameters, clip-local archive read-back,
+  identical source/archive hashes, empty queue, and mandatory VRAM cleanup
 
 ## Next steps
 
-- [ ] Real end-to-end H3 video generation through comfyui-mcp
-- [ ] “Generate with this prompt” action after the real H3 path is verified
+- [x] Real end-to-end H3 video generation through comfyui-mcp
+- [ ] “Generate with this prompt” action using the verified H3 path
 - [ ] Basic project metadata and responsive three-pane navigation

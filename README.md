@@ -179,7 +179,6 @@ reference images.
 
 - No authentication or multi-user support
 - No direct typed **Generate with this prompt** button yet
-- Real web-to-ComfyUI H3 generation is not yet verified end to end
 - No mobile-first replacement for the fixed three-pane workspace
 - No packaged installer or model/workflow downloader
 - No guarantee outside the documented local Linux/ComfyUI setup

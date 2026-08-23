@@ -151,6 +151,8 @@ auto-chained, and their result never starts a render without a separate request.
 - M4.1 (done): typed generation manifest, readiness summary and settings editor
 - M4.2 (done): clip-local prompts/settings/takes, exact clip jobs and nested media,
   ordered clip controls, selected-take provenance, and clip-safe polling
+- Real E2E checkpoint (done): exact-clip web job → Studio → comfyui-mcp H3
+  submission → parameter read-back → clip-local archive → VRAM cleanup
 
 ## Out of scope (v1)
 

@@ -1,7 +1,7 @@
 # PLAN.md — Hermes Studio
 
-**Status**: v0.1 preview candidate; web M1–M4.1 + clip/take hierarchy complete,
-real H3 E2E pending
+**Status**: v0.1 preview candidate; web M1–M4.1 + clip/take hierarchy and
+real H3 E2E complete
 **Owner**: Sven (local setup on RTX 5060 Ti 16GB)  
 **Date**: 2026-08-22  
 **Goal**: Fully local, agent-orchestrated creative studio centered on MiniMax H3 + Hermes, with a simple self-hosted web UI.
@@ -135,10 +135,10 @@ Hermes and the web UI always carry exact project and clip IDs.
 
 ### Phase 2 – ComfyUI Wiring
 - [x] Connect the `studio` profile to pinned `comfyui-mcp` and verify tools.
-- [ ] Verify a real H3 API-format workflow submission through MCP; always archive output and call
+- [x] Verify a real H3 API-format workflow submission through MCP; always archive output and call
   `clear_vram` after every terminal success/error/cancel/timeout.
-- [ ] Verify parameter injection against the real workflow.
-- [ ] Verify completed media is archived into the selected clip's `generations/`
+- [x] Verify parameter injection against the real workflow.
+- [x] Verify completed media is archived into the selected clip's `generations/`
   before release.
 
 ### Phase 3 – Minimal Web UI

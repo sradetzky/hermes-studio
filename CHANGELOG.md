@@ -13,6 +13,8 @@ preview and production releases.
   state, selected video-take provenance, and an explicit resumable legacy migration
 - Clip navigation and Add/Rename/Up/Down/Enable controls in the web UI
 - Exact clip context on every new Studio job and nested clip/take APIs/media URLs
+- Verified exact-clip web → Studio → comfyui-mcp H3 generation, graph parameter
+  read-back, clip-local archival, and mandatory queue/VRAM cleanup
 
 ### Changed
 
@@ -64,7 +66,6 @@ preview and production releases.
 
 - Localhost only; no authentication or multi-user mode
 - No direct typed Generate button yet (generation is requested through chat)
-- Real web-to-ComfyUI H3 generation has not yet been verified end to end
 - Fixed desktop-first three-pane layout
 - Linux, Hermes Agent, ComfyUI, models, and workflows must be installed separately
 
