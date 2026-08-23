@@ -1,12 +1,14 @@
 import json
+import hashlib
 import os
+import sqlite3
 import subprocess
 import sys
 import tempfile
 import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import redirect_stdout
+from contextlib import closing, redirect_stdout
 from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -406,6 +408,32 @@ class SafeFilesystemTests(unittest.TestCase):
         self.assertEqual((displaced / "original.txt").read_text(), "original")
         self.assertEqual(
             (destination / "replacement.txt").read_text(), "replacement")
+
+    def test_atomic_move_refuses_to_replace_existing_target(self):
+        source = self.parent / "source.txt"
+        destination = self.parent / "destination.txt"
+        source.write_bytes(b"source")
+        destination.write_bytes(b"destination")
+
+        with self.assertRaises(FileExistsError):
+            safe_files.atomic_move_no_replace(source, destination)
+
+        self.assertEqual(source.read_bytes(), b"source")
+        self.assertEqual(destination.read_bytes(), b"destination")
+
+    def test_atomic_move_does_not_follow_symlink_source(self):
+        outside = self.parent / "outside.txt"
+        source = self.parent / "source.txt"
+        destination = self.parent / "destination.txt"
+        outside.write_bytes(b"outside")
+        source.symlink_to(outside)
+
+        with self.assertRaises(safe_files.SafeFilesystemError):
+            safe_files.atomic_move_no_replace(source, destination)
+
+        self.assertTrue(source.is_symlink())
+        self.assertEqual(outside.read_bytes(), b"outside")
+        self.assertFalse(destination.exists())
 
     def test_rollback_quarantine_preserves_moved_original_and_replacement(self):
         source = self.parent / "source"
@@ -1288,6 +1316,333 @@ class LoraParserTests(unittest.TestCase):
             parse_loras(["foo.safetensors"])
         with self.assertRaises(ValueError):
             parse_loras(["foo.safetensors:not-a-number"])
+
+
+class LegacyClipMigrationTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = ds.studio_root(self.temp.name)
+        self.runtime = Path(self.temp.name) / "runtime"
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def legacy_project(self, project_id="2026-08-23_legacy", *, settings=True):
+        project = self.root / "projects" / project_id
+        project.mkdir()
+        (project / "brief.md").write_text("# Legacy\n", encoding="utf-8")
+        (project / "chat.jsonl").write_text(
+            '{"role":"user","content":"keep"}\n', encoding="utf-8")
+        for name in ("references", "research", "final"):
+            (project / name).mkdir()
+        (project / "references" / "guide.png").write_bytes(b"reference")
+        (project / "current_prompt.txt").write_bytes(b"legacy prompt\n")
+        if settings:
+            (project / "current_generation.json").write_bytes(
+                b'{"schema_version":2,"seed":42}\n')
+        generation = project / "generations" / "001"
+        generation.mkdir(parents=True)
+        (generation / "take.mp4").write_bytes(b"\x00video\xff")
+        (generation / "take.mp4.review.json").write_bytes(
+            b'{"verdict":"keep"}\n')
+        (generation / "prompt.txt").write_bytes(b"archived prompt\n")
+        empty = project / "generations" / "002" / "empty"
+        empty.mkdir(parents=True)
+        return project
+
+    @staticmethod
+    def snapshot(path):
+        result = []
+        for entry in sorted(path.rglob("*")):
+            relative = entry.relative_to(path).as_posix()
+            if entry.is_symlink():
+                result.append((relative, "symlink", os.readlink(entry)))
+            elif entry.is_dir():
+                result.append((relative, "directory"))
+            else:
+                result.append((
+                    relative, "file", entry.stat().st_size,
+                    hashlib.sha256(entry.read_bytes()).hexdigest(),
+                    entry.stat().st_mtime_ns,
+                ))
+        return result
+
+    @staticmethod
+    def file_inventory(path):
+        return {
+            entry.relative_to(path).as_posix(): (
+                entry.stat().st_size,
+                hashlib.sha256(entry.read_bytes()).hexdigest(),
+            )
+            for entry in path.rglob("*") if entry.is_file()
+        }
+
+    def migrate(self, project=None, *, apply=False):
+        with patch.dict(os.environ, {
+            "HERMES_STUDIO_RUNTIME_ROOT": str(self.runtime),
+        }):
+            return ds.migrate_clips(self.root, project, apply=apply)
+
+    def test_dry_run_is_deterministic_machine_readable_and_writes_nothing(self):
+        project = self.legacy_project()
+        before = self.snapshot(self.root)
+        first = self.migrate(project.name)
+        second = self.migrate(project.name)
+        self.assertEqual(first, second)
+        self.assertEqual(first["mode"], "dry-run")
+        self.assertEqual(first["projects"][0]["status"], "planned")
+        self.assertEqual(
+            [operation["source"] for operation in
+             first["projects"][0]["operations"]],
+            ["current_prompt.txt", "current_generation.json", "generations"],
+        )
+        self.assertGreater(first["projects"][0]["file_count"], 4)
+        self.assertEqual(self.snapshot(self.root), before)
+        self.assertFalse((project / ds.CLIP_MIGRATION_JOURNAL).exists())
+        self.assertFalse((project / ".project.lock").exists())
+
+    def test_apply_preserves_every_byte_and_publishes_default_manifest(self):
+        project = self.legacy_project()
+        before = self.file_inventory(project)
+        project_level = {
+            name: (project / name).read_bytes()
+            for name in ("brief.md", "chat.jsonl")
+        }
+        report = self.migrate(project.name, apply=True)
+        clip = project / "clips" / "clip-001"
+        self.assertEqual(report["projects"][0]["status"], "migrated")
+        manifest = json.loads((project / "project.json").read_text())
+        self.assertEqual(manifest, {
+            "schema_version": 1,
+            "title": project.name,
+            "clips": [{
+                "id": "clip-001", "title": "Main clip",
+                "enabled": True, "selected_take": None,
+            }],
+        })
+        expected = {}
+        for relative, value in before.items():
+            if relative == "current_prompt.txt":
+                expected["current_prompt.txt"] = value
+            elif relative == "current_generation.json":
+                expected["current_generation.json"] = value
+            elif relative.startswith("generations/"):
+                expected[relative] = value
+        self.assertEqual(self.file_inventory(clip), expected)
+        for name, content in project_level.items():
+            self.assertEqual((project / name).read_bytes(), content)
+        self.assertTrue((project / "references" / "guide.png").is_file())
+        self.assertTrue((clip / "generations" / "002" / "empty").is_dir())
+        self.assertFalse((project / "current_prompt.txt").exists())
+        self.assertFalse((project / "current_generation.json").exists())
+        self.assertFalse((project / "generations").exists())
+        self.assertFalse((project / ds.CLIP_MIGRATION_JOURNAL).exists())
+
+    def test_optional_settings_and_all_project_selection(self):
+        first = self.legacy_project("2026-08-23_first", settings=False)
+        second = self.legacy_project("2026-08-23_second")
+        current = self.root / "projects" / "2026-08-23_current"
+        current.mkdir()
+        ClipStore().initialize(current, "Current")
+        report = self.migrate(apply=True)
+        self.assertEqual(
+            [(item["project"], item["status"]) for item in report["projects"]],
+            [(current.name, "already-migrated"),
+             (first.name, "migrated"), (second.name, "migrated")],
+        )
+        self.assertFalse((first / "clips" / "clip-001" /
+                          "current_generation.json").exists())
+
+    def test_apply_is_idempotent_and_second_run_performs_no_writes(self):
+        project = self.legacy_project()
+        self.migrate(project.name, apply=True)
+        before = self.snapshot(project)
+        report = self.migrate(project.name, apply=True)
+        self.assertEqual(report["projects"][0]["status"], "already-migrated")
+        self.assertEqual(self.snapshot(project), before)
+
+    def test_interrupted_apply_resumes_after_every_checkpoint(self):
+        checkpoints = [
+            "journal-prepared",
+            "directories-created",
+            "moved:current_prompt.txt",
+            "moved:current_generation.json",
+            "moved:generations",
+            "targets-verified",
+            "manifest-published",
+            "journal-manifest-published",
+        ]
+        for index, checkpoint in enumerate(checkpoints):
+            with self.subTest(checkpoint=checkpoint):
+                project = self.legacy_project(f"2026-08-23_resume-{index}")
+                expected = {
+                    relative: value for relative, value in
+                    self.file_inventory(project).items()
+                    if (relative in {
+                        "current_prompt.txt", "current_generation.json"}
+                        or relative.startswith("generations/"))
+                }
+
+                def interrupt(observed):
+                    if observed == checkpoint:
+                        raise RuntimeError(f"interrupted at {checkpoint}")
+
+                with (
+                    patch.object(ds, "_migration_checkpoint",
+                                 side_effect=interrupt),
+                    self.assertRaisesRegex(RuntimeError, "interrupted"),
+                ):
+                    self.migrate(project.name, apply=True)
+                report = self.migrate(project.name, apply=True)
+                self.assertEqual(report["projects"][0]["status"], "migrated")
+                self.assertEqual(
+                    self.file_inventory(project / "clips" / "clip-001"),
+                    expected,
+                )
+                self.assertFalse(
+                    (project / ds.CLIP_MIGRATION_JOURNAL).exists())
+
+    def test_refuses_unsafe_sources_destinations_and_nested_entries(self):
+        cases = ("prompt", "settings", "generations", "nested", "clips",
+                 "manifest", "journal")
+        for index, case in enumerate(cases):
+            with self.subTest(case=case):
+                project = self.legacy_project(f"2026-08-23_unsafe-{index}")
+                outside = Path(self.temp.name) / f"outside-{index}"
+                outside.write_bytes(b"outside")
+                if case == "prompt":
+                    (project / "current_prompt.txt").unlink()
+                    (project / "current_prompt.txt").symlink_to(outside)
+                elif case == "settings":
+                    (project / "current_generation.json").unlink()
+                    (project / "current_generation.json").symlink_to(outside)
+                elif case == "generations":
+                    os.rename(project / "generations", project / "real-generations")
+                    (project / "generations").symlink_to(
+                        project / "real-generations", target_is_directory=True)
+                elif case == "nested":
+                    (project / "generations" / "001" / "linked").symlink_to(outside)
+                elif case == "clips":
+                    outside.unlink()
+                    outside.mkdir()
+                    (project / "clips").symlink_to(outside, target_is_directory=True)
+                else:
+                    filename = ("project.json" if case == "manifest" else
+                                ds.CLIP_MIGRATION_JOURNAL)
+                    (project / filename).symlink_to(outside)
+                before = self.snapshot(project)
+                with self.assertRaises((ValueError, safe_files.SafeFilesystemError)):
+                    self.migrate(project.name, apply=case != "journal")
+                self.assertEqual(self.snapshot(project), before)
+                self.assertEqual(outside.read_bytes() if outside.is_file() else
+                                 list(outside.iterdir()),
+                                 b"outside" if outside.is_file() else [])
+
+    def _prepare_journal(self, project):
+        def interrupt(checkpoint):
+            if checkpoint == "journal-prepared":
+                raise RuntimeError("stop")
+        with (
+            patch.object(ds, "_migration_checkpoint", side_effect=interrupt),
+            self.assertRaises(RuntimeError),
+        ):
+            self.migrate(project.name, apply=True)
+
+    def test_resume_fails_closed_when_source_and_target_both_exist(self):
+        project = self.legacy_project()
+        self._prepare_journal(project)
+        target = project / "clips" / "clip-001" / "current_prompt.txt"
+        target.parent.mkdir(parents=True)
+        target.write_bytes((project / "current_prompt.txt").read_bytes())
+        before = self.snapshot(project)
+        with self.assertRaisesRegex(ValueError, "both source and target"):
+            self.migrate(project.name, apply=True)
+        self.assertEqual(self.snapshot(project), before)
+
+    def test_resume_fails_closed_when_source_and_target_are_both_missing(self):
+        project = self.legacy_project()
+        self._prepare_journal(project)
+        (project / "current_prompt.txt").unlink()
+        before = self.snapshot(project)
+        with self.assertRaisesRegex(ValueError, "neither source nor target"):
+            self.migrate(project.name, apply=True)
+        self.assertEqual(self.snapshot(project), before)
+
+    def test_active_jobs_are_reported_on_dry_run_and_block_all_apply_writes(self):
+        first = self.legacy_project("2026-08-23_active")
+        second = self.legacy_project("2026-08-23_inactive")
+        self.runtime.mkdir()
+        database = self.runtime / "studio.db"
+        with closing(sqlite3.connect(database)) as connection:
+            connection.execute(
+                "CREATE TABLE jobs (id TEXT, project TEXT, status TEXT)")
+            connection.execute(
+                "INSERT INTO jobs VALUES (?, ?, ?)",
+                ("job-1", first.name, "running"),
+            )
+            connection.commit()
+        runtime_before = self.snapshot(self.runtime)
+        dry_run = self.migrate()
+        self.assertEqual(dry_run["projects"][0]["active_jobs"], [{
+            "id": "job-1", "status": "running",
+        }])
+        before = self.snapshot(self.root)
+        with self.assertRaisesRegex(ValueError, "active jobs"):
+            self.migrate(apply=True)
+        self.assertEqual(self.snapshot(self.root), before)
+        self.assertEqual(self.snapshot(self.runtime), runtime_before)
+        self.assertFalse((second / ".project.lock").exists())
+
+    def test_missing_database_or_jobs_table_is_not_initialized(self):
+        project = self.legacy_project()
+        self.runtime.mkdir()
+        database = self.runtime / "studio.db"
+        before = self.snapshot(self.runtime)
+        self.migrate(project.name)
+        self.assertEqual(self.snapshot(self.runtime), before)
+        database.touch()
+        before = self.snapshot(self.runtime)
+        self.migrate(project.name)
+        self.assertEqual(self.snapshot(self.runtime), before)
+
+    def test_cli_requires_exactly_one_mode_and_prints_json(self):
+        project = self.legacy_project()
+        for arguments in (("migrate-clips", project.name),
+                          ("migrate-clips", "--dry-run", "--apply",
+                           project.name)):
+            with self.subTest(arguments=arguments), self.assertRaises(SystemExit):
+                ds.main(["--root", str(self.root), *arguments])
+        output = StringIO()
+        with (
+            patch.dict(os.environ, {
+                "HERMES_STUDIO_RUNTIME_ROOT": str(self.runtime)}),
+            redirect_stdout(output),
+        ):
+            self.assertEqual(ds.main([
+                "--root", str(self.root), "migrate-clips", "--dry-run",
+                project.name,
+            ]), 0)
+        self.assertEqual(json.loads(output.getvalue())["mode"], "dry-run")
+
+        absent_root = Path(self.temp.name) / "absent-studio-root"
+        output = StringIO()
+        with (
+            patch.dict(os.environ, {
+                "HERMES_STUDIO_RUNTIME_ROOT": str(self.runtime)}),
+            redirect_stdout(output),
+        ):
+            self.assertEqual(ds.main([
+                "--root", str(absent_root), "migrate-clips", "--dry-run",
+            ]), 0)
+        self.assertFalse(absent_root.exists())
+        self.assertEqual(json.loads(output.getvalue())["projects"], [])
+
+    def test_existing_commands_do_not_silently_migrate_legacy_layout(self):
+        project = self.legacy_project()
+        before = self.snapshot(project)
+        with self.assertRaisesRegex(ClipStoreError, "manifest"):
+            ds.main(["--root", str(self.root), "list-clips", project.name])
+        self.assertEqual(self.snapshot(project), before)
 
 
 class LegacyCleanupTests(unittest.TestCase):

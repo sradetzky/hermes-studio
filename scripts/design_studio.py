@@ -22,18 +22,21 @@ from __future__ import annotations
 import argparse
 import datetime as _dt
 import fcntl
+import hashlib
 import json
 import os
 import re
 import shlex
 import shutil
 import signal
+import sqlite3
+import stat
 import subprocess
 import sys
 import time
 import urllib.request
 import uuid
-from contextlib import ExitStack
+from contextlib import ExitStack, closing
 from dataclasses import replace
 from pathlib import Path
 
@@ -46,6 +49,7 @@ if __package__ in {None, ""} and str(REPO_ROOT) not in sys.path:
 from webapp.clip_store import ClipStore
 from webapp.safe_files import (
     SafeFilesystemError,
+    atomic_move_no_replace,
     atomic_publish_directory,
     copy_opened_file,
     open_regular_beneath,
@@ -75,6 +79,17 @@ SPECIALIST_TOOLSETS = {
     "studio-illustrator": "file,terminal,skills",
 }
 CLIP_STORE = ClipStore()
+CLIP_MIGRATION_JOURNAL = ".clip-migration.json"
+CLIP_MIGRATION_SCHEMA_VERSION = 1
+CLIP_MIGRATION_MAPPINGS = (
+    ("current_prompt.txt", "clips/clip-001/current_prompt.txt", False, "file"),
+    ("current_generation.json", "clips/clip-001/current_generation.json", True, "file"),
+    ("generations", "clips/clip-001/generations", False, "directory"),
+)
+
+
+def _migration_checkpoint(_name: str) -> None:
+    """Test seam for simulating process interruption at durable boundaries."""
 
 
 def free_comfy_vram() -> dict:
@@ -102,11 +117,12 @@ def interrupt_comfy() -> dict:
         return {"ok": False, "error": str(exc)}
 
 
-def studio_root(override: str | None = None) -> Path:
+def studio_root(override: str | None = None, *, create: bool = True) -> Path:
     root = override or os.environ.get("DESIGN_STUDIO_ROOT") or str(DEFAULT_ROOT)
     p = Path(root).expanduser().resolve()
-    for sub in ("projects", "shared", "tmp"):
-        (p / sub).mkdir(parents=True, exist_ok=True)
+    if create:
+        for sub in ("projects", "shared", "tmp"):
+            (p / sub).mkdir(parents=True, exist_ok=True)
     return p
 
 
@@ -167,6 +183,573 @@ def list_projects(root: Path) -> list[str]:
         return []
     return sorted(d.name for d in projects.iterdir()
                   if d.is_dir() and not d.is_symlink())
+
+
+# ----------------------------------------------------------- clip migration
+
+def _entry_kind(path: Path) -> str:
+    try:
+        details = path.lstat()
+    except FileNotFoundError:
+        return "missing"
+    if stat.S_ISLNK(details.st_mode):
+        raise SafeFilesystemError(f"migration path may not be a symlink: {path}")
+    if stat.S_ISREG(details.st_mode):
+        return "file"
+    if stat.S_ISDIR(details.st_mode):
+        return "directory"
+    raise SafeFilesystemError(f"migration path is a special file: {path}")
+
+
+def _hash_opened_file(path: Path) -> tuple[int, str]:
+    with open_regular_file(path) as opened:
+        digest = hashlib.sha256()
+        os.lseek(opened.descriptor, 0, os.SEEK_SET)
+        while True:
+            chunk = os.read(opened.descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+        return opened.stat.st_size, digest.hexdigest()
+
+
+def _inventory_path(path: Path, expected_kind: str) -> dict:
+    kind = _entry_kind(path)
+    if kind != expected_kind:
+        raise ValueError(
+            f"migration entry must be a regular {expected_kind}: {path}")
+    if kind == "file":
+        size, digest = _hash_opened_file(path)
+        return {
+            "directories": [],
+            "files": [{"relative_path": ".", "size": size, "sha256": digest}],
+        }
+
+    directories = ["."]
+    files = []
+
+    def walk(directory: Path, relative: Path) -> None:
+        try:
+            with os.scandir(directory) as iterator:
+                entries = sorted(iterator, key=lambda item: item.name)
+        except OSError as exc:
+            raise SafeFilesystemError(
+                f"unsafe migration directory: {directory}") from exc
+        for entry in entries:
+            entry_path = directory / entry.name
+            entry_relative = relative / entry.name
+            try:
+                details = entry.stat(follow_symlinks=False)
+            except OSError as exc:
+                raise SafeFilesystemError(
+                    f"unsafe migration entry: {entry_path}") from exc
+            if stat.S_ISLNK(details.st_mode):
+                raise SafeFilesystemError(
+                    f"migration entry may not be a symlink: {entry_path}")
+            if stat.S_ISDIR(details.st_mode):
+                directories.append(entry_relative.as_posix())
+                walk(entry_path, entry_relative)
+            elif stat.S_ISREG(details.st_mode):
+                size, digest = _hash_opened_file(entry_path)
+                files.append({
+                    "relative_path": entry_relative.as_posix(),
+                    "size": size,
+                    "sha256": digest,
+                })
+            else:
+                raise SafeFilesystemError(
+                    f"migration entry is a special file: {entry_path}")
+
+    walk(path, Path("."))
+    return {"directories": sorted(directories), "files": sorted(
+        files, key=lambda item: item["relative_path"])}
+
+
+def _migration_manifest(project: Path) -> dict:
+    return {
+        "schema_version": 1,
+        "title": project.name,
+        "clips": [{
+            "id": "clip-001",
+            "title": "Main clip",
+            "enabled": True,
+            "selected_take": None,
+        }],
+    }
+
+
+def _new_migration_journal(project: Path) -> dict:
+    mappings = []
+    for source, target, optional, kind in CLIP_MIGRATION_MAPPINGS:
+        source_path = project / source
+        source_kind = _entry_kind(source_path)
+        if source_kind == "missing" and optional:
+            present = False
+            inventory = {"directories": [], "files": []}
+        else:
+            if source_kind == "missing":
+                raise ValueError(f"legacy migration source is missing: {source}")
+            inventory = _inventory_path(source_path, kind)
+            present = True
+        mappings.append({
+            "source": source,
+            "target": target,
+            "optional": optional,
+            "kind": kind,
+            "present": present,
+            "inventory": inventory,
+        })
+    return {
+        "schema_version": CLIP_MIGRATION_SCHEMA_VERSION,
+        "project": project.name,
+        "phase": "prepared",
+        "completed": [],
+        "manifest": _migration_manifest(project),
+        "mappings": mappings,
+    }
+
+
+def _validate_migration_journal(project: Path, value: object) -> dict:
+    if not isinstance(value, dict) or set(value) != {
+            "schema_version", "project", "phase", "completed", "manifest",
+            "mappings"}:
+        raise ValueError("clip migration journal has invalid fields")
+    if value["schema_version"] != CLIP_MIGRATION_SCHEMA_VERSION:
+        raise ValueError("clip migration journal schema is unsupported")
+    if value["project"] != project.name:
+        raise ValueError("clip migration journal belongs to another project")
+    if value["phase"] not in {
+            "prepared", "moving", "targets_verified", "manifest_published"}:
+        raise ValueError("clip migration journal phase is invalid")
+    if value["manifest"] != _migration_manifest(project):
+        raise ValueError("clip migration journal manifest is invalid")
+    mappings = value["mappings"]
+    if not isinstance(mappings, list) or len(mappings) != len(
+            CLIP_MIGRATION_MAPPINGS):
+        raise ValueError("clip migration journal mappings are invalid")
+    expected_sources = []
+    for mapping, expected in zip(mappings, CLIP_MIGRATION_MAPPINGS):
+        source, target, optional, kind = expected
+        expected_sources.append(source)
+        if not isinstance(mapping, dict) or set(mapping) != {
+                "source", "target", "optional", "kind", "present", "inventory"}:
+            raise ValueError("clip migration journal mapping is invalid")
+        if (mapping["source"], mapping["target"], mapping["optional"],
+                mapping["kind"]) != expected:
+            raise ValueError("clip migration journal mapping was altered")
+        if not isinstance(mapping["present"], bool):
+            raise ValueError("clip migration journal presence state is invalid")
+        if not mapping["present"] and not optional:
+            raise ValueError("required clip migration mapping is absent")
+        inventory = mapping["inventory"]
+        if not isinstance(inventory, dict) or set(inventory) != {
+                "directories", "files"}:
+            raise ValueError("clip migration inventory is invalid")
+        directories = inventory["directories"]
+        files = inventory["files"]
+        if (not isinstance(directories, list)
+                or any(not isinstance(item, str) for item in directories)
+                or directories != sorted(set(directories))
+                or not isinstance(files, list)):
+            raise ValueError("clip migration inventory is invalid")
+        previous = None
+        for item in files:
+            if not isinstance(item, dict) or set(item) != {
+                    "relative_path", "size", "sha256"}:
+                raise ValueError("clip migration file inventory is invalid")
+            relative = item["relative_path"]
+            if (not isinstance(relative, str) or not relative
+                    or Path(relative).is_absolute()
+                    or any(part == ".." for part in Path(relative).parts)
+                    or not isinstance(item["size"], int) or item["size"] < 0
+                    or not isinstance(item["sha256"], str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", item["sha256"])
+                    or (previous is not None and relative <= previous)):
+                raise ValueError("clip migration file inventory is invalid")
+            previous = relative
+        if not mapping["present"] and (directories or files):
+            raise ValueError("absent clip migration mapping has inventory")
+    completed = value["completed"]
+    if (not isinstance(completed, list)
+            or completed != list(dict.fromkeys(completed))
+            or any(item not in expected_sources for item in completed)):
+        raise ValueError("clip migration completed list is invalid")
+    return value
+
+
+def _read_migration_journal(project: Path) -> dict:
+    path = project / CLIP_MIGRATION_JOURNAL
+    try:
+        with open_regular_file(path) as opened:
+            value = json.loads(read_opened_text(opened))
+    except (FileNotFoundError, SafeFilesystemError) as exc:
+        raise ValueError("clip migration journal is missing or unsafe") from exc
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
+        raise ValueError("clip migration journal is invalid") from exc
+    return _validate_migration_journal(project, value)
+
+
+def _validate_migration_tree(project: Path, *, journal_exists: bool) -> None:
+    clips = project / "clips"
+    clips_kind = _entry_kind(clips)
+    if clips_kind == "missing":
+        return
+    if not journal_exists:
+        raise ValueError("partial clip layout exists without a valid migration journal")
+    if clips_kind != "directory":
+        raise ValueError("clips migration destination is unsafe")
+    clip = clips / "clip-001"
+    clip_kind = _entry_kind(clip)
+    allowed_clips = {"clip-001"} if clip_kind != "missing" else set()
+    with os.scandir(clips) as iterator:
+        actual_clips = {entry.name for entry in iterator}
+    if actual_clips != allowed_clips:
+        raise ValueError("clips migration destination contains unexpected entries")
+    if clip_kind == "missing":
+        return
+    if clip_kind != "directory":
+        raise ValueError("default clip migration destination is unsafe")
+    allowed_targets = {
+        Path(target).name for _source, target, _optional, _kind
+        in CLIP_MIGRATION_MAPPINGS
+        if _entry_kind(project / target) != "missing"
+    }
+    with os.scandir(clip) as iterator:
+        actual_targets = {entry.name for entry in iterator}
+    if actual_targets != allowed_targets:
+        raise ValueError("default clip migration destination contains unexpected entries")
+
+
+def _mapping_state(project: Path, mapping: dict) -> str:
+    source_kind = _entry_kind(project / mapping["source"])
+    target_kind = _entry_kind(project / mapping["target"])
+    source_present = source_kind != "missing"
+    target_present = target_kind != "missing"
+    if not mapping["present"]:
+        if source_present or target_present:
+            raise ValueError(
+                f"optional migration entry appeared: {mapping['source']}")
+        return "missing-optional"
+    if source_present and target_present:
+        raise ValueError(
+            f"both source and target exist for {mapping['source']}")
+    if not source_present and not target_present:
+        raise ValueError(
+            f"neither source nor target exists for {mapping['source']}")
+    current = project / (mapping["source"] if source_present else mapping["target"])
+    current_inventory = _inventory_path(current, mapping["kind"])
+    if current_inventory != mapping["inventory"]:
+        label = "source" if source_present else "target"
+        raise ValueError(
+            f"migration {label} inventory changed for {mapping['source']}")
+    return "source" if source_present else "target"
+
+
+def _report_from_journal(project: Path, journal: dict, status: str) -> dict:
+    operations = []
+    inventory = []
+    for mapping in journal["mappings"]:
+        state = _mapping_state(project, mapping)
+        operations.append({
+            "source": mapping["source"],
+            "target": mapping["target"],
+            "optional": mapping["optional"],
+            "state": state,
+        })
+        for item in mapping["inventory"]["files"]:
+            relative = (mapping["source"] if item["relative_path"] == "." else
+                        f"{mapping['source']}/{item['relative_path']}")
+            inventory.append({"relative_path": relative,
+                              "size": item["size"],
+                              "sha256": item["sha256"]})
+    inventory.sort(key=lambda item: item["relative_path"])
+    return {
+        "project": project.name,
+        "status": status,
+        "phase": journal["phase"],
+        "operations": operations,
+        "inventory": inventory,
+        "file_count": len(inventory),
+        "total_bytes": sum(item["size"] for item in inventory),
+        "active_jobs": [],
+    }
+
+
+def _assess_migration_project(project: Path) -> tuple[dict, dict | None]:
+    lock_kind = _entry_kind(project / ".project.lock")
+    if lock_kind not in {"missing", "file"}:
+        raise ValueError("project lock is unsafe")
+    journal_kind = _entry_kind(project / CLIP_MIGRATION_JOURNAL)
+    if journal_kind not in {"missing", "file"}:
+        raise ValueError("clip migration journal is unsafe")
+    manifest_kind = _entry_kind(project / "project.json")
+    if manifest_kind not in {"missing", "file"}:
+        raise ValueError("project manifest is unsafe")
+
+    if journal_kind == "file":
+        journal = _read_migration_journal(project)
+        _validate_migration_tree(project, journal_exists=True)
+        if manifest_kind == "file":
+            manifest = CLIP_STORE.describe(project)
+            if manifest != journal["manifest"]:
+                raise ValueError(
+                    "published manifest does not match the migration journal")
+        report = _report_from_journal(project, journal, "resumable")
+        return report, journal
+
+    source_kinds = {
+        source: _entry_kind(project / source)
+        for source, _target, _optional, _kind in CLIP_MIGRATION_MAPPINGS
+    }
+    if manifest_kind == "file":
+        if any(kind != "missing" for kind in source_kinds.values()):
+            raise ValueError("legacy sources remain without a migration journal")
+        manifest = CLIP_STORE.describe(project)
+        return ({
+            "project": project.name,
+            "status": "already-migrated",
+            "phase": "complete",
+            "operations": [],
+            "inventory": [],
+            "file_count": 0,
+            "total_bytes": 0,
+            "active_jobs": [],
+        }, None)
+
+    _validate_migration_tree(project, journal_exists=False)
+    journal = _new_migration_journal(project)
+    return _report_from_journal(project, journal, "planned"), journal
+
+
+def _active_migration_jobs(project_ids: list[str]) -> dict[str, list[dict]]:
+    result = {project_id: [] for project_id in project_ids}
+    if not project_ids:
+        return result
+    runtime = Path(os.environ.get(
+        "HERMES_STUDIO_RUNTIME_ROOT", DEFAULT_RUNTIME)).expanduser()
+    database = runtime / "studio.db"
+    kind = _entry_kind(database)
+    if kind == "missing":
+        return result
+    if kind != "file":
+        raise ValueError("runtime database is unsafe")
+    uri = database.absolute().as_uri() + "?mode=ro"
+    try:
+        with closing(sqlite3.connect(
+                uri, uri=True, timeout=5)) as connection:
+            placeholders = ",".join("?" for _ in project_ids)
+            with closing(connection.execute(
+                    f"SELECT id, project, status FROM jobs "
+                    f"WHERE project IN ({placeholders}) "
+                    "AND status IN ('queued', 'running') "
+                    "ORDER BY project, id",
+                    project_ids,
+            )) as cursor:
+                rows = cursor.fetchall()
+    except sqlite3.OperationalError as exc:
+        if "no such table: jobs" in str(exc):
+            return result
+        raise ValueError(f"could not inspect runtime jobs: {exc}") from exc
+    for job_id, project_id, status in rows:
+        result[project_id].append({"id": job_id, "status": status})
+    return result
+
+
+def _atomic_json_file(project: Path, filename: str, value: dict, *,
+                      replace: bool) -> None:
+    target_kind = _entry_kind(project / filename)
+    if replace:
+        if target_kind != "file":
+            raise ValueError(f"atomic JSON target is missing or unsafe: {filename}")
+    elif target_kind != "missing":
+        raise ValueError(f"atomic JSON target already exists: {filename}")
+    project_fd = os.open(
+        project, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    temporary = f".{uuid.uuid4().hex}.{filename}.tmp"
+    descriptor = None
+    try:
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+            0o600,
+            dir_fd=project_fd,
+        )
+        data = (json.dumps(value, indent=2, ensure_ascii=False, sort_keys=True)
+                + "\n").encode("utf-8")
+        view = memoryview(data)
+        while view:
+            written = os.write(descriptor, view)
+            view = view[written:]
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = None
+        if replace:
+            os.replace(
+                temporary, filename,
+                src_dir_fd=project_fd, dst_dir_fd=project_fd)
+        else:
+            atomic_move_no_replace(project / temporary, project / filename)
+        os.fsync(project_fd)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        try:
+            os.unlink(temporary, dir_fd=project_fd)
+        except FileNotFoundError:
+            pass
+        os.close(project_fd)
+
+
+def _remove_regular_file(project: Path, filename: str) -> None:
+    with open_regular_file(project / filename) as opened:
+        expected = opened.identity
+    project_fd = os.open(
+        project, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        current = os.stat(filename, dir_fd=project_fd, follow_symlinks=False)
+        if ((current.st_dev, current.st_ino) != expected
+                or not stat.S_ISREG(current.st_mode)):
+            raise SafeFilesystemError(f"file changed before removal: {filename}")
+        os.unlink(filename, dir_fd=project_fd)
+        os.fsync(project_fd)
+    finally:
+        os.close(project_fd)
+
+
+def _create_migration_directories(project: Path) -> None:
+    clips = project / "clips"
+    if _entry_kind(clips) == "missing":
+        clips.mkdir()
+    if _entry_kind(clips) != "directory":
+        raise ValueError("clips migration destination is unsafe")
+    clip = clips / "clip-001"
+    if _entry_kind(clip) == "missing":
+        clip.mkdir()
+    if _entry_kind(clip) != "directory":
+        raise ValueError("default clip migration destination is unsafe")
+    for directory in (project, clips, clip):
+        descriptor = os.open(
+            directory,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+
+def _apply_migration_project(project: Path) -> dict:
+    with CLIP_STORE.locked_project(project):
+        active = _active_migration_jobs([project.name])[project.name]
+        if active:
+            raise ValueError(
+                f"project {project.name} has active jobs: "
+                + ", ".join(job["id"] for job in active))
+        report, journal = _assess_migration_project(project)
+        if report["status"] == "already-migrated":
+            return report
+        assert journal is not None
+        journal_exists = _entry_kind(
+            project / CLIP_MIGRATION_JOURNAL) == "file"
+        if not journal_exists:
+            _atomic_json_file(
+                project, CLIP_MIGRATION_JOURNAL, journal, replace=False)
+            _migration_checkpoint("journal-prepared")
+
+        _create_migration_directories(project)
+        _migration_checkpoint("directories-created")
+        for mapping in journal["mappings"]:
+            state = _mapping_state(project, mapping)
+            if state == "source":
+                atomic_move_no_replace(
+                    project / mapping["source"], project / mapping["target"])
+                state = _mapping_state(project, mapping)
+                assert state == "target"
+            if state == "target" and mapping["source"] not in journal["completed"]:
+                journal["completed"].append(mapping["source"])
+                journal["phase"] = "moving"
+                _atomic_json_file(
+                    project, CLIP_MIGRATION_JOURNAL, journal, replace=True)
+            if state != "missing-optional":
+                _migration_checkpoint(f"moved:{mapping['source']}")
+
+        for mapping in journal["mappings"]:
+            state = _mapping_state(project, mapping)
+            if state not in {"target", "missing-optional"}:
+                raise ValueError("migration target verification failed")
+        journal["phase"] = "targets_verified"
+        _atomic_json_file(
+            project, CLIP_MIGRATION_JOURNAL, journal, replace=True)
+        _migration_checkpoint("targets-verified")
+
+        manifest_path = project / "project.json"
+        manifest_kind = _entry_kind(manifest_path)
+        if manifest_kind == "missing":
+            CLIP_STORE._validate_manifest(journal["manifest"])
+            _atomic_json_file(
+                project, "project.json", journal["manifest"], replace=False)
+        elif manifest_kind == "file":
+            if CLIP_STORE.describe(project) != journal["manifest"]:
+                raise ValueError("published manifest does not match migration journal")
+        else:
+            raise ValueError("project manifest is unsafe")
+        _migration_checkpoint("manifest-published")
+
+        journal["phase"] = "manifest_published"
+        _atomic_json_file(
+            project, CLIP_MIGRATION_JOURNAL, journal, replace=True)
+        _migration_checkpoint("journal-manifest-published")
+        if CLIP_STORE.describe(project) != journal["manifest"]:
+            raise ValueError("published manifest verification failed")
+        for mapping in journal["mappings"]:
+            if _mapping_state(project, mapping) not in {
+                    "target", "missing-optional"}:
+                raise ValueError("migration target verification failed")
+        _remove_regular_file(project, CLIP_MIGRATION_JOURNAL)
+        report = _report_from_journal(project, journal, "migrated")
+        report["phase"] = "complete"
+        return report
+
+
+def migrate_clips(root: Path, project: str | None = None, *,
+                  apply: bool = False) -> dict:
+    """Plan or explicitly apply the resumable legacy Project→clip migration."""
+    if project is None:
+        project_ids = list_projects(root)
+    else:
+        project_ids = [project_path(root, project).name]
+    projects = [project_path(root, project_id) for project_id in project_ids]
+    assessed = []
+    for selected in projects:
+        report, _journal = _assess_migration_project(selected)
+        assessed.append(report)
+    active = _active_migration_jobs(project_ids)
+    for report in assessed:
+        report["active_jobs"] = active[report["project"]]
+    if apply:
+        blocked = [project_id for project_id in project_ids if active[project_id]]
+        if blocked:
+            raise ValueError(
+                "cannot migrate projects with active jobs: " + ", ".join(blocked))
+        assessed = [_apply_migration_project(selected) for selected in projects]
+    return {
+        "schema_version": CLIP_MIGRATION_SCHEMA_VERSION,
+        "command": "migrate-clips",
+        "mode": "apply" if apply else "dry-run",
+        "root": str(root),
+        "projects": assessed,
+        "summary": {
+            "project_count": len(assessed),
+            "already_migrated": sum(
+                item["status"] == "already-migrated" for item in assessed),
+            "migratable": sum(
+                item["status"] in {"planned", "resumable", "migrated"}
+                for item in assessed),
+            "active_job_count": sum(
+                len(item["active_jobs"]) for item in assessed),
+            "file_count": sum(item["file_count"] for item in assessed),
+            "total_bytes": sum(item["total_bytes"] for item in assessed),
+        },
+    }
 
 
 # ------------------------------------------------------------- prompt & chat
@@ -662,6 +1245,12 @@ def main(argv=None) -> int:
 
     sub.add_parser("list-projects")
 
+    sp = sub.add_parser("migrate-clips")
+    mode = sp.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--dry-run", action="store_true")
+    mode.add_argument("--apply", action="store_true")
+    sp.add_argument("project", nargs="?")
+
     sp = sub.add_parser("list-clips")
     sp.add_argument("project")
 
@@ -736,12 +1325,22 @@ def main(argv=None) -> int:
     sp.add_argument("--timeout", type=int, default=1800)
 
     args = ap.parse_args(argv)
-    root = studio_root(args.root)
+    root = studio_root(
+        args.root,
+        create=not (args.cmd == "migrate-clips" and args.dry_run),
+    )
 
     if args.cmd == "create-project":
         print(create_project(root, args.name, " ".join(args.brief)))
     elif args.cmd == "list-projects":
         print("\n".join(list_projects(root)) or "(no projects)")
+    elif args.cmd == "migrate-clips":
+        print(json.dumps(
+            migrate_clips(root, args.project, apply=args.apply),
+            indent=2,
+            ensure_ascii=False,
+            sort_keys=True,
+        ))
     elif args.cmd == "list-clips":
         pp = project_path(root, args.project)
         print(json.dumps(CLIP_STORE.describe(pp), indent=2, ensure_ascii=False))

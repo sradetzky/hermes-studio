@@ -91,6 +91,13 @@ class ClipStore:
             finally:
                 fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
+    @contextmanager
+    def locked_project(self, project: Path):
+        """Hold the canonical project lock for a multi-step operation."""
+        project = self._project(project)
+        with self._lock(project):
+            yield project
+
     @staticmethod
     def _manifest_path(project: Path) -> Path:
         return project / PROJECT_MANIFEST
