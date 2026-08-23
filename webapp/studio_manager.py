@@ -12,6 +12,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from webapp.config import Settings
+from webapp.hermes_events import HermesSessionEventBridge
 from webapp.job_store import JobStore, JobStoreError
 from webapp.models import Job, JobStatus
 
@@ -19,6 +20,12 @@ from webapp.models import Job, JobStatus
 log = logging.getLogger(__name__)
 SESSION_RE = re.compile(r"session_id:\s*([A-Za-z0-9_-]+)")
 CommandBuilder = Callable[[Job, str | None], list[str]]
+PROFILE_TOOLSETS = {
+    "studio-storyboarder": "file,terminal,skills",
+    "studio-prompt-engineer": "file,terminal,skills",
+    "studio-reviewer": "file,terminal,vision,skills",
+    "studio-illustrator": "file,terminal,skills",
+}
 
 
 class StudioJobManager:
@@ -60,10 +67,14 @@ class StudioJobManager:
         self._wake.set()
         with self._process_lock:
             processes = list(self._processes.values())
-        had_processes = bool(processes)
+        had_gpu_process = any(
+            job.owner_id == self.owner_id
+            and job.profile == self.settings.studio_profile
+            for job in self.store.active_jobs()
+        )
         for process in processes:
             self._terminate_process(process)
-        if had_processes:
+        if had_gpu_process:
             self._cleanup_safely()
         if self._scheduler:
             self._scheduler.join(timeout=30)
@@ -78,10 +89,13 @@ class StudioJobManager:
             self._heartbeat.join(timeout=5)
         self.store.unregister_worker(self.owner_id)
 
-    def submit_chat(self, project: str, message: str) -> Job:
+    def submit_chat(self, project: str, message: str,
+                    profile: str | None = None) -> Job:
         chat_path = self._chat_path(project)
         self.store.import_chat_if_empty(project, chat_path)
-        job = self.store.create_chat_job(project, message)
+        job = self.store.create_chat_job(
+            project, message, profile or self.settings.studio_profile)
+        self._export_chat(project)
         self._wake.set()
         return job
 
@@ -119,8 +133,17 @@ class StudioJobManager:
                 log.exception("Could not update Studio worker heartbeat")
 
     def _execute(self, job: Job) -> None:
-        session_id = self.store.get_session(job.project)
+        session_id = self.store.get_session(job.project, job.profile)
         command = self.command_builder(job, session_id)
+        bridge = HermesSessionEventBridge(
+            self.store,
+            self.settings,
+            job,
+            source="studio-web",
+            started_at=time.time(),
+            session_id=session_id,
+        )
+        bridge.prepare()
         process: subprocess.Popen | None = None
         try:
             with self._process_lock:
@@ -135,17 +158,37 @@ class StudioJobManager:
                     stderr=subprocess.PIPE,
                     text=True,
                     start_new_session=True,
+                    env=self._job_environment(job),
                 )
                 self.store.set_pid(job.id, self.owner_id, process.pid)
                 self._processes[job.id] = process
             try:
-                stdout, stderr = self._communicate(process)
+                stdout, stderr = self._communicate(process, bridge)
             except subprocess.TimeoutExpired:
                 self._terminate_process(process)
                 process.communicate()
-                self._cleanup_safely()
+                self.store.append_job_event(
+                    job.id,
+                    job.profile,
+                    "job.timeout",
+                    f"Exceeded the {self.settings.job_timeout_seconds}s job limit",
+                    status="failed",
+                )
+                if job.profile == self.settings.studio_profile:
+                    self.store.append_job_event(
+                        job.id,
+                        job.profile,
+                        "comfyui.cleanup",
+                        "Cancelling ComfyUI work after Studio timeout",
+                        status="running",
+                    )
+                    self._cleanup_safely()
                 self.store.fail(
-                    job.id, "Studio agent timed out", self.owner_id)
+                    job.id,
+                    f"Studio agent timed out after "
+                    f"{self.settings.job_timeout_seconds}s",
+                    self.owner_id,
+                )
                 self._export_chat(job.project)
                 return
             if process.returncode:
@@ -156,7 +199,8 @@ class StudioJobManager:
                     "Studio agent failed (%d): %s",
                     process.returncode, stderr.strip(),
                 )
-                self._cleanup_safely()
+                if job.profile == self.settings.studio_profile:
+                    self._cleanup_safely()
                 self.store.fail(
                     job.id, error, self.owner_id,
                 )
@@ -164,7 +208,8 @@ class StudioJobManager:
                 return
             reply = stdout.strip()
             if not reply:
-                self._cleanup_safely()
+                if job.profile == self.settings.studio_profile:
+                    self._cleanup_safely()
                 self.store.fail(
                     job.id, "Studio agent returned an empty reply", self.owner_id)
                 self._export_chat(job.project)
@@ -172,14 +217,15 @@ class StudioJobManager:
             match = SESSION_RE.search(stderr)
             self.store.complete(
                 job.id, self.owner_id, reply,
-                match.group(1) if match else None,
+                match.group(1) if match else bridge.session_id,
             )
             self._export_chat(job.project)
         except Exception as exc:
             log.exception("Studio job %s failed", job.id)
             if process:
                 self._terminate_process(process)
-            self._cleanup_safely()
+            if job.profile == self.settings.studio_profile:
+                self._cleanup_safely()
             try:
                 self.store.fail(job.id, str(exc), self.owner_id)
                 self._export_chat(job.project)
@@ -192,12 +238,27 @@ class StudioJobManager:
     def _default_command(self, job: Job, session_id: str | None) -> list[str]:
         command = [
             self.settings.hermes_command,
-            "-p", self.settings.studio_profile,
+            "-p", job.profile,
         ]
         if session_id and re.fullmatch(r"[A-Za-z0-9_-]+", session_id):
             command += ["-r", session_id]
-        command += ["chat", "-Q", "-t", "all", "-q", job.message]
+        toolsets = PROFILE_TOOLSETS.get(job.profile, "all")
+        command += [
+            "chat", "-Q", "-t", toolsets, "--source", "studio-web",
+            "-q", job.message,
+        ]
         return command
+
+    def _job_environment(self, job: Job) -> dict[str, str]:
+        environment = os.environ.copy()
+        environment.update({
+            "DESIGN_STUDIO_ROOT": str(self.settings.studio_root),
+            "HERMES_STUDIO_RUNTIME_ROOT": str(self.settings.runtime_root),
+            "HERMES_STUDIO_JOB_ID": job.id,
+            "HERMES_STUDIO_PROJECT": job.project,
+            "HERMES_STUDIO_PROFILE": job.profile,
+        })
+        return environment
 
     def _chat_path(self, project: str) -> Path:
         return self.settings.studio_root / "projects" / project / "chat.jsonl"
@@ -223,15 +284,19 @@ class StudioJobManager:
             self.owner_id)
         self._export_chat(job.project)
 
-    def _communicate(self, process: subprocess.Popen) -> tuple[str, str]:
+    def _communicate(self, process: subprocess.Popen,
+                     bridge: HermesSessionEventBridge) -> tuple[str, str]:
         deadline = time.monotonic() + self.settings.job_timeout_seconds
         while True:
+            bridge.poll()
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise subprocess.TimeoutExpired(
                     process.args, self.settings.job_timeout_seconds)
             try:
-                return process.communicate(timeout=min(1.0, remaining))
+                output = process.communicate(timeout=min(1.0, remaining))
+                bridge.poll()
+                return output
             except subprocess.TimeoutExpired:
                 self.store.heartbeat_worker(self.owner_id)
 

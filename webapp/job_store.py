@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-from webapp.models import ChatEvent, Job, JobStatus
+from webapp.models import ChatEvent, Job, JobEvent, JobStatus
 
 
 log = logging.getLogger(__name__)
@@ -102,6 +102,14 @@ class JobStore:
                     updated_at TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS profile_sessions (
+                    project TEXT NOT NULL,
+                    profile TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY(project, profile)
+                );
+
                 CREATE TABLE IF NOT EXISTS chat_events (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     project TEXT NOT NULL,
@@ -115,6 +123,24 @@ class JobStore:
                 CREATE INDEX IF NOT EXISTS chat_project_id
                 ON chat_events(project, id);
 
+                CREATE TABLE IF NOT EXISTS job_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    project TEXT NOT NULL,
+                    job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+                    profile TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT '',
+                    summary TEXT NOT NULL,
+                    detail TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS job_events_project_id
+                ON job_events(project, id);
+
+                CREATE INDEX IF NOT EXISTS job_events_job_id
+                ON job_events(job_id, id);
+
                 CREATE TABLE IF NOT EXISTS workers (
                     owner_id TEXT PRIMARY KEY,
                     pid INTEGER NOT NULL,
@@ -122,6 +148,43 @@ class JobStore:
                 );
                 """
             )
+            job_columns = {
+                row["name"] for row in connection.execute(
+                    "PRAGMA table_info(jobs)").fetchall()
+            }
+            if "profile" not in job_columns:
+                connection.execute(
+                    "ALTER TABLE jobs ADD COLUMN profile TEXT NOT NULL "
+                    "DEFAULT 'studio'")
+            connection.execute(
+                "INSERT INTO job_events "
+                "(project, job_id, profile, event_type, status, summary, detail, "
+                "created_at) "
+                "SELECT jobs.project, jobs.id, jobs.profile, 'job.queued', "
+                "'queued', jobs.profile || ' queued', '{}', jobs.created_at "
+                "FROM jobs WHERE NOT EXISTS ("
+                "SELECT 1 FROM job_events WHERE job_events.job_id = jobs.id)"
+            )
+            connection.execute(
+                "INSERT INTO job_events "
+                "(project, job_id, profile, event_type, status, summary, detail, "
+                "created_at) "
+                "SELECT jobs.project, jobs.id, jobs.profile, "
+                "CASE jobs.status WHEN 'completed' THEN 'job.completed' "
+                "ELSE 'job.failed' END, jobs.status, "
+                "CASE jobs.status WHEN 'completed' THEN jobs.profile || ' completed' "
+                "ELSE jobs.error END, '{}', jobs.finished_at "
+                "FROM jobs WHERE jobs.status IN ('completed', 'failed') "
+                "AND NOT EXISTS (SELECT 1 FROM job_events "
+                "WHERE job_events.job_id = jobs.id "
+                "AND job_events.event_type IN ('job.completed', 'job.failed'))"
+            )
+            connection.execute(
+                "INSERT OR IGNORE INTO profile_sessions "
+                "(project, profile, session_id, updated_at) "
+                "SELECT project, 'studio', session_id, updated_at FROM sessions"
+            )
+            connection.commit()
 
     def register_worker(self, owner_id: str) -> None:
         with self._transaction() as connection:
@@ -152,6 +215,7 @@ class JobStore:
             id=row["id"],
             project=row["project"],
             kind=row["kind"],
+            profile=row["profile"],
             status=JobStatus(row["status"]),
             message=row["message"],
             error=row["error"],
@@ -171,15 +235,35 @@ class JobStore:
         ).fetchone()
         return row["content"] if row else ""
 
-    def create_chat_job(self, project: str, message: str) -> Job:
+    @staticmethod
+    def _append_job_event(connection: sqlite3.Connection, *, project: str,
+                          job_id: str, profile: str, event_type: str,
+                          status: str, summary: str,
+                          detail: dict | None = None,
+                          created_at: str | None = None) -> None:
+        connection.execute(
+            "INSERT INTO job_events "
+            "(project, job_id, profile, event_type, status, summary, detail, "
+            "created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                project, job_id, profile, event_type, status, summary,
+                json.dumps(detail or {}, ensure_ascii=False),
+                created_at or utc_now(),
+            ),
+        )
+
+    def create_chat_job(self, project: str, message: str,
+                        profile: str = "studio") -> Job:
+        now = utc_now()
         job = Job(
             id=uuid.uuid4().hex,
             project=project,
             kind="chat",
+            profile=profile,
             status=JobStatus.QUEUED,
             message=message,
             error="",
-            created_at=utc_now(),
+            created_at=now,
             started_at="",
             finished_at="",
             owner_id="",
@@ -189,14 +273,31 @@ class JobStore:
             with self._transaction() as connection:
                 connection.execute(
                     "INSERT INTO jobs "
-                    "(id, project, kind, status, message, error, created_at, "
+                    "(id, project, kind, profile, status, message, error, created_at, "
                     "started_at, finished_at, owner_id, pid) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
-                        job.id, job.project, job.kind, job.status.value,
+                        job.id, job.project, job.kind, job.profile,
+                        job.status.value,
                         job.message, job.error, job.created_at, job.started_at,
                         job.finished_at, job.owner_id, job.pid,
                     ),
+                )
+                connection.execute(
+                    "INSERT INTO chat_events "
+                    "(project, job_id, role, content, created_at) "
+                    "VALUES (?, ?, 'user', ?, ?)",
+                    (job.project, job.id, job.message, now),
+                )
+                self._append_job_event(
+                    connection,
+                    project=job.project,
+                    job_id=job.id,
+                    profile=job.profile,
+                    event_type="job.queued",
+                    status="queued",
+                    summary=f"{job.profile} queued",
+                    created_at=now,
                 )
         except sqlite3.IntegrityError as exc:
             raise ActiveJobError(
@@ -232,6 +333,7 @@ class JobStore:
             return [self._job_from_row(row) for row in rows]
 
     def claim(self, job_id: str, owner_id: str) -> Job | None:
+        started_at = utc_now()
         with self._transaction() as connection:
             cursor = connection.execute(
                 "UPDATE jobs SET status = 'running', started_at = ?, "
@@ -239,7 +341,7 @@ class JobStore:
                 "AND NOT EXISTS (SELECT 1 FROM jobs WHERE status = 'running') "
                 "AND id = (SELECT id FROM jobs WHERE status = 'queued' "
                 "ORDER BY created_at, id LIMIT 1)",
-                (utc_now(), owner_id, job_id),
+                (started_at, owner_id, job_id),
             )
             if cursor.rowcount != 1:
                 row = connection.execute(
@@ -251,10 +353,24 @@ class JobStore:
                     raise InvalidTransitionError(
                         f"job {job_id} is not queued")
                 return None
+            row = connection.execute(
+                "SELECT project, profile FROM jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+            self._append_job_event(
+                connection,
+                project=row["project"],
+                job_id=job_id,
+                profile=row["profile"],
+                event_type="job.started",
+                status="running",
+                summary=f"{row['profile']} started",
+                created_at=started_at,
+            )
         return self.get_job(job_id)
 
     def claim_next(self, owner_id: str) -> Job | None:
         """Atomically claim the oldest queued job when no job is running."""
+        started_at = utc_now()
         with self._transaction() as connection:
             if connection.execute(
                     "SELECT 1 FROM jobs WHERE status = 'running'").fetchone():
@@ -268,10 +384,23 @@ class JobStore:
             cursor = connection.execute(
                 "UPDATE jobs SET status = 'running', started_at = ?, "
                 "owner_id = ? WHERE id = ? AND status = 'queued'",
-                (utc_now(), owner_id, row["id"]),
+                (started_at, owner_id, row["id"]),
             )
             if cursor.rowcount != 1:
                 return None
+            job_row = connection.execute(
+                "SELECT project, profile FROM jobs WHERE id = ?", (row["id"],)
+            ).fetchone()
+            self._append_job_event(
+                connection,
+                project=job_row["project"],
+                job_id=row["id"],
+                profile=job_row["profile"],
+                event_type="job.started",
+                status="running",
+                summary=f"{job_row['profile']} started",
+                created_at=started_at,
+            )
         return self.get_job(row["id"])
 
     def claim_stale_running(self, owner_id: str,
@@ -324,15 +453,27 @@ class JobStore:
             )
             if session_id:
                 connection.execute(
-                    "INSERT INTO sessions(project, session_id, updated_at) "
-                    "VALUES (?, ?, ?) ON CONFLICT(project) DO UPDATE SET "
+                    "INSERT INTO profile_sessions "
+                    "(project, profile, session_id, updated_at) "
+                    "VALUES (?, ?, ?, ?) "
+                    "ON CONFLICT(project, profile) DO UPDATE SET "
                     "session_id = excluded.session_id, "
                     "updated_at = excluded.updated_at",
-                    (row["project"], session_id, now),
+                    (row["project"], row["profile"], session_id, now),
                 )
             connection.execute(
                 "UPDATE jobs SET status = 'completed', finished_at = ?, "
                 "error = '', pid = NULL WHERE id = ?", (now, job_id)
+            )
+            self._append_job_event(
+                connection,
+                project=row["project"],
+                job_id=job_id,
+                profile=row["profile"],
+                event_type="job.completed",
+                status="completed",
+                summary=f"{row['profile']} completed",
+                created_at=now,
             )
         return self.get_job(job_id)
 
@@ -355,6 +496,16 @@ class JobStore:
                 "UPDATE jobs SET status = 'failed', finished_at = ?, "
                 "error = ?, pid = NULL WHERE id = ?", (now, error, job_id)
             )
+            self._append_job_event(
+                connection,
+                project=row["project"],
+                job_id=job_id,
+                profile=row["profile"],
+                event_type="job.failed",
+                status="failed",
+                summary=error,
+                created_at=now,
+            )
         return self.get_job(job_id)
 
     @staticmethod
@@ -374,10 +525,11 @@ class JobStore:
             (project, job_id, response_role, response, created_at),
         )
 
-    def get_session(self, project: str) -> str | None:
+    def get_session(self, project: str, profile: str = "studio") -> str | None:
         with self._connection() as connection:
             row = connection.execute(
-                "SELECT session_id FROM sessions WHERE project = ?", (project,)
+                "SELECT session_id FROM profile_sessions "
+                "WHERE project = ? AND profile = ?", (project, profile)
             ).fetchone()
             return row["session_id"] if row else None
 
@@ -424,12 +576,66 @@ class JobStore:
         if role not in {"user", "assistant", "system"}:
             raise ValueError(f"invalid chat role: {role!r}")
         with self._transaction() as connection:
+            if role == "user" and connection.execute(
+                "SELECT 1 FROM chat_events "
+                "JOIN jobs ON jobs.id = chat_events.job_id "
+                "WHERE chat_events.project = ? AND chat_events.role = 'user' "
+                "AND chat_events.content = ? "
+                "AND jobs.status IN ('queued', 'running') LIMIT 1",
+                (project, content),
+            ).fetchone():
+                return
             connection.execute(
                 "INSERT INTO chat_events "
                 "(project, job_id, role, content, created_at) "
                 "VALUES (?, NULL, ?, ?, ?)",
                 (project, role, content, utc_now()),
             )
+
+    def append_job_event(self, job_id: str, profile: str, event_type: str,
+                         summary: str, status: str = "",
+                         detail: dict | None = None) -> None:
+        with self._transaction() as connection:
+            row = connection.execute(
+                "SELECT project FROM jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+            if not row:
+                raise JobNotFoundError(job_id)
+            self._append_job_event(
+                connection,
+                project=row["project"],
+                job_id=job_id,
+                profile=profile,
+                event_type=event_type,
+                status=status,
+                summary=summary,
+                detail=detail,
+            )
+
+    def job_events(self, project: str, after: int = 0) -> tuple[int, list[JobEvent]]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT * FROM job_events WHERE project = ? AND id > ? "
+                "ORDER BY id", (project, after)
+            ).fetchall()
+            events = []
+            for row in rows:
+                try:
+                    detail = json.loads(row["detail"] or "{}")
+                except (json.JSONDecodeError, TypeError):
+                    detail = {}
+                events.append(JobEvent(
+                    id=row["id"],
+                    project=row["project"],
+                    job_id=row["job_id"],
+                    profile=row["profile"],
+                    event_type=row["event_type"],
+                    status=row["status"],
+                    summary=row["summary"],
+                    detail=detail,
+                    created_at=row["created_at"],
+                ))
+            return rows[-1]["id"] if rows else after, events
 
     def chat_events(self, project: str, after: int = 0) -> tuple[int, list[ChatEvent]]:
         with self._connection() as connection:
@@ -438,14 +644,17 @@ class JobStore:
                 (project,),
             ).fetchone()["n"]
             rows = connection.execute(
-                "SELECT * FROM chat_events WHERE project = ? "
-                "ORDER BY id LIMIT -1 OFFSET ?", (project, after)
+                "SELECT chat_events.*, COALESCE(jobs.profile, '') AS profile "
+                "FROM chat_events LEFT JOIN jobs ON jobs.id = chat_events.job_id "
+                "WHERE chat_events.project = ? "
+                "ORDER BY chat_events.id LIMIT -1 OFFSET ?", (project, after)
             ).fetchall()
             events = [
                 ChatEvent(
                     id=row["id"], project=row["project"],
                     job_id=row["job_id"], role=row["role"],
                     content=row["content"], created_at=row["created_at"],
+                    profile=row["profile"],
                 )
                 for row in rows
             ]

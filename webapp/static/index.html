@@ -15,6 +15,8 @@
          id="activity" title="Studio activity">
       <span class="activity-dot" id="activity-dot"></span>
       <span id="activity-text">Idle</span>
+      <button class="activity-toggle" id="activity-detail-toggle" type="button"
+              aria-pressed="true">Details on</button>
     </div>
   </header>
 
@@ -30,6 +32,17 @@
     <section class="flex flex-col gap-3 min-h-0">
       <div class="panel flex-1 p-3 overflow-auto min-h-0" id="chatlog"></div>
       <div class="panel p-3">
+        <div class="generation-readiness" id="generation-readiness">
+          <div class="generation-readiness-main">
+            <span class="readiness-badge" id="generation-readiness-badge">Not configured</span>
+            <span class="generation-readiness-summary"
+                  id="generation-readiness-summary">Save settings for this prompt</span>
+          </div>
+          <button class="btn" id="edit-generation-settings" type="button">
+            Generation settings
+          </button>
+          <div class="generation-readiness-details" id="generation-readiness-details"></div>
+        </div>
         <details open>
           <summary class="text-xs uppercase tracking-wider text-gray-500 cursor-pointer mb-2">
             Current prompt
@@ -38,6 +51,8 @@
         </details>
       </div>
       <form class="panel p-2 flex gap-2" id="chat-form">
+        <label class="sr-only" for="profile-select">Studio profile</label>
+        <select id="profile-select" class="profile-select" title="Send to profile"></select>
         <input id="chatinput"
                class="flex-1 bg-transparent outline-none text-sm px-2"
                placeholder="Message the studio agent…" autocomplete="off">
@@ -46,8 +61,28 @@
     </section>
 
     <aside class="panel p-3 overflow-auto">
-      <div class="text-xs uppercase tracking-wider text-gray-500 mb-2">
-        Generations
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-xs uppercase tracking-wider text-gray-500">Generations</span>
+        <span class="generation-count" id="generation-count"></span>
+      </div>
+      <div class="generation-filters" aria-label="Generation filters">
+        <label class="sr-only" for="generation-kind-filter">Media type</label>
+        <select id="generation-kind-filter" title="Filter by media type">
+          <option value="all">All media</option>
+          <option value="video">Video</option>
+          <option value="image">Image</option>
+          <option value="audio">Audio</option>
+        </select>
+        <label class="sr-only" for="generation-recipe-filter">Recipe</label>
+        <select id="generation-recipe-filter" title="Filter by recipe">
+          <option value="all">All recipes</option>
+        </select>
+        <label class="sr-only" for="generation-review-filter">Review state</label>
+        <select id="generation-review-filter" title="Filter by review state">
+          <option value="all">All states</option>
+          <option value="promoted">Promoted</option>
+          <option value="unpromoted">Not promoted</option>
+        </select>
       </div>
       <div id="gens" class="space-y-3"></div>
       <div class="text-xs uppercase tracking-wider text-gray-500 mt-4 mb-2">
@@ -62,5 +97,198 @@
       <div id="refs" class="grid grid-cols-3 gap-2"></div>
     </aside>
   </main>
+
+  <dialog class="media-dialog" id="generation-dialog" aria-labelledby="generation-title">
+    <div class="media-dialog-shell">
+      <header class="media-dialog-header">
+        <div>
+          <div class="media-dialog-kicker">Generation review</div>
+          <h2 id="generation-title">Generation</h2>
+        </div>
+        <div class="media-dialog-nav">
+          <button class="btn" id="generation-previous" type="button">Previous</button>
+          <button class="btn" id="generation-next" type="button">Next</button>
+          <button class="dialog-close" id="generation-close" type="button"
+                  aria-label="Close generation viewer">×</button>
+        </div>
+      </header>
+      <div class="media-dialog-body">
+        <section class="media-review-stage">
+          <div class="media-stage" id="generation-media"></div>
+          <div class="media-file-strip" id="generation-files"
+               aria-label="Generation media files"></div>
+          <div class="media-selection-row">
+            <span id="generation-filename">—</span>
+            <span id="generation-file-state"></span>
+          </div>
+          <div class="media-actions">
+            <button class="btn primary" id="promote-generation" type="button">
+              Promote to final
+            </button>
+            <button class="btn" id="reference-generation" type="button">
+              Use as reference
+            </button>
+            <span class="media-action-status" id="media-action-status"
+                  role="status" aria-live="polite"></span>
+          </div>
+        </section>
+        <aside class="media-review-info">
+          <details open>
+            <summary>Archived prompt</summary>
+            <pre id="generation-prompt">—</pre>
+          </details>
+          <details open>
+            <summary>Metadata</summary>
+            <pre id="generation-meta">{}</pre>
+          </details>
+          <details>
+            <summary>Review actions</summary>
+            <div id="generation-actions" class="generation-actions"></div>
+          </details>
+        </aside>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog class="generation-settings-dialog" id="generation-settings-dialog"
+          aria-labelledby="generation-settings-title">
+    <form class="generation-settings-shell" id="generation-settings-form">
+      <header class="media-dialog-header">
+        <div>
+          <div class="media-dialog-kicker">Current prompt contract</div>
+          <h2 id="generation-settings-title">Generation settings</h2>
+        </div>
+        <button class="dialog-close" id="generation-settings-close" type="button"
+                aria-label="Close generation settings">×</button>
+      </header>
+      <div class="generation-settings-body">
+        <section class="settings-section">
+          <div class="settings-section-title">Core run</div>
+          <div class="settings-grid">
+            <label>Mode
+              <select id="setting-mode" name="mode">
+                <option value="t2va">T2VA · text only</option>
+                <option value="i2va">I2VA · opening frame</option>
+                <option value="fl2va">FL2VA · first + last</option>
+                <option value="r2v">R2V · references</option>
+              </select>
+            </label>
+            <label>Duration (seconds)
+              <input id="setting-duration" name="duration" type="number"
+                     min="4" max="15" step="1" required>
+            </label>
+            <label>Aspect
+              <select id="setting-aspect" name="aspect">
+                <option>16:9</option><option>9:16</option><option>1:1</option>
+                <option>4:3</option><option>3:4</option><option>21:9</option>
+              </select>
+            </label>
+            <label>Seed <span class="setting-hint">blank = random</span>
+              <input id="setting-seed" name="seed" type="text"
+                     inputmode="numeric" pattern="[0-9]*">
+            </label>
+            <label>Steps
+              <input id="setting-steps" name="steps" type="number"
+                     min="1" max="50" step="1" required>
+            </label>
+            <label>Reference image sizing
+              <select id="setting-ref-image-size" name="ref_image_size">
+                <option value="match">Match</option>
+                <option value="max">Max</option>
+              </select>
+            </label>
+          </div>
+        </section>
+
+        <section class="settings-section">
+          <div class="settings-section-header">
+            <div class="settings-section-title">Canvas</div>
+            <div class="settings-presets">
+              <button class="settings-preset" id="settings-preview-preset"
+                      type="button">Preview · 0.5MP / 8</button>
+              <button class="settings-preset" id="settings-final-preset"
+                      type="button">Final · 0.9MP / 20</button>
+            </div>
+          </div>
+          <div class="settings-grid">
+            <label>Resolution mode
+              <select id="setting-size-mode">
+                <option value="mp">Megapixels + aspect</option>
+                <option value="explicit">Explicit pixels</option>
+              </select>
+            </label>
+            <label id="setting-mp-field">Megapixels
+              <input id="setting-mp" name="mp" type="number"
+                     min="0.1" max="1.1" step="0.1" required>
+            </label>
+            <label class="explicit-size-field">Width
+              <input id="setting-width" name="width" type="number"
+                     min="256" max="1536" step="32">
+            </label>
+            <label class="explicit-size-field">Height
+              <input id="setting-height" name="height" type="number"
+                     min="256" max="1536" step="32">
+            </label>
+          </div>
+          <div class="settings-computed" id="settings-computed"></div>
+        </section>
+
+        <section class="settings-section">
+          <div class="settings-section-title">Acceleration and models</div>
+          <div class="settings-checks">
+            <label><input id="setting-accel" type="checkbox"> Acceleration chain</label>
+            <label><input id="setting-turbo" type="checkbox"> Turbo LoRA</label>
+            <label><input id="setting-w4a8" type="checkbox"> W4A8 UNET <span class="setting-warning">experimental</span></label>
+          </div>
+          <div class="settings-grid">
+            <label>Turbo LoRA
+              <select id="setting-turbo-lora"></select>
+            </label>
+            <label>Turbo strength
+              <input id="setting-turbo-strength" type="number"
+                     min="0" max="2" step="0.05">
+            </label>
+            <label>UNET override
+              <select id="setting-unet"></select>
+            </label>
+          </div>
+        </section>
+
+        <section class="settings-section">
+          <div class="settings-section-title">Ordered references</div>
+          <div class="settings-reference-help" id="settings-reference-help">
+            T2VA uses no references.
+          </div>
+          <div class="settings-references" id="settings-references"></div>
+        </section>
+
+        <section class="settings-section">
+          <div class="settings-section-title">Optional SeedVR2 upscale</div>
+          <div class="settings-checks">
+            <label><input id="setting-upscale" type="checkbox"> Enable upscale</label>
+            <label><input id="setting-upscale-chunk" type="checkbox"> Temporal chunking</label>
+          </div>
+          <div class="settings-grid">
+            <label>Scale
+              <input id="setting-upscale-scale" type="number"
+                     min="1" max="4" step="0.1">
+            </label>
+            <label>Color correction
+              <select id="setting-upscale-color">
+                <option value="lab">Lab</option><option value="wavelet">Wavelet</option>
+                <option value="adain">AdaIN</option><option value="none">None</option>
+              </select>
+            </label>
+          </div>
+        </section>
+      </div>
+      <footer class="generation-settings-footer">
+        <div class="settings-status" id="generation-settings-status"
+             role="status" aria-live="polite"></div>
+        <button class="btn" id="generation-settings-cancel" type="button">Cancel</button>
+        <button class="btn primary" type="submit">Save settings</button>
+      </footer>
+    </form>
+  </dialog>
 </body>
 </html>

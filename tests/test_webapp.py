@@ -8,15 +8,18 @@ import tempfile
 import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
 from threading import Barrier, Event
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
 from scripts import design_studio as ds
 from webapp.app import create_app
 from webapp.config import Settings
+from webapp.hermes_events import HermesSessionEventBridge
 from webapp.job_store import ActiveJobError, JobStore
 from webapp.models import JobStatus
 from webapp.studio_manager import StudioJobManager
@@ -31,6 +34,33 @@ def _create_job_in_process(database, barrier, results):
         results.put("rejected")
 
 
+def _generation_settings_payload(**overrides):
+    payload = {
+        "mode": "t2va",
+        "duration": 5,
+        "aspect": "16:9",
+        "mp": 0.4,
+        "width": None,
+        "height": None,
+        "seed": None,
+        "steps": 20,
+        "accel": False,
+        "turbo": False,
+        "turbo_lora": "minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors",
+        "turbo_strength": 1.0,
+        "w4a8": False,
+        "unet": None,
+        "ref_image_size": "match",
+        "upscale": False,
+        "upscale_scale": 2.0,
+        "upscale_color": "lab",
+        "upscale_chunk": True,
+        "references": [],
+    }
+    payload.update(overrides)
+    return payload
+
+
 class PassiveManager:
     def __init__(self, _settings, store):
         self.store = store
@@ -41,8 +71,8 @@ class PassiveManager:
     def stop(self):
         pass
 
-    def submit_chat(self, project, message):
-        return self.store.create_chat_job(project, message)
+    def submit_chat(self, project, message, profile=None):
+        return self.store.create_chat_job(project, message, profile or "studio")
 
 
 class WebAppTestCase(unittest.TestCase):
@@ -73,6 +103,12 @@ class WebAppTestCase(unittest.TestCase):
 
 
 class AppFactoryTests(WebAppTestCase):
+    def test_default_job_timeout_covers_long_h3_runs(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("HERMES_STUDIO_JOB_TIMEOUT_SECONDS", None)
+            settings = Settings.from_environment()
+        self.assertEqual(settings.job_timeout_seconds, 10_800)
+
     def test_app_creation_has_no_runtime_side_effects(self):
         create_app(self.settings, PassiveManager)
         self.assertFalse(self.settings.runtime_root.exists())
@@ -88,10 +124,138 @@ class AppFactoryTests(WebAppTestCase):
                 f"/api/chat?pid={project}", json={"message": "again"})
             self.assertEqual(first.status_code, 202)
             self.assertEqual(first.json()["status"], "queued")
+            self.assertEqual(first.json()["profile"], "studio")
             self.assertEqual(second.status_code, 409)
+            chat = client.get(f"/api/project/{project}/chat").json()
+            self.assertEqual(
+                [(message["role"], message["content"]) for message in chat["messages"]],
+                [("user", "hello")],
+            )
+            activity = client.get(
+                f"/api/project/{project}/events").json()
+            self.assertEqual(activity["events"][0]["event_type"], "job.queued")
+            self.assertEqual(activity["events"][0]["profile"], "studio")
             listing = client.get(f"/api/project/{project}/jobs").json()
             self.assertEqual([job["id"] for job in listing["jobs"]],
                              [first.json()["id"]])
+
+    def test_profile_listing_and_specialist_dispatch_validation(self):
+        with TestClient(self.app()) as client:
+            project = self.create_project(client, "profiles")
+            profiles = client.get("/api/profiles").json()["profiles"]
+            self.assertIn(
+                "studio-storyboarder", [profile["id"] for profile in profiles])
+            accepted = client.post(
+                f"/api/chat?pid={project}",
+                json={"message": "Plan the shots", "profile": "studio-storyboarder"},
+            )
+            self.assertEqual(accepted.status_code, 202)
+            self.assertEqual(accepted.json()["profile"], "studio-storyboarder")
+
+            other = self.create_project(client, "unknown-profile")
+            rejected = client.post(
+                f"/api/chat?pid={other}",
+                json={"message": "hello", "profile": "not-a-profile"},
+            )
+            self.assertEqual(rejected.status_code, 400)
+
+    def test_generation_settings_manifest_and_prompt_readiness(self):
+        with TestClient(self.app()) as client:
+            project = self.create_project(client, "generation-settings")
+            root = self.settings.studio_root / "projects" / project
+            (root / "current_prompt.txt").write_text("compiled H3 prompt\n")
+
+            initial = client.get(
+                f"/api/project/{project}/generation-settings").json()
+            self.assertFalse(initial["exists"])
+            self.assertEqual(initial["readiness"]["status"], "not-configured")
+            self.assertEqual(initial["options"]["modes"],
+                             ["fl2va", "i2va", "r2v", "t2va"])
+
+            large_seed = "4364884737460484600"
+            saved = client.put(
+                f"/api/project/{project}/generation-settings",
+                json=_generation_settings_payload(seed=large_seed),
+            )
+            self.assertEqual(saved.status_code, 200)
+            body = saved.json()
+            self.assertTrue(body["exists"])
+            self.assertTrue(body["readiness"]["ready"])
+            self.assertEqual(body["settings"]["seed"], large_seed)
+            self.assertEqual(
+                body["readiness"]["resolution"], {
+                    "mode": "mp", "width": 832, "height": 480,
+                    "megapixels": 0.399,
+                })
+            self.assertEqual(body["readiness"]["timing"]["frames"], 124)
+            manifest = json.loads(
+                (root / "current_generation.json").read_text())
+            self.assertEqual(manifest["schema_version"], 1)
+            self.assertEqual(manifest["steps"], 20)
+            self.assertEqual(manifest["seed"], int(large_seed))
+
+            (root / "current_prompt.txt").write_text("changed prompt\n")
+            stale = client.get(f"/api/project/{project}").json()
+            self.assertFalse(
+                stale["generation_settings"]["readiness"]["ready"])
+            self.assertEqual(
+                stale["generation_settings"]["readiness"]["status"], "stale")
+
+    def test_generation_settings_mode_references_and_options(self):
+        with TestClient(self.app()) as client:
+            project = self.create_project(client, "generation-references")
+            root = self.settings.studio_root / "projects" / project
+            (root / "current_prompt.txt").write_text("reference prompt\n")
+            (root / "references" / "character.png").write_bytes(b"image")
+
+            blocked = client.put(
+                f"/api/project/{project}/generation-settings",
+                json=_generation_settings_payload(mode="r2v"),
+            ).json()
+            self.assertFalse(blocked["readiness"]["ready"])
+            self.assertIn(
+                "R2V requires", blocked["readiness"]["reasons"][0])
+
+            ready = client.put(
+                f"/api/project/{project}/generation-settings",
+                json=_generation_settings_payload(
+                    mode="r2v", duration=10, mp=0.9, steps=8,
+                    accel=True, turbo=True,
+                    references=["character.png"],
+                ),
+            ).json()
+            self.assertTrue(ready["readiness"]["ready"])
+            self.assertEqual(
+                ready["options"]["references"], ["character.png"])
+            self.assertEqual(ready["settings"]["references"], ["character.png"])
+
+            (root / "references" / "character.png").unlink()
+            missing = client.get(
+                f"/api/project/{project}/generation-settings").json()
+            self.assertIn(
+                "Missing reference", missing["readiness"]["reasons"][0])
+
+    def test_generation_settings_reject_unsafe_values(self):
+        with TestClient(self.app()) as client:
+            project = self.create_project(client, "generation-validation")
+            root = self.settings.studio_root / "projects" / project
+            (root / "current_prompt.txt").write_text("prompt\n")
+            cases = [
+                _generation_settings_payload(mp=1.2),
+                _generation_settings_payload(width=1344, height=None),
+                _generation_settings_payload(width=1536, height=768),
+                _generation_settings_payload(references=["../escape.png"]),
+                _generation_settings_payload(steps=0),
+                _generation_settings_payload(duration=3),
+            ]
+            for payload in cases:
+                with self.subTest(payload=payload):
+                    response = client.put(
+                        f"/api/project/{project}/generation-settings",
+                        json=payload,
+                    )
+                    self.assertEqual(response.status_code, 400)
+            self.assertFalse((root / "current_generation.json").exists())
 
     def test_media_route_exposes_only_media_areas(self):
         with TestClient(self.app()) as client:
@@ -107,6 +271,124 @@ class AppFactoryTests(WebAppTestCase):
             self.assertEqual(client.get(
                 f"/media/projects/{project}/research/note.md"
             ).status_code, 404)
+
+    def test_generation_detail_and_review_actions(self):
+        with TestClient(self.app()) as client:
+            project = self.create_project(client, "review")
+            root = self.settings.studio_root / "projects" / project
+            generation = root / "generations" / "001"
+            generation.mkdir()
+            (generation / "video.mp4").write_bytes(b"video")
+            (generation / "still.png").write_bytes(b"image")
+            (generation / "prompt.txt").write_text("structured prompt\n")
+            (generation / "meta.json").write_text(
+                json.dumps({"seed": 42, "recipe": "r2v"}))
+
+            listing = client.get(
+                f"/api/project/{project}/generations").json()["generations"]
+            self.assertEqual(listing[0]["files"], ["still.png", "video.mp4"])
+            self.assertEqual(
+                {item["kind"] for item in listing[0]["media"]},
+                {"image", "video"},
+            )
+            detail = client.get(
+                f"/api/project/{project}/generations/001").json()
+            self.assertEqual(detail["prompt"], "structured prompt\n")
+            self.assertEqual(detail["meta"]["seed"], 42)
+
+            promoted = client.post(
+                f"/api/project/{project}/generations/001/promote",
+                json={"filename": "video.mp4"},
+            )
+            self.assertEqual(promoted.status_code, 200)
+            promoted_name = promoted.json()["result"]["target"]
+            self.assertEqual(
+                (root / "final" / promoted_name).read_bytes(), b"video")
+            self.assertEqual((generation / "video.mp4").read_bytes(), b"video")
+
+            repeated = client.post(
+                f"/api/project/{project}/generations/001/promote",
+                json={"filename": "video.mp4"},
+            )
+            self.assertEqual(
+                repeated.json()["result"]["target"], promoted_name)
+
+            referenced = client.post(
+                f"/api/project/{project}/generations/001/use-as-reference",
+                json={"filename": "still.png"},
+            )
+            self.assertEqual(referenced.status_code, 200)
+            reference_name = referenced.json()["result"]["target"]
+            self.assertEqual(
+                (root / "references" / reference_name).read_bytes(), b"image")
+            refreshed = client.get(
+                f"/api/project/{project}/generations/001").json()
+            media = {item["name"]: item for item in refreshed["media"]}
+            self.assertTrue(media["video.mp4"]["promoted"])
+            self.assertTrue(media["still.png"]["reference"])
+
+    def test_generation_review_actions_never_overwrite_and_reject_bad_sources(self):
+        with TestClient(self.app()) as client:
+            project = self.create_project(client, "review-safety")
+            root = self.settings.studio_root / "projects" / project
+            generation = root / "generations" / "001"
+            generation.mkdir()
+            (generation / "video.mp4").write_bytes(b"new")
+            (generation / "prompt.txt").write_text("not media")
+            (root / "final" / "001_video.mp4").write_bytes(b"existing")
+
+            promoted = client.post(
+                f"/api/project/{project}/generations/001/promote",
+                json={"filename": "video.mp4"},
+            )
+            self.assertEqual(promoted.status_code, 200)
+            self.assertEqual(
+                promoted.json()["result"]["target"], "001_video_2.mp4")
+            self.assertEqual(
+                (root / "final" / "001_video.mp4").read_bytes(), b"existing")
+            self.assertEqual(
+                (root / "final" / "001_video_2.mp4").read_bytes(), b"new")
+
+            traversal = client.post(
+                f"/api/project/{project}/generations/001/promote",
+                json={"filename": "../video.mp4"},
+            )
+            unsupported = client.post(
+                f"/api/project/{project}/generations/001/promote",
+                json={"filename": "prompt.txt"},
+            )
+            missing = client.get(
+                f"/api/project/{project}/generations/999")
+            self.assertEqual(traversal.status_code, 400)
+            self.assertEqual(unsupported.status_code, 415)
+            self.assertEqual(missing.status_code, 404)
+
+    def test_concurrent_promote_is_idempotent(self):
+        with TestClient(self.app()) as client:
+            project = self.create_project(client, "review-concurrent")
+            root = self.settings.studio_root / "projects" / project
+            generation = root / "generations" / "001"
+            generation.mkdir()
+            (generation / "video.mp4").write_bytes(b"video")
+
+            def promote():
+                return client.post(
+                    f"/api/project/{project}/generations/001/promote",
+                    json={"filename": "video.mp4"},
+                )
+
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                responses = list(pool.map(lambda _: promote(), range(2)))
+            self.assertTrue(all(response.status_code == 200
+                                for response in responses))
+            self.assertEqual(
+                {response.json()["result"]["target"] for response in responses},
+                {"001_video.mp4"},
+            )
+            self.assertEqual([
+                item.name for item in (root / "final").iterdir()
+                if not item.name.startswith(".")
+            ], ["001_video.mp4"])
 
     def test_media_and_upload_reject_symlinked_reference_directory(self):
         with TestClient(self.app()) as client:
@@ -126,6 +408,15 @@ class AppFactoryTests(WebAppTestCase):
             )
             self.assertEqual(response.status_code, 400)
             self.assertFalse((outside / "image.png").exists())
+            generation = root / "generations" / "001"
+            generation.mkdir()
+            (generation / "still.png").write_bytes(b"image")
+            reviewed = client.post(
+                f"/api/project/{project}/generations/001/use-as-reference",
+                json={"filename": "still.png"},
+            )
+            self.assertEqual(reviewed.status_code, 400)
+            self.assertFalse((outside / "001_still.png").exists())
 
     def test_concurrent_same_name_uploads_never_overwrite(self):
         with TestClient(self.app()) as client:
@@ -180,6 +471,104 @@ class JobStoreTests(WebAppTestCase):
         store = JobStore(self.settings.database_path)
         store.initialize()
         return store
+
+    def test_profile_sessions_are_isolated_per_project(self):
+        store = self.store()
+        first = store.create_chat_job(
+            "project", "plan", profile="studio-storyboarder")
+        store.claim(first.id, "worker")
+        store.complete(first.id, "worker", "planned", "story-session")
+        second = store.create_chat_job(
+            "project", "prompt", profile="studio-prompt-engineer")
+        store.claim(second.id, "worker")
+        store.complete(second.id, "worker", "prompted", "prompt-session")
+
+        self.assertEqual(
+            store.get_session("project", "studio-storyboarder"),
+            "story-session",
+        )
+        self.assertEqual(
+            store.get_session("project", "studio-prompt-engineer"),
+            "prompt-session",
+        )
+
+    def test_external_user_append_dedupes_active_web_turn(self):
+        store = self.store()
+        store.create_chat_job("project", "same message")
+        store.append_external_event("project", "user", "same message")
+        total, events = store.chat_events("project")
+        self.assertEqual(total, 1)
+        self.assertEqual(events[0].content, "same message")
+
+    def test_job_event_cursor_only_advances_through_returned_events(self):
+        store = self.store()
+        job = store.create_chat_job("project", "message")
+        cursor, initial = store.job_events("project")
+        self.assertEqual(len(initial), 1)
+        store.append_job_event(
+            job.id, "studio", "commentary", "Still working", status="running")
+        next_cursor, added = store.job_events("project", cursor)
+        self.assertEqual([event.summary for event in added], ["Still working"])
+        self.assertGreater(next_cursor, cursor)
+
+    def test_hermes_session_bridge_projects_reasoning_and_tools(self):
+        store = self.store()
+        job = store.create_chat_job("project", "inspect")
+        home = Path(self.temp.name) / "hermes"
+        state = home / "profiles" / "studio" / "state.db"
+        state.parent.mkdir(parents=True)
+        started_at = time.time()
+        with closing(sqlite3.connect(state)) as connection:
+            connection.executescript(
+                """
+                CREATE TABLE sessions (
+                    id TEXT PRIMARY KEY, source TEXT, started_at REAL
+                );
+                CREATE TABLE messages (
+                    id INTEGER PRIMARY KEY, session_id TEXT, role TEXT,
+                    content TEXT, tool_name TEXT, tool_calls TEXT,
+                    reasoning TEXT, reasoning_content TEXT, timestamp REAL
+                );
+                """
+            )
+            connection.execute(
+                "INSERT INTO sessions VALUES (?, ?, ?)",
+                ("session-1", "studio-web", started_at),
+            )
+            connection.execute(
+                "INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    1, "session-1", "assistant", "", None,
+                    json.dumps([{"function": {
+                        "name": "read_file",
+                        "arguments": json.dumps({"path": "/tmp/example"}),
+                    }}]),
+                    "Inspecting the project", None, started_at + 1,
+                ),
+            )
+            connection.execute(
+                "INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    2, "session-1", "tool", json.dumps({"success": True}),
+                    "read_file", None, None, None, started_at + 2,
+                ),
+            )
+            connection.commit()
+
+        with patch.dict(os.environ, {"HERMES_HOME": str(home)}):
+            bridge = HermesSessionEventBridge(
+                store, self.settings, job, "studio-web", started_at)
+            bridge.poll()
+
+        _, events = store.job_events("project")
+        event_types = [event.event_type for event in events]
+        self.assertIn("profile.connected", event_types)
+        self.assertIn("reasoning", event_types)
+        self.assertIn("tool.started", event_types)
+        self.assertIn("tool.completed", event_types)
+        completed = next(
+            event for event in events if event.event_type == "tool.completed")
+        self.assertEqual(completed.detail["duration"], 1.0)
 
     def test_cross_connection_active_job_claim_is_atomic(self):
         first_store = self.store()
@@ -305,6 +694,17 @@ class StudioManagerTests(WebAppTestCase):
             [("user", "question"), ("assistant", "reply")],
         )
 
+    def test_specialist_command_uses_minimal_toolset(self):
+        store = JobStore(self.settings.database_path)
+        store.initialize()
+        manager = StudioJobManager(self.settings, store)
+        job = store.create_chat_job(
+            "project", "plan", profile="studio-storyboarder")
+        command = manager._default_command(job, None)
+        self.assertEqual(
+            command[command.index("-t") + 1], "file,terminal,skills")
+        self.assertNotIn("all", command)
+
     def test_shutdown_terminates_tracked_child(self):
         ds.studio_root(str(self.settings.studio_root))
         project = ds.create_project(self.settings.studio_root, "shutdown")
@@ -401,6 +801,29 @@ class StudioManagerTests(WebAppTestCase):
         self.assertEqual(
             [event.role for event in events], ["user", "system"])
         self.assertIn("failed", events[1].content.lower())
+
+    def test_specialist_failure_does_not_interrupt_comfyui(self):
+        project = ds.create_project(self.settings.studio_root, "specialist-failure")
+        store = JobStore(self.settings.database_path)
+        cleanup_calls = []
+
+        manager = StudioJobManager(
+            self.settings,
+            store,
+            command_builder=lambda *_: [
+                sys.executable, "-c", "raise SystemExit(7)"],
+            cleanup_callback=lambda: cleanup_calls.append(True),
+        )
+        manager.start()
+        try:
+            job = manager.submit_chat(
+                project.name, "plan", "studio-storyboarder")
+            with self.assertLogs("webapp.studio_manager", level="ERROR"):
+                failed = self.wait_for_terminal(store, job.id)
+        finally:
+            manager.stop()
+        self.assertEqual(failed.status, JobStatus.FAILED)
+        self.assertEqual(cleanup_calls, [])
 
     def test_startup_recovers_job_without_live_worker_lease(self):
         ds.studio_root(str(self.settings.studio_root))

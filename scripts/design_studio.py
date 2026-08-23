@@ -26,9 +26,12 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
+import time
 import urllib.request
+from dataclasses import replace
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -46,6 +49,18 @@ GROK_IMAGE_OUTPUT = (Path.home() / ".hermes" / "profiles" / "studio-grok" /
 DEFAULT_ROOT = REPO_ROOT / "studio-root"
 DEFAULT_RUNTIME = DEFAULT_ROOT.parent / ".runtime"
 SESSION_ID_RE = re.compile(r"session_id:\s*([A-Za-z0-9_-]+)")
+LOCAL_SPECIALIST_PROFILES = {
+    "studio-storyboarder",
+    "studio-prompt-engineer",
+    "studio-reviewer",
+    "studio-illustrator",
+}
+SPECIALIST_TOOLSETS = {
+    "studio-storyboarder": "file,terminal,skills",
+    "studio-prompt-engineer": "file,terminal,skills",
+    "studio-reviewer": "file,terminal,vision,skills",
+    "studio-illustrator": "file,terminal,skills",
+}
 
 
 def free_comfy_vram() -> dict:
@@ -234,6 +249,137 @@ def archive_outputs(root: Path, project: str, outputs: list[str],
         shutil.rmtree(gen_dir, ignore_errors=True)
         raise
     return gen_dir
+
+
+def dispatch_profile(root: Path, project: str, profile: str, task: str,
+                     timeout: int = 1800) -> str:
+    """Run one serialized local specialist handoff with a persistent session."""
+    if profile not in LOCAL_SPECIALIST_PROFILES:
+        raise ValueError(f"unsupported Studio specialist profile: {profile}")
+    pp = project_path(root, project)
+    session_dir = root / "tmp" / "profile-sessions"
+    session_dir.mkdir(parents=True, exist_ok=True)
+    session_file = session_dir / f"{pp.name}.{profile}"
+    lock_path = root / "tmp" / ".profile-dispatch.lock"
+    command = ["hermes", "-p", profile]
+    session_id = None
+    if session_file.exists():
+        candidate = session_file.read_text(encoding="utf-8").strip()
+        if re.fullmatch(r"[A-Za-z0-9_-]+", candidate):
+            session_id = candidate
+            command += ["-r", candidate]
+    prompt = (
+        f"Hermes Studio project id: {pp.name}\n"
+        f"Project path: {pp}\n\n"
+        f"Handoff from the studio orchestrator:\n{task}"
+    )
+    command += [
+        "chat", "-Q", "-t", SPECIALIST_TOOLSETS[profile],
+        "--source", "studio-handoff",
+        "-q", prompt,
+    ]
+
+    bridge = None
+    store = None
+    settings = None
+    specialist_job = None
+    bridge_type = None
+    job_id = os.environ.get("HERMES_STUDIO_JOB_ID", "").strip()
+    if job_id:
+        try:
+            from webapp.config import Settings
+            from webapp.hermes_events import HermesSessionEventBridge
+            from webapp.job_store import JobStore
+
+            settings = Settings.from_environment()
+            store = JobStore(settings.database_path)
+            store.initialize()
+            parent_job = store.get_job(job_id)
+            specialist_job = replace(parent_job, profile=profile)
+            bridge_type = HermesSessionEventBridge
+        except Exception:
+            store = None
+            settings = None
+            specialist_job = None
+            bridge_type = None
+
+    with lock_path.open("a+b") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        if store and settings and specialist_job and bridge_type:
+            store.append_job_event(
+                job_id,
+                profile,
+                "handoff.started",
+                f"Handoff started: {profile}",
+                status="running",
+                detail={"task": task[:500]},
+            )
+            bridge = bridge_type(
+                store,
+                settings,
+                specialist_job,
+                source="studio-handoff",
+                started_at=time.time(),
+                session_id=session_id,
+            )
+            bridge.prepare()
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+        deadline = time.monotonic() + timeout
+        while True:
+            if bridge:
+                bridge.poll()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+                process.communicate()
+                if store:
+                    store.append_job_event(
+                        job_id, profile, "handoff.failed",
+                        f"Handoff timed out after {timeout}s", status="failed")
+                raise TimeoutError(
+                    f"Studio specialist {profile} timed out after {timeout}s")
+            try:
+                stdout, stderr = process.communicate(timeout=min(1.0, remaining))
+                if bridge:
+                    bridge.poll()
+                break
+            except subprocess.TimeoutExpired:
+                continue
+
+    if process.returncode:
+        error = stderr.strip() or f"exit code {process.returncode}"
+        if store:
+            store.append_job_event(
+                job_id, profile, "handoff.failed",
+                f"{profile} failed", status="failed",
+                detail={"error": error[:500]})
+        raise RuntimeError(f"{profile} failed ({process.returncode}): {error}")
+    reply = stdout.strip()
+    if not reply:
+        raise RuntimeError(f"{profile} returned an empty reply")
+    match = SESSION_ID_RE.search(stderr)
+    resolved_session = match.group(1) if match else (
+        bridge.session_id if bridge else session_id)
+    if resolved_session:
+        temp = session_file.with_suffix(session_file.suffix + ".tmp")
+        temp.write_text(resolved_session + "\n", encoding="utf-8")
+        temp.replace(session_file)
+    if store:
+        store.append_job_event(
+            job_id, profile, "handoff.completed",
+            f"Handoff completed: {profile}", status="completed",
+            detail={"session_id": resolved_session or ""})
+    return reply
 
 
 def dispatch_grok(root: Path, project: str, task: str,
@@ -449,6 +595,12 @@ def main(argv=None) -> int:
     sp.add_argument("task")
     sp.add_argument("--timeout", type=int, default=600)
 
+    sp = sub.add_parser("dispatch-profile")
+    sp.add_argument("project")
+    sp.add_argument("profile", choices=sorted(LOCAL_SPECIALIST_PROFILES))
+    sp.add_argument("task")
+    sp.add_argument("--timeout", type=int, default=1800)
+
     args = ap.parse_args(argv)
     root = studio_root(args.root)
 
@@ -510,6 +662,9 @@ def main(argv=None) -> int:
             source_root=GROK_IMAGE_OUTPUT, transport="xai-imagine"))
     elif args.cmd == "dispatch-grok":
         print(dispatch_grok(root, args.project, args.task, args.timeout))
+    elif args.cmd == "dispatch-profile":
+        print(dispatch_profile(
+            root, args.project, args.profile, args.task, args.timeout))
     return 0
 
 

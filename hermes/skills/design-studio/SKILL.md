@@ -25,7 +25,7 @@ they are not the normal Studio transport.
 
 ```
 <root>/projects/YYYY-MM-DD_<name>/
-  brief.md  chat.jsonl  current_prompt.txt
+  brief.md  chat.jsonl  current_prompt.txt  current_generation.json
   references/   generations/NNN/{video.mp4,prompt.txt,meta.json}   final/
 <root>/shared/{characters,styles,workflows}/   <root>/tmp/
 ```
@@ -69,6 +69,13 @@ Do not use raw REST, curl, `/prompt`, `/history`, `/upload`, or `/free` during
 normal Studio work. If MCP is unavailable, stop with a clear error; do not
 silently fall back to REST.
 
+`current_generation.json` is the web UI's typed run contract. It records mode,
+duration, canvas/MP, steps, accel, turbo/model overrides, ordered references and
+optional upscale settings plus the SHA-256 of `current_prompt.txt`. Do not
+silently rewrite it from agent prose. A prompt edit intentionally makes the UI
+show stale settings; the user must review and save the panel again before the
+future Generate action is allowed.
+
 The legacy `generate` and `generate-image` CLI commands remain for manual
 diagnostics only. They explicitly clean VRAM, and timeout paths interrupt the
 ComfyUI job before cleanup.
@@ -97,6 +104,32 @@ python3 ~/repos/hermes-studio/scripts/design_studio.py archive-grok \
 
 Imagine can consume xAI quota: dispatch image generation only for an explicit
 user request. Research tasks must not generate images as a side effect.
+
+## Local specialist dispatch
+
+The `studio` orchestrator can run one serialized, persistent handoff to a local
+specialist profile:
+
+```bash
+python3 ~/repos/hermes-studio/scripts/design_studio.py dispatch-profile \
+  <project-id> studio-storyboarder "<self-contained shot-planning task>"
+python3 ~/repos/hermes-studio/scripts/design_studio.py dispatch-profile \
+  <project-id> studio-prompt-engineer "Convert storyboard.md into the official H3 prompt"
+```
+
+Allowed profiles are `studio-storyboarder`, `studio-prompt-engineer`,
+`studio-reviewer`, and `studio-illustrator`. Handoffs are serialized and keep a
+per-project session for each profile. The web runtime projects their reasoning,
+tool use, and lifecycle into the parent job's activity feed. Specialists never
+queue ComfyUI; only `studio` owns GPU execution. Use the reviewer only when the
+user explicitly requests agent review—the human remains the final judge.
+
+Dispatch only for an explicit web profile selection or one exact command:
+`/handoff storyboarder ...`, `/handoff prompt-engineer ...`,
+`/handoff reviewer ...`, or `/handoff illustrator ...`. Do not infer routing
+from ordinary language, auto-chain specialists, or start a render from a
+specialist result. Specialist subprocesses receive fixed minimal toolsets;
+ComfyUI and unrelated tools are not exposed.
 
 ## Output rules
 

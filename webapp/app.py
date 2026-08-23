@@ -15,7 +15,9 @@ from fastapi.staticfiles import StaticFiles
 
 from scripts import design_studio as ds
 from webapp.config import Settings
+from webapp.generation_settings_store import GenerationSettingsStore
 from webapp.job_store import JobStore
+from webapp.media_review_store import MediaReviewStore
 from webapp.models import Job
 from webapp.reference_store import ReferenceStore
 from webapp.routes import router
@@ -25,7 +27,8 @@ from webapp.studio_manager import StudioJobManager
 class JobManager(Protocol):
     def start(self) -> None: ...
     def stop(self) -> None: ...
-    def submit_chat(self, project: str, message: str) -> Job: ...
+    def submit_chat(self, project: str, message: str,
+                    profile: str | None = None) -> Job: ...
 
 
 ManagerFactory = Callable[[Settings, JobStore], JobManager]
@@ -40,9 +43,13 @@ def create_app(settings: Settings | None = None,
         ds.studio_root(str(settings.studio_root))
         store = JobStore(settings.database_path)
         references = ReferenceStore(settings)
+        media_reviews = MediaReviewStore()
+        generation_settings = GenerationSettingsStore(settings)
         manager = manager_factory(settings, store)
         application.state.job_store = store
         application.state.reference_store = references
+        application.state.media_review_store = media_reviews
+        application.state.generation_settings_store = generation_settings
         application.state.job_manager = manager
         manager.start()
         try:

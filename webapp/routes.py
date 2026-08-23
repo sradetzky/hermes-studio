@@ -1,16 +1,25 @@
 from __future__ import annotations
 
-import json
-import logging
 from pathlib import Path
+from typing import NoReturn
 
 from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from scripts import design_studio as ds
 from webapp.config import Settings
+from webapp.generation_settings_store import (
+    GenerationSettingsError,
+    GenerationSettingsStore,
+)
 from webapp.job_store import ActiveJobError, JobNotFoundError, JobStore
+from webapp.media_review_store import (
+    MediaNotFoundError,
+    MediaReviewError,
+    MediaReviewStore,
+    UnsupportedMediaError,
+)
 from webapp.reference_store import (
     ReferenceStore,
     ReferenceStoreError,
@@ -20,7 +29,6 @@ from webapp.reference_store import (
 from webapp.studio_manager import StudioJobManager
 
 
-log = logging.getLogger(__name__)
 router = APIRouter()
 MEDIA_AREAS = {"references", "generations", "final"}
 
@@ -32,6 +40,36 @@ class ProjectIn(BaseModel):
 
 class ChatIn(BaseModel):
     message: str
+    profile: str = "studio"
+
+
+class MediaActionIn(BaseModel):
+    filename: str
+
+
+class GenerationSettingsIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: str
+    duration: int
+    aspect: str
+    mp: float
+    width: int | None
+    height: int | None
+    seed: str | int | None
+    steps: int
+    accel: bool
+    turbo: bool
+    turbo_lora: str | None
+    turbo_strength: float
+    w4a8: bool
+    unet: str | None
+    ref_image_size: str
+    upscale: bool
+    upscale_scale: float
+    upscale_color: str
+    upscale_chunk: bool
+    references: list[str]
 
 
 def _settings(request: Request) -> Settings:
@@ -48,6 +86,22 @@ def _manager(request: Request) -> StudioJobManager:
 
 def _references(request: Request) -> ReferenceStore:
     return request.app.state.reference_store
+
+
+def _media_reviews(request: Request) -> MediaReviewStore:
+    return request.app.state.media_review_store
+
+
+def _generation_settings(request: Request) -> GenerationSettingsStore:
+    return request.app.state.generation_settings_store
+
+
+def _raise_media_review_error(exc: MediaReviewError) -> NoReturn:
+    if isinstance(exc, MediaNotFoundError):
+        raise HTTPException(404, str(exc))
+    if isinstance(exc, UnsupportedMediaError):
+        raise HTTPException(415, str(exc))
+    raise HTTPException(400, str(exc))
 
 
 def resolve_project(request: Request, project_id: str) -> Path:
@@ -73,6 +127,21 @@ def list_projects(request: Request):
             ),
         }
         for name in reversed(ds.list_projects(root))
+    ]}
+
+
+@router.get("/api/profiles")
+def list_profiles(request: Request):
+    roles = {
+        "studio": "Orchestrator",
+        "studio-storyboarder": "Storyboarder",
+        "studio-prompt-engineer": "Prompt engineer",
+        "studio-reviewer": "Reviewer",
+        "studio-illustrator": "Illustrator",
+    }
+    return {"profiles": [
+        {"id": profile, "label": roles.get(profile, profile)}
+        for profile in _settings(request).profiles
     ]}
 
 
@@ -102,7 +171,25 @@ def get_project(request: Request, project_id: str):
         "current_prompt": (
             prompt.read_text(encoding="utf-8") if prompt.exists() else ""),
         "chat_count": chat_count,
+        "generation_settings": _generation_settings(request).describe(project),
     }
+
+
+@router.get("/api/project/{project_id}/generation-settings")
+def get_generation_settings(request: Request, project_id: str):
+    project = resolve_project(request, project_id)
+    return _generation_settings(request).describe(project, include_options=True)
+
+
+@router.put("/api/project/{project_id}/generation-settings")
+def put_generation_settings(request: Request, project_id: str,
+                            body: GenerationSettingsIn):
+    project = resolve_project(request, project_id)
+    try:
+        return _generation_settings(request).save(
+            project, body.model_dump())
+    except GenerationSettingsError as exc:
+        raise HTTPException(400, str(exc))
 
 
 @router.get("/api/project/{project_id}/chat")
@@ -118,29 +205,55 @@ def get_chat(request: Request, project_id: str,
 @router.get("/api/project/{project_id}/generations")
 def get_generations(request: Request, project_id: str):
     project = resolve_project(request, project_id)
+    reviews = _media_reviews(request)
     generations = []
     directory = project / "generations"
     if directory.is_dir():
         for generation in sorted(directory.iterdir(), reverse=True):
             if not generation.is_dir() or generation.is_symlink():
                 continue
-            meta = {}
-            meta_path = generation / "meta.json"
-            if meta_path.exists():
-                try:
-                    meta = json.loads(meta_path.read_text(encoding="utf-8"))
-                except json.JSONDecodeError:
-                    log.warning("Invalid generation metadata: %s", meta_path)
-            files = sorted(
-                item.name for item in generation.iterdir()
-                if item.is_file() and not item.name.startswith(".")
-            )
-            generations.append({
-                "gen": generation.name,
-                "files": files,
-                "meta": meta,
-            })
+            try:
+                generations.append(reviews.describe_generation(
+                    project, generation.name, include_prompt=False))
+            except MediaReviewError:
+                continue
     return {"generations": generations}
+
+
+@router.get("/api/project/{project_id}/generations/{generation_id}")
+def get_generation(request: Request, project_id: str, generation_id: str):
+    project = resolve_project(request, project_id)
+    try:
+        return _media_reviews(request).describe_generation(
+            project, generation_id, include_prompt=True)
+    except MediaReviewError as exc:
+        _raise_media_review_error(exc)
+
+
+@router.post(
+    "/api/project/{project_id}/generations/{generation_id}/promote")
+def promote_generation_media(request: Request, project_id: str,
+                             generation_id: str, body: MediaActionIn):
+    project = resolve_project(request, project_id)
+    try:
+        saved = _media_reviews(request).publish(
+            project, generation_id, body.filename, "promote")
+    except MediaReviewError as exc:
+        _raise_media_review_error(exc)
+    return {"ok": True, "result": saved.to_dict()}
+
+
+@router.post(
+    "/api/project/{project_id}/generations/{generation_id}/use-as-reference")
+def use_generation_as_reference(request: Request, project_id: str,
+                                generation_id: str, body: MediaActionIn):
+    project = resolve_project(request, project_id)
+    try:
+        saved = _media_reviews(request).publish(
+            project, generation_id, body.filename, "reference")
+    except MediaReviewError as exc:
+        _raise_media_review_error(exc)
+    return {"ok": True, "result": saved.to_dict()}
 
 
 @router.get("/api/project/{project_id}/references")
@@ -176,8 +289,11 @@ def chat(request: Request, body: ChatIn,
     message = body.message.strip()
     if not message:
         raise HTTPException(400, "empty message")
+    if body.profile not in _settings(request).profiles:
+        raise HTTPException(400, f"unknown Studio profile: {body.profile}")
     try:
-        job = _manager(request).submit_chat(project.name, message)
+        job = _manager(request).submit_chat(
+            project.name, message, body.profile)
     except ActiveJobError as exc:
         raise HTTPException(409, str(exc))
     return job.to_dict()
@@ -197,6 +313,17 @@ def get_project_jobs(request: Request, project_id: str,
     project = resolve_project(request, project_id)
     jobs = _store(request).list_jobs(project.name, limit)
     return {"jobs": [job.to_dict() for job in jobs]}
+
+
+@router.get("/api/project/{project_id}/events")
+def get_project_events(request: Request, project_id: str,
+                       after: int = Query(0, ge=0)):
+    project = resolve_project(request, project_id)
+    cursor, events = _store(request).job_events(project.name, after)
+    return {
+        "cursor": cursor,
+        "events": [event.to_dict() for event in events],
+    }
 
 
 @router.get("/media/projects/{project_id}/{area}/{relative_path:path}")

@@ -9,7 +9,7 @@ from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from scripts import design_studio as ds
 from scripts import krea2_image
@@ -177,6 +177,42 @@ class ProjectPathTests(unittest.TestCase):
         second_command = run.call_args.args[0]
         self.assertIn("-r", second_command)
         self.assertIn("grok-session-1", second_command)
+
+    @patch.object(ds.subprocess, "Popen")
+    def test_local_profile_dispatch_persists_project_session(self, popen):
+        process = MagicMock()
+        process.returncode = 0
+        process.communicate.return_value = (
+            "storyboard ready\n", "session_id: storyboard-session\n")
+        popen.return_value = process
+
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("HERMES_STUDIO_JOB_ID", None)
+            reply = ds.dispatch_profile(
+                self.root, self.project.name,
+                "studio-storyboarder", "Plan three shots")
+            self.assertEqual(reply, "storyboard ready")
+            first_command = popen.call_args.args[0]
+            self.assertNotIn("-r", first_command)
+            self.assertIn("--source", first_command)
+            self.assertIn("studio-handoff", first_command)
+            self.assertEqual(
+                first_command[first_command.index("-t") + 1],
+                "file,terminal,skills",
+            )
+            self.assertNotIn("all", first_command)
+
+            ds.dispatch_profile(
+                self.root, self.project.name,
+                "studio-storyboarder", "Revise the plan")
+            second_command = popen.call_args.args[0]
+            self.assertIn("-r", second_command)
+            self.assertIn("storyboard-session", second_command)
+
+    def test_local_profile_dispatch_rejects_unknown_profile(self):
+        with self.assertRaisesRegex(ValueError, "unsupported"):
+            ds.dispatch_profile(
+                self.root, self.project.name, "studio", "Do everything")
 
 
 class LoraParserTests(unittest.TestCase):
