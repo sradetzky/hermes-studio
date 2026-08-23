@@ -124,16 +124,15 @@ without adding authentication and reviewing the media/write endpoints.
 Run the complete test suite:
 
 ```bash
-.venv/bin/python -m unittest tests.test_webapp tests.test_studio
+.venv/bin/python -m unittest discover -s tests
+node --test tests/test_frontend_contracts.mjs tests/test_frontend_dom.mjs
 ```
 
 Compile-check Python and JavaScript:
 
 ```bash
 python -m compileall -q webapp scripts tests
-node --check webapp/static/app.js
-node --check webapp/static/generation-settings.js
-node --check webapp/static/media-review.js
+for file in webapp/static/*.js webapp/static/*.mjs; do node --check "$file"; done
 ```
 
 Rebuild the committed stylesheet after HTML/JS utility-class changes:

@@ -21,6 +21,7 @@ import {
   refreshLivePlane,
   refreshReferencePlane,
 } from './refresh-planes.mjs';
+import {updateRefreshStatus} from './refresh-status.mjs';
 import {$, activeClip, requestJson, showEmpty, state} from './shared.js';
 
 async function loadProfiles() {
@@ -238,16 +239,7 @@ async function createProject() {
 }
 
 function reportRefreshPlane(name, error) {
-  if (error) state.refreshErrors[name] = error.message;
-  else delete state.refreshErrors[name];
-  const failures = Object.entries(state.refreshErrors);
-  const status = $('#status');
-  if (failures.length) {
-    status.textContent = `refresh: ${failures.map(
-      ([plane, message]) => `${plane}: ${message}`).join(' · ')}`;
-  } else if (status.textContent.startsWith('refresh:')) {
-    status.textContent = '';
-  }
+  updateRefreshStatus(state.refreshErrors, $('#status'), name, error);
 }
 
 function applyProjectNavigation(project) {
