@@ -18,8 +18,8 @@ GPU execution, and the project filesystem remains the media source of truth.
 - Live profile reasoning summaries, tool activity, handoffs, and job status
 - Safe multi-file reference uploads with atomic non-overwriting publication
 - Typed prompt-bound H3 generation settings with readiness/staleness validation
-- Editable mode, duration, MP or explicit canvas, steps, accel, turbo, model,
-  ordered-reference, W4A8, and SeedVR2 settings
+- Simplified mode, canvas, seed, steps, and exact fused-modulation/ChunkFF
+  acceleration settings; prompt text owns clip length and ordered references
 - Media/recipe/review filters and a full generation detail viewer
 - Promote-to-final and use-as-reference actions with provenance
 - Guarded media routes, symlink/path traversal protection, lifecycle cleanup,

@@ -82,14 +82,16 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
   dialog, archived prompt/metadata/action history, and guarded idempotent copies
   to `final/` or `references/`
 - Web M4.1 generation contract: typed prompt-bound `current_generation.json`,
-  readiness/staleness display, safe MP/explicit-canvas validation, editable
-  steps/accel/turbo/model/upscale knobs, and ordered mode-aware references
+  readiness/staleness display, safe MP/explicit-canvas validation, and editable
+  mode/seed/steps/exact-accel knobs; prompts own duration and ordered references
 - Preview-release hardening: public setup/release docs, corrected custom-provider
   example, local dependency/security/browser gates, and specialist lease recovery
   that cannot cancel Studio-owned ComfyUI work
 - Release-candidate audit: trusted localhost boundary, private runtime state,
   symlink-safe metadata, atomic generation publication, resilient scheduling,
   exact tool-call projection, and stale settings-form protection
+- Generation controls simplified: prompt-owned length/references, no SeedVR2 or
+  model overrides, and accel now means Sol fused modulation + ChunkFF only
 
 ## Next steps
 

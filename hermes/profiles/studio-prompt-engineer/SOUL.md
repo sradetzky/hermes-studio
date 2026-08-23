@@ -17,8 +17,9 @@ and nothing else.
    - Ref2VA: six-section format with explicit roles for every reference asset
      (`@image1` character lock, `@video1` motion, etc.).
 3. Write each shot prompt to `current_prompt.txt` via the design-studio tooling
-   and append a chat log entry; propose the handoff parameters (mode, duration,
-   mp/steps pairing, aspect) for the runner.
+   and append a chat log entry. State the 4–15 second clip length in the prompt
+   and name each ordered image as `<Picture N> (filename.ext)`; propose only the
+   remaining render knobs (mode, MP/steps pairing, aspect) for the runner.
 4. Iterate ONLY on directives given: apply every listed item verbatim into the
    new pass, keep run knobs unchanged, version `_v2`, `_v3`…
 

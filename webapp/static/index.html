@@ -174,10 +174,6 @@
                 <option value="r2v">R2V · references</option>
               </select>
             </label>
-            <label>Duration (seconds)
-              <input id="setting-duration" name="duration" type="number"
-                     min="4" max="15" step="1" required>
-            </label>
             <label>Aspect
               <select id="setting-aspect" name="aspect">
                 <option>16:9</option><option>9:16</option><option>1:1</option>
@@ -188,16 +184,9 @@
               <input id="setting-seed" name="seed" type="text"
                      inputmode="numeric" pattern="[0-9]*">
             </label>
-            <label>Steps
-              <input id="setting-steps" name="steps" type="number"
-                     min="1" max="50" step="1" required>
-            </label>
-            <label>Reference image sizing
-              <select id="setting-ref-image-size" name="ref_image_size">
-                <option value="match">Match</option>
-                <option value="max">Max</option>
-              </select>
-            </label>
+          </div>
+          <div class="settings-computed">
+            Length and ordered references are read from the current prompt.
           </div>
         </section>
 
@@ -235,50 +224,14 @@
         </section>
 
         <section class="settings-section">
-          <div class="settings-section-title">Acceleration and models</div>
+          <div class="settings-section-title">Sampling</div>
           <div class="settings-checks">
-            <label><input id="setting-accel" type="checkbox"> Acceleration chain</label>
-            <label><input id="setting-turbo" type="checkbox"> Turbo LoRA</label>
-            <label><input id="setting-w4a8" type="checkbox"> W4A8 UNET <span class="setting-warning">experimental</span></label>
+            <label><input id="setting-accel" type="checkbox"> Fused modulation + ChunkFF</label>
           </div>
           <div class="settings-grid">
-            <label>Turbo LoRA
-              <select id="setting-turbo-lora"></select>
-            </label>
-            <label>Turbo strength
-              <input id="setting-turbo-strength" type="number"
-                     min="0" max="2" step="0.05">
-            </label>
-            <label>UNET override
-              <select id="setting-unet"></select>
-            </label>
-          </div>
-        </section>
-
-        <section class="settings-section">
-          <div class="settings-section-title">Ordered references</div>
-          <div class="settings-reference-help" id="settings-reference-help">
-            T2VA uses no references.
-          </div>
-          <div class="settings-references" id="settings-references"></div>
-        </section>
-
-        <section class="settings-section">
-          <div class="settings-section-title">Optional SeedVR2 upscale</div>
-          <div class="settings-checks">
-            <label><input id="setting-upscale" type="checkbox"> Enable upscale</label>
-            <label><input id="setting-upscale-chunk" type="checkbox"> Temporal chunking</label>
-          </div>
-          <div class="settings-grid">
-            <label>Scale
-              <input id="setting-upscale-scale" type="number"
-                     min="1" max="4" step="0.1">
-            </label>
-            <label>Color correction
-              <select id="setting-upscale-color">
-                <option value="lab">Lab</option><option value="wavelet">Wavelet</option>
-                <option value="adain">AdaIN</option><option value="none">None</option>
-              </select>
+            <label>Steps
+              <input id="setting-steps" name="steps" type="number"
+                     min="1" max="50" step="1" required>
             </label>
           </div>
         </section>

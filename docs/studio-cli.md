@@ -65,4 +65,5 @@ python3 scripts/design_studio.py generate-image <project-id> \
 - Always smoke new parameter combos with `--dry-run` first
 - The web settings editor owns `current_generation.json`; editing
   `current_prompt.txt` makes its readiness stale until the user reviews and
-  saves the settings again
+  saves the settings again. Prompt text owns the 4–15 second clip length and
+  ordered `<Picture N> (filename.ext)` reference mapping.

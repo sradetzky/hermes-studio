@@ -5,6 +5,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,6 +15,7 @@ from webapp.config import Settings
 
 
 MANIFEST_NAME = "current_generation.json"
+SCHEMA_VERSION = 2
 MODES = {"t2va", "i2va", "fl2va", "r2v"}
 ASPECT_RATIOS = {
     "16:9": 16 / 9,
@@ -23,9 +25,6 @@ ASPECT_RATIOS = {
     "3:4": 3 / 4,
     "21:9": 21 / 9,
 }
-UPSCALE_COLORS = {"lab", "wavelet", "adain", "none"}
-REF_IMAGE_SIZES = {"match", "max"}
-DEFAULT_TURBO_LORA = "minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors"
 CANVAS_MULTIPLE = 32
 MAX_CANVAS_PIXELS = 1_100_000
 FPS = 24
@@ -111,7 +110,6 @@ class GenerationSettingsStore:
     def defaults() -> dict:
         return {
             "mode": "t2va",
-            "duration": 5,
             "aspect": "16:9",
             "mp": 0.4,
             "width": None,
@@ -119,17 +117,6 @@ class GenerationSettingsStore:
             "seed": None,
             "steps": 20,
             "accel": False,
-            "turbo": False,
-            "turbo_lora": DEFAULT_TURBO_LORA,
-            "turbo_strength": 1.0,
-            "w4a8": False,
-            "unet": None,
-            "ref_image_size": "match",
-            "upscale": False,
-            "upscale_scale": 2.0,
-            "upscale_color": "lab",
-            "upscale_chunk": True,
-            "references": [],
         }
 
     @staticmethod
@@ -142,6 +129,52 @@ class GenerationSettingsStore:
     @staticmethod
     def prompt_hash(prompt: str) -> str:
         return hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _prompt_inputs(prompt: str) -> tuple[float | None, list[str], list[str]]:
+        """Extract prompt-owned duration and ordered Picture filenames."""
+        durations = []
+        for match in re.finditer(
+                r"\b(\d{1,2}(?:\.\d+)?)\s*(?:-|\s)seconds?\b",
+                prompt, flags=re.IGNORECASE):
+            value = float(match.group(1))
+            if value >= 4:
+                durations.append(value)
+        for match in re.finditer(r"\b\d{1,2}:(\d{2})(?:\.(\d{1,3}))?\b", prompt):
+            milliseconds = (match.group(2) or "0").ljust(3, "0")
+            value = float(match.group(1)) + int(milliseconds) / 1000
+            if value >= 4:
+                durations.append(value)
+
+        errors = []
+        duration = max(durations) if durations else None
+        if duration is None:
+            errors.append("Prompt must state a 4–15 second length")
+        elif duration > 15:
+            errors.append("Prompt length exceeds the 15-second H3 limit")
+
+        numbered: dict[int, str] = {}
+        picture_pattern = re.compile(
+            r"<Picture\s+(\d+)>\s*\(([^()\r\n]+\.(?:png|jpe?g|webp))\)",
+            flags=re.IGNORECASE,
+        )
+        for match in picture_pattern.finditer(prompt):
+            number = int(match.group(1))
+            try:
+                filename = _filename(match.group(2).strip(), "prompt reference")
+            except GenerationSettingsError as exc:
+                errors.append(str(exc))
+                continue
+            assert filename is not None
+            previous = numbered.get(number)
+            if previous is not None and previous != filename:
+                errors.append(f"Prompt assigns multiple files to <Picture {number}>")
+            else:
+                numbered[number] = filename
+        if numbered and sorted(numbered) != list(range(1, max(numbered) + 1)):
+            errors.append("Prompt Picture references must be numbered consecutively from 1")
+        references = [numbered[number] for number in sorted(numbered)]
+        return duration, references, errors
 
     def normalize(self, payload: dict) -> dict:
         expected = set(self.defaults())
@@ -158,10 +191,6 @@ class GenerationSettingsStore:
         if mode not in MODES:
             raise GenerationSettingsError(
                 f"mode must be one of: {', '.join(sorted(MODES))}")
-        duration = _number(payload["duration"], "duration")
-        if duration < 4 or duration > 15 or not duration.is_integer():
-            raise GenerationSettingsError(
-                "duration must be a whole number from 4 to 15 seconds")
         aspect = str(payload["aspect"])
         if aspect not in ASPECT_RATIOS:
             raise GenerationSettingsError(
@@ -190,52 +219,8 @@ class GenerationSettingsStore:
         steps = _integer(payload["steps"], "steps")
         if steps < 1 or steps > 50:
             raise GenerationSettingsError("steps must be between 1 and 50")
-        turbo_strength = _number(
-            payload["turbo_strength"], "turbo_strength")
-        if turbo_strength < 0 or turbo_strength > 2:
-            raise GenerationSettingsError(
-                "turbo_strength must be between 0 and 2")
-        upscale_scale = _number(payload["upscale_scale"], "upscale_scale")
-        if upscale_scale < 1 or upscale_scale > 4:
-            raise GenerationSettingsError(
-                "upscale_scale must be between 1 and 4")
-        upscale_color = str(payload["upscale_color"])
-        if upscale_color not in UPSCALE_COLORS:
-            raise GenerationSettingsError(
-                f"upscale_color must be one of: {', '.join(sorted(UPSCALE_COLORS))}")
-        ref_image_size = str(payload["ref_image_size"])
-        if ref_image_size not in REF_IMAGE_SIZES:
-            raise GenerationSettingsError(
-                f"ref_image_size must be one of: {', '.join(sorted(REF_IMAGE_SIZES))}")
-
-        references_value = payload["references"]
-        if not isinstance(references_value, list):
-            raise GenerationSettingsError("references must be a list")
-        references = []
-        for value in references_value:
-            reference = _filename(value, "reference filename")
-            assert reference is not None
-            references.append(reference)
-        if len(set(references)) != len(references):
-            raise GenerationSettingsError("references may not contain duplicates")
-        if len(references) > 9:
-            raise GenerationSettingsError("H3 accepts at most 9 reference images")
-        for reference in references:
-            if Path(reference).suffix.lower() not in IMAGE_REFERENCE_EXTENSIONS:
-                raise GenerationSettingsError(
-                    f"unsupported reference type: {reference}")
-
-        turbo_lora = _filename(
-            payload["turbo_lora"], "turbo_lora", optional=True)
-        unet = _filename(payload["unet"], "unet", optional=True)
-        for value, field in ((turbo_lora, "turbo_lora"), (unet, "unet")):
-            if value and Path(value).suffix.lower() != ".safetensors":
-                raise GenerationSettingsError(
-                    f"{field} must be a .safetensors filename")
-
         return {
             "mode": mode,
-            "duration": int(duration),
             "aspect": aspect,
             "mp": round(mp, 3),
             "width": width,
@@ -243,17 +228,6 @@ class GenerationSettingsStore:
             "seed": seed,
             "steps": steps,
             "accel": _bool(payload["accel"], "accel"),
-            "turbo": _bool(payload["turbo"], "turbo"),
-            "turbo_lora": turbo_lora,
-            "turbo_strength": round(turbo_strength, 3),
-            "w4a8": _bool(payload["w4a8"], "w4a8"),
-            "unet": unet,
-            "ref_image_size": ref_image_size,
-            "upscale": _bool(payload["upscale"], "upscale"),
-            "upscale_scale": round(upscale_scale, 3),
-            "upscale_color": upscale_color,
-            "upscale_chunk": _bool(payload["upscale_chunk"], "upscale_chunk"),
-            "references": references,
         }
 
     @staticmethod
@@ -297,35 +271,25 @@ class GenerationSettingsStore:
             and item.suffix.lower() in IMAGE_REFERENCE_EXTENSIONS
         )
 
-    def _installed_models(self, directory_name: str, prefix: str) -> list[str]:
-        directory = (
-            self.app_settings.comfy_output.parent / "models" / directory_name)
-        if not directory.is_dir():
-            return []
-        return sorted(
-            item.name for item in directory.iterdir()
-            if item.is_file() and not item.is_symlink()
-            and item.suffix.lower() == ".safetensors"
-            and item.name.lower().startswith(prefix)
-        )
-
     def readiness(self, project: Path, manifest: dict | None,
                   manifest_error: str | None = None) -> dict:
         prompt = self._prompt(project)
+        duration, references, prompt_errors = self._prompt_inputs(prompt)
         reasons = []
         warnings = []
         if not prompt.strip():
             reasons.append("Current prompt is empty")
+        else:
+            reasons.extend(prompt_errors)
         if manifest_error:
             reasons.append(manifest_error)
         elif manifest is None:
             reasons.append("Generation settings have not been saved")
         else:
-            if manifest.get("schema_version") != 1:
+            if manifest.get("schema_version") not in {1, SCHEMA_VERSION}:
                 reasons.append("Generation settings schema is unsupported")
             if manifest.get("prompt_sha256") != self.prompt_hash(prompt):
                 reasons.append("Current prompt changed after settings were saved")
-            references = manifest["references"]
             available = set(self._reference_names(project))
             missing = [name for name in references if name not in available]
             if missing:
@@ -339,25 +303,8 @@ class GenerationSettingsStore:
             elif mode == "fl2va" and len(references) != 2:
                 reasons.append("FL2VA requires exactly two images: first then last")
             elif mode == "r2v" and not 1 <= len(references) <= 9:
-                reasons.append("R2V requires between 1 and 9 ordered references")
-            if manifest["turbo"] and not manifest["turbo_lora"]:
-                reasons.append("Turbo requires a LoRA filename")
-            installed_loras = set(self._installed_models("loras", "minimax_h3"))
-            if (manifest["turbo"] and manifest["turbo_lora"]
-                    and manifest["turbo_lora"] not in installed_loras):
                 reasons.append(
-                    f"Turbo LoRA is not installed: {manifest['turbo_lora']}")
-            installed_unets = set(self._installed_models(
-                "diffusion_models", "minimax_h3"))
-            if manifest["unet"] and manifest["unet"] not in installed_unets:
-                reasons.append(f"UNET is not installed: {manifest['unet']}")
-            if manifest["turbo"] and not 4 <= manifest["steps"] <= 10:
-                warnings.append("Turbo is normally used with 4–10 steps")
-            if manifest["upscale"]:
-                warnings.append(
-                    "SeedVR2 upscale is VRAM-heavy; prefer a clean ~1MP H3 pass on this machine")
-            if manifest["w4a8"]:
-                warnings.append("W4A8 is experimental and needs a quality A/B check")
+                    "R2V prompt requires 1–9 ordered <Picture N> (filename.ext) references")
 
         settings = manifest or self.defaults()
         if settings["width"] is not None:
@@ -367,7 +314,7 @@ class GenerationSettingsStore:
             width, height = resolution_from_mp(
                 settings["aspect"], settings["mp"])
             size_mode = "mp"
-        frames = duration_to_frames(float(settings["duration"]))
+        frames = duration_to_frames(duration) if duration is not None else None
         status = "ready" if not reasons else (
             "empty-prompt" if not prompt.strip() else
             "not-configured" if manifest is None and not manifest_error else
@@ -385,11 +332,12 @@ class GenerationSettingsStore:
                 "megapixels": round(width * height / 1_000_000, 3),
             },
             "timing": {
-                "requested_seconds": settings["duration"],
+                "requested_seconds": duration,
                 "frames": frames,
-                "actual_seconds": round(frames / FPS, 3),
+                "actual_seconds": round(frames / FPS, 3) if frames else None,
                 "fps": FPS,
             },
+            "references": references,
         }
 
     def describe(self, project: Path, include_options: bool = False) -> dict:
@@ -413,12 +361,6 @@ class GenerationSettingsStore:
             result["options"] = {
                 "modes": sorted(MODES),
                 "aspects": list(ASPECT_RATIOS),
-                "ref_image_sizes": sorted(REF_IMAGE_SIZES),
-                "upscale_colors": sorted(UPSCALE_COLORS),
-                "references": self._reference_names(project),
-                "turbo_loras": self._installed_models("loras", "minimax_h3"),
-                "unets": self._installed_models(
-                    "diffusion_models", "minimax_h3"),
             }
         return result
 
@@ -426,7 +368,7 @@ class GenerationSettingsStore:
         normalized = self.normalize(payload)
         prompt = self._prompt(project)
         manifest = {
-            "schema_version": 1,
+            "schema_version": SCHEMA_VERSION,
             "prompt_sha256": self.prompt_hash(prompt),
             "updated_at": datetime.now(timezone.utc).isoformat(),
             **normalized,

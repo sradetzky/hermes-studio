@@ -69,12 +69,14 @@ Do not use raw REST, curl, `/prompt`, `/history`, `/upload`, or `/free` during
 normal Studio work. If MCP is unavailable, stop with a clear error; do not
 silently fall back to REST.
 
-`current_generation.json` is the web UI's typed run contract. It records mode,
-duration, canvas/MP, steps, accel, turbo/model overrides, ordered references and
-optional upscale settings plus the SHA-256 of `current_prompt.txt`. Do not
-silently rewrite it from agent prose. A prompt edit intentionally makes the UI
-show stale settings; the user must review and save the panel again before the
-future Generate action is allowed.
+`current_generation.json` is the web UI's compact typed run contract. It records
+mode, canvas/MP, seed, steps, accel, and the SHA-256 of `current_prompt.txt`.
+The prompt itself owns the 4–15 second length and ordered
+`<Picture N> (filename.ext)` mapping. Accel means Sol fused modulation + ChunkFF
+only—never Sage, sparse Sol attention, or EasyCache. Do not silently rewrite the
+manifest from agent prose. A prompt edit intentionally makes the UI show stale
+settings; the user must review and save the panel again before the future
+Generate action is allowed.
 
 The legacy `generate` and `generate-image` CLI commands remain for manual
 diagnostics only. They explicitly clean VRAM, and timeout paths interrupt the

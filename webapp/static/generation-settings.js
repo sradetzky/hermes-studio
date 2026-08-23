@@ -1,4 +1,4 @@
-import {$, requestJson, showEmpty, state} from './shared.js';
+import {$, requestJson, state} from './shared.js';
 
 let refreshProject = async () => {};
 
@@ -23,11 +23,10 @@ function renderGenerationReadiness(contract) {
     const resolution = readiness.resolution || {};
     const flags = [];
     if (settings.accel) flags.push('accel');
-    if (settings.turbo) flags.push('turbo');
-    if (settings.upscale) flags.push('upscale');
+    const seconds = readiness.timing?.requested_seconds;
     $('#generation-readiness-summary').textContent = [
       settings.mode.toUpperCase(),
-      `${settings.duration}s`,
+      seconds ? `${seconds}s` : 'length from prompt',
       `${resolution.width || '?'}×${resolution.height || '?'}`,
       `${settings.steps} steps`,
       ...flags,
@@ -51,25 +50,6 @@ function renderGenerationReadiness(contract) {
   }
 }
 
-function setSelectOptions(select, values, current, emptyLabel) {
-  select.replaceChildren();
-  if (emptyLabel !== null) {
-    const empty = document.createElement('option');
-    empty.value = '';
-    empty.textContent = emptyLabel;
-    select.append(empty);
-  }
-  const options = [...values];
-  if (current && !options.includes(current)) options.unshift(current);
-  for (const value of options) {
-    const option = document.createElement('option');
-    option.value = value;
-    option.textContent = value;
-    select.append(option);
-  }
-  select.value = current || '';
-}
-
 async function openGenerationSettings(opener = null) {
   if (!state.current) return;
   state.settingsOpener = opener || state.settingsOpener;
@@ -77,7 +57,6 @@ async function openGenerationSettings(opener = null) {
   const save = $('#generation-settings-save');
   save.disabled = true;
   state.generationSettingsOptions = null;
-  state.settingsReferences = [];
   $('#generation-settings-status').textContent = 'Loading settings…';
   if (!dialog.open) dialog.showModal();
   const selectedProject = state.current;
@@ -87,7 +66,6 @@ async function openGenerationSettings(opener = null) {
     if (selectedProject !== state.current || !dialog.open) return;
     state.generationSettings = contract;
     state.generationSettingsOptions = contract.options;
-    state.settingsReferences = [...contract.settings.references];
     populateGenerationSettings(contract);
     save.disabled = false;
     $('#generation-settings-status').textContent = '';
@@ -98,9 +76,7 @@ async function openGenerationSettings(opener = null) {
 
 function populateGenerationSettings(contract) {
   const settings = contract.settings;
-  const options = contract.options;
   $('#setting-mode').value = settings.mode;
-  $('#setting-duration').value = settings.duration;
   $('#setting-aspect').value = settings.aspect;
   $('#setting-mp').value = settings.mp;
   $('#setting-size-mode').value = settings.width === null ? 'mp' : 'explicit';
@@ -109,18 +85,6 @@ function populateGenerationSettings(contract) {
   $('#setting-seed').value = settings.seed ?? '';
   $('#setting-steps').value = settings.steps;
   $('#setting-accel').checked = settings.accel;
-  $('#setting-turbo').checked = settings.turbo;
-  $('#setting-w4a8').checked = settings.w4a8;
-  $('#setting-ref-image-size').value = settings.ref_image_size;
-  $('#setting-turbo-strength').value = settings.turbo_strength;
-  $('#setting-upscale').checked = settings.upscale;
-  $('#setting-upscale-scale').value = settings.upscale_scale;
-  $('#setting-upscale-color').value = settings.upscale_color;
-  $('#setting-upscale-chunk').checked = settings.upscale_chunk;
-  setSelectOptions(
-    $('#setting-turbo-lora'), options.turbo_loras,
-    settings.turbo_lora, 'Runner default');
-  setSelectOptions($('#setting-unet'), options.unets, settings.unet, 'Automatic');
   updateGenerationSettingsForm();
 }
 
@@ -133,87 +97,7 @@ function updateGenerationSettingsForm() {
   $('#setting-mp').required = !explicit;
   $('#setting-width').required = explicit;
   $('#setting-height').required = explicit;
-  const turbo = $('#setting-turbo').checked;
-  $('#setting-turbo-lora').disabled = !turbo;
-  $('#setting-turbo-strength').disabled = !turbo;
-  const upscale = $('#setting-upscale').checked;
-  $('#setting-upscale-scale').disabled = !upscale;
-  $('#setting-upscale-color').disabled = !upscale;
-  $('#setting-upscale-chunk').disabled = !upscale;
-  const mode = $('#setting-mode').value;
-  const referenceHelp = {
-    t2va: 'T2VA uses no references.',
-    i2va: 'Select exactly one opening-frame image.',
-    fl2va: 'Select exactly two images in first-frame → last-frame order.',
-    r2v: 'Select 1–9 references in <Picture N> order.',
-  };
-  $('#settings-reference-help').textContent = referenceHelp[mode] || '';
-  renderSettingsReferences();
   updateComputedSettings();
-}
-
-function renderSettingsReferences() {
-  const container = $('#settings-references');
-  container.replaceChildren();
-  const available = state.generationSettingsOptions?.references || [];
-  if (!available.length) {
-    showEmpty(container, 'No image references in this project');
-    return;
-  }
-  const selected = document.createElement('div');
-  selected.className = 'selected-references';
-  for (const [index, name] of state.settingsReferences.entries()) {
-    const row = document.createElement('div');
-    row.className = 'settings-reference selected';
-    const label = document.createElement('span');
-    label.textContent = `${index + 1}. ${name}`;
-    const controls = document.createElement('div');
-    for (const [text, action, disabled] of [
-      ['↑', () => moveSettingsReference(index, -1), index === 0],
-      ['↓', () => moveSettingsReference(index, 1), index === state.settingsReferences.length - 1],
-      ['×', () => removeSettingsReference(index), false],
-    ]) {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.textContent = text;
-      button.disabled = disabled;
-      button.addEventListener('click', action);
-      controls.append(button);
-    }
-    row.append(label, controls);
-    selected.append(row);
-  }
-  if (state.settingsReferences.length) container.append(selected);
-  const unselected = available.filter(name => !state.settingsReferences.includes(name));
-  if (unselected.length) {
-    const choices = document.createElement('div');
-    choices.className = 'available-references';
-    for (const name of unselected) {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'settings-reference available';
-      button.textContent = `+ ${name}`;
-      button.addEventListener('click', () => {
-        state.settingsReferences.push(name);
-        renderSettingsReferences();
-      });
-      choices.append(button);
-    }
-    container.append(choices);
-  }
-}
-
-function moveSettingsReference(index, delta) {
-  const target = index + delta;
-  if (target < 0 || target >= state.settingsReferences.length) return;
-  [state.settingsReferences[index], state.settingsReferences[target]] =
-    [state.settingsReferences[target], state.settingsReferences[index]];
-  renderSettingsReferences();
-}
-
-function removeSettingsReference(index) {
-  state.settingsReferences.splice(index, 1);
-  renderSettingsReferences();
 }
 
 function settingsResolution() {
@@ -232,13 +116,10 @@ function settingsResolution() {
 
 function updateComputedSettings() {
   const [width, height] = settingsResolution();
-  const seconds = Number($('#setting-duration').value);
-  let frames = Math.max(5, Math.round(seconds * 24));
-  while (frames % 17 !== 5) frames += 1;
   const mp = width && height ? (width * height / 1_000_000).toFixed(3) : '?';
   $('#settings-computed').textContent = Number.isFinite(width) && Number.isFinite(height)
-    ? `${width}×${height} · ${mp}MP · ${frames} frames · ${(frames / 24).toFixed(3)}s actual`
-    : 'Enter a valid canvas and duration';
+    ? `${width}×${height} · ${mp}MP · length and references come from the prompt`
+    : 'Enter a valid canvas';
 }
 
 function generationSettingsPayload() {
@@ -246,7 +127,6 @@ function generationSettingsPayload() {
   const seedValue = $('#setting-seed').value.trim();
   return {
     mode: $('#setting-mode').value,
-    duration: Number($('#setting-duration').value),
     aspect: $('#setting-aspect').value,
     mp: Number($('#setting-mp').value),
     width: explicit ? Number($('#setting-width').value) : null,
@@ -254,17 +134,6 @@ function generationSettingsPayload() {
     seed: seedValue || null,
     steps: Number($('#setting-steps').value),
     accel: $('#setting-accel').checked,
-    turbo: $('#setting-turbo').checked,
-    turbo_lora: $('#setting-turbo-lora').value || null,
-    turbo_strength: Number($('#setting-turbo-strength').value),
-    w4a8: $('#setting-w4a8').checked,
-    unet: $('#setting-unet').value || null,
-    ref_image_size: $('#setting-ref-image-size').value,
-    upscale: $('#setting-upscale').checked,
-    upscale_scale: Number($('#setting-upscale-scale').value),
-    upscale_color: $('#setting-upscale-color').value,
-    upscale_chunk: $('#setting-upscale-chunk').checked,
-    references: [...state.settingsReferences],
   };
 }
 
@@ -308,7 +177,6 @@ function closeGenerationSettings(restoreFocus = true) {
   const opener = state.settingsOpener;
   state.settingsOpener = null;
   state.generationSettingsOptions = null;
-  state.settingsReferences = [];
   $('#generation-settings-save').disabled = true;
   if (dialog.open) dialog.close();
   if (restoreFocus && opener?.isConnected) queueMicrotask(() => opener.focus());
@@ -329,9 +197,9 @@ export function initializeGenerationSettings(refresh) {
     if (event.target === dialog) closeGenerationSettings();
   });
   for (const field of [
-    $('#setting-mode'), $('#setting-duration'), $('#setting-aspect'),
+    $('#setting-mode'), $('#setting-aspect'),
     $('#setting-size-mode'), $('#setting-mp'), $('#setting-width'),
-    $('#setting-height'), $('#setting-turbo'), $('#setting-upscale'),
+    $('#setting-height'),
   ]) {
     field.addEventListener('input', updateGenerationSettingsForm);
     field.addEventListener('change', updateGenerationSettingsForm);

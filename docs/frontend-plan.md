@@ -23,7 +23,7 @@ no state in the UI that isn't already on disk; minimal dependencies.
 - `media_review_store.py` — guarded generation detail, idempotent promotion and
   generation-to-reference publication with filesystem provenance
 - `generation_settings_store.py` — typed `current_generation.json`, strict H3
-  knob validation, prompt-hash staleness and mode/reference readiness
+  knob validation, prompt-hash staleness, and prompt-derived length/references
 - `routes.py` — thin HTTP boundary and guarded media serving
 - `run.sh` / `stop.sh` / `status.sh` — single-instance lock, graceful stop,
   stale-PID cleanup and process status
@@ -42,9 +42,9 @@ no state in the UI that isn't already on disk; minimal dependencies.
 
 - Project switcher = left rail, reads folders; new project button
 - Center: chat with the studio agent; below it the current structured prompt
-- Prompt panel: readiness badge and editable H3 run contract (mode, duration,
-  MP or explicit canvas, steps, accel, turbo/model overrides, ordered refs,
-  W4A8 and optional SeedVR2 settings)
+- Prompt panel: readiness badge and compact H3 run contract (mode, MP or
+  explicit canvas, seed, steps, and fused-modulation/ChunkFF acceleration);
+  clip length and ordered references come from the prompt itself
 - Right: reference thumbnails, generation gallery (newest first), HTML5 video
   player for clips, media/recipe/review filters, and a keyboard-accessible detail
   dialog with every archived asset, prompt, metadata and review action
@@ -124,11 +124,12 @@ auto-chained, and their result never starts a render without a separate request.
   generation, copy rather than move, serialize through a project lock, publish
   atomically without overwrite, and record idempotent provenance in the hidden
   generation `.review.json`. Symlink/path escapes are rejected.
-- Generation settings enforce 4–15 whole seconds, 0.1–1.1 MP or a ≤1.1MP
-  explicit 32px-grid canvas, 1–50 steps, safe filenames, ordered image-only
-  references and mode-specific reference counts. Large integer seeds round-trip
-  as decimal strings in the API and integers on disk. Any prompt edit invalidates
-  readiness until settings are deliberately re-saved against the new hash.
+- Generation settings enforce 0.1–1.1 MP or a ≤1.1MP explicit 32px-grid canvas
+  and 1–50 steps. Readiness parses a 4–15 second length and ordered image-only
+  `<Picture N> (filename.ext)` references from the prompt, then validates files
+  and mode-specific counts. Large integer seeds round-trip as decimal strings in
+  the API and integers on disk. Any prompt edit invalidates readiness until
+  settings are deliberately re-saved against the new hash.
 - No auth v1 (localhost bind only)
 
 ## Milestones

@@ -7,6 +7,14 @@ preview and production releases.
 
 ## [Unreleased]
 
+### Changed
+
+- Simplified H3 settings to mode, canvas, seed, steps, and acceleration; clip
+  length and ordered reference filenames are now parsed from the prompt
+- Removed SeedVR2, turbo, W4A8, model, and reference controls from the dialog
+- Acceleration now uses only Sol fused modulation and ChunkFF, without Sage,
+  sparse Sol attention, or EasyCache
+
 ## [0.1.0-preview.1] - 2026-08-23
 
 ### Added

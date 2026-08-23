@@ -64,7 +64,6 @@ async function selectProject(projectId) {
   state.selectedGenerationFile = null;
   state.generationSettings = null;
   state.generationSettingsOptions = null;
-  state.settingsReferences = [];
   state.generationSignature = '';
   state.referenceSignature = '';
   $('#chatlog').replaceChildren();

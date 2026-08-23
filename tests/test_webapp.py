@@ -38,7 +38,6 @@ def _create_job_in_process(database, barrier, results):
 def _generation_settings_payload(**overrides):
     payload = {
         "mode": "t2va",
-        "duration": 5,
         "aspect": "16:9",
         "mp": 0.4,
         "width": None,
@@ -46,17 +45,6 @@ def _generation_settings_payload(**overrides):
         "seed": None,
         "steps": 20,
         "accel": False,
-        "turbo": False,
-        "turbo_lora": "minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors",
-        "turbo_strength": 1.0,
-        "w4a8": False,
-        "unet": None,
-        "ref_image_size": "match",
-        "upscale": False,
-        "upscale_scale": 2.0,
-        "upscale_color": "lab",
-        "upscale_chunk": True,
-        "references": [],
     }
     payload.update(overrides)
     return payload
@@ -270,7 +258,8 @@ class AppFactoryTests(WebAppTestCase):
         with TestClient(self.app()) as client:
             project = self.create_project(client, "generation-settings")
             root = self.settings.studio_root / "projects" / project
-            (root / "current_prompt.txt").write_text("compiled H3 prompt\n")
+            (root / "current_prompt.txt").write_text(
+                "A 5-second compiled H3 prompt\n")
 
             initial = client.get(
                 f"/api/project/{project}/generation-settings").json()
@@ -278,6 +267,8 @@ class AppFactoryTests(WebAppTestCase):
             self.assertEqual(initial["readiness"]["status"], "not-configured")
             self.assertEqual(initial["options"]["modes"],
                              ["fl2va", "i2va", "r2v", "t2va"])
+            self.assertEqual(
+                sorted(initial["options"]), ["aspects", "modes"])
 
             large_seed = "4364884737460484600"
             saved = client.put(
@@ -297,9 +288,12 @@ class AppFactoryTests(WebAppTestCase):
             self.assertEqual(body["readiness"]["timing"]["frames"], 124)
             manifest = json.loads(
                 (root / "current_generation.json").read_text())
-            self.assertEqual(manifest["schema_version"], 1)
+            self.assertEqual(manifest["schema_version"], 2)
             self.assertEqual(manifest["steps"], 20)
             self.assertEqual(manifest["seed"], int(large_seed))
+            self.assertNotIn("duration", manifest)
+            self.assertNotIn("references", manifest)
+            self.assertNotIn("upscale", manifest)
 
             (root / "current_prompt.txt").write_text("changed prompt\n")
             stale = client.get(f"/api/project/{project}").json()
@@ -312,11 +306,9 @@ class AppFactoryTests(WebAppTestCase):
         with TestClient(self.app()) as client:
             project = self.create_project(client, "generation-references")
             root = self.settings.studio_root / "projects" / project
-            (root / "current_prompt.txt").write_text("reference prompt\n")
+            (root / "current_prompt.txt").write_text(
+                "A 10-second reference prompt\n")
             (root / "references" / "character.png").write_bytes(b"image")
-            loras = self.settings.comfy_output.parent / "models" / "loras"
-            loras.mkdir(parents=True)
-            (loras / "minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors").touch()
 
             blocked = client.put(
                 f"/api/project/{project}/generation-settings",
@@ -324,26 +316,41 @@ class AppFactoryTests(WebAppTestCase):
             ).json()
             self.assertFalse(blocked["readiness"]["ready"])
             self.assertIn(
-                "R2V requires", blocked["readiness"]["reasons"][0])
+                "R2V prompt requires", blocked["readiness"]["reasons"][0])
+
+            (root / "current_prompt.txt").write_text(
+                "A 10-second reference prompt using "
+                "<Picture 1> (character.png)\n")
 
             ready = client.put(
                 f"/api/project/{project}/generation-settings",
                 json=_generation_settings_payload(
-                    mode="r2v", duration=10, mp=0.9, steps=8,
-                    accel=True, turbo=True,
-                    references=["character.png"],
+                    mode="r2v", mp=0.9, steps=8, accel=True,
                 ),
             ).json()
             self.assertTrue(ready["readiness"]["ready"])
-            self.assertEqual(
-                ready["options"]["references"], ["character.png"])
-            self.assertEqual(ready["settings"]["references"], ["character.png"])
+            self.assertEqual(ready["readiness"]["references"], ["character.png"])
+            self.assertEqual(ready["readiness"]["timing"]["requested_seconds"], 10)
+            self.assertNotIn("references", ready["settings"])
 
             (root / "references" / "character.png").unlink()
             missing = client.get(
                 f"/api/project/{project}/generation-settings").json()
             self.assertIn(
                 "Missing reference", missing["readiness"]["reasons"][0])
+
+            (root / "current_prompt.txt").write_text(
+                "A 10-second reference prompt using "
+                "<Picture 1> (../character.png)\n")
+            unsafe = client.put(
+                f"/api/project/{project}/generation-settings",
+                json=_generation_settings_payload(mode="r2v"),
+            ).json()
+            self.assertFalse(unsafe["readiness"]["ready"])
+            self.assertTrue(any(
+                "invalid prompt reference" in reason
+                for reason in unsafe["readiness"]["reasons"]
+            ))
 
     def test_generation_settings_reject_unsafe_values(self):
         with TestClient(self.app()) as client:
@@ -354,9 +361,7 @@ class AppFactoryTests(WebAppTestCase):
                 _generation_settings_payload(mp=1.2),
                 _generation_settings_payload(width=1344, height=None),
                 _generation_settings_payload(width=1536, height=768),
-                _generation_settings_payload(references=["../escape.png"]),
                 _generation_settings_payload(steps=0),
-                _generation_settings_payload(duration=3),
             ]
             for payload in cases:
                 with self.subTest(payload=payload):

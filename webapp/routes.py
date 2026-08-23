@@ -51,7 +51,6 @@ class GenerationSettingsIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     mode: str
-    duration: int
     aspect: str
     mp: float
     width: int | None
@@ -59,17 +58,6 @@ class GenerationSettingsIn(BaseModel):
     seed: str | int | None
     steps: int
     accel: bool
-    turbo: bool
-    turbo_lora: str | None
-    turbo_strength: float
-    w4a8: bool
-    unet: str | None
-    ref_image_size: str
-    upscale: bool
-    upscale_scale: float
-    upscale_color: str
-    upscale_chunk: bool
-    references: list[str]
 
 
 def _settings(request: Request) -> Settings:
