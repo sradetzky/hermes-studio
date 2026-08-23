@@ -3,6 +3,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import redirect_stdout
@@ -14,6 +15,7 @@ from unittest.mock import MagicMock, patch
 from scripts import design_studio as ds
 from scripts import krea2_image
 from scripts.krea2_image import parse_loras
+from webapp import clip_store
 from webapp.clip_store import ClipStore, ClipStoreError
 from webapp.job_store import JobStore
 
@@ -78,6 +80,71 @@ class ClipStoreTests(unittest.TestCase):
         self.assertTrue(target.is_dir())
         self.assertEqual(list(target.iterdir()), [])
 
+    def test_create_clip_collision_at_publication_preserves_target_and_manifest(self):
+        self.store.initialize(self.project, "Test project")
+        manifest_path = self.project / "project.json"
+        original_manifest = manifest_path.read_bytes()
+        target = self.project / "clips" / "clip-002"
+        real_publish = clip_store.atomic_publish_directory
+
+        def collide_at_publication(source, destination):
+            destination.mkdir()
+            return real_publish(source, destination)
+
+        with (
+            patch.object(
+                clip_store, "atomic_publish_directory",
+                side_effect=collide_at_publication,
+            ),
+            self.assertRaisesRegex(ClipStoreError, "already exists"),
+        ):
+            self.store.create_clip(self.project, "Second scene")
+
+        self.assertEqual(manifest_path.read_bytes(), original_manifest)
+        self.assertTrue(target.is_dir())
+        self.assertEqual(list(target.iterdir()), [])
+
+    def test_create_clip_manifest_failure_rolls_back_published_directory(self):
+        self.store.initialize(self.project, "Test project")
+        manifest_path = self.project / "project.json"
+        original_manifest = manifest_path.read_bytes()
+        target = self.project / "clips" / "clip-002"
+
+        with (
+            patch.object(
+                self.store, "_write_manifest_unlocked",
+                side_effect=RuntimeError("injected manifest failure"),
+            ),
+            self.assertRaisesRegex(RuntimeError, "injected manifest failure"),
+        ):
+            self.store.create_clip(self.project, "Second scene")
+
+        self.assertEqual(manifest_path.read_bytes(), original_manifest)
+        self.assertFalse(os.path.lexists(target))
+
+    def test_create_clip_rollback_does_not_remove_replacement_directory(self):
+        self.store.initialize(self.project, "Test project")
+        target = self.project / "clips" / "clip-002"
+        displaced = self.project / "displaced-published-clip"
+
+        def replace_then_fail(_project, _manifest):
+            target.rename(displaced)
+            target.mkdir()
+            raise RuntimeError("injected manifest failure")
+
+        with (
+            patch.object(
+                self.store, "_write_manifest_unlocked",
+                side_effect=replace_then_fail,
+            ),
+            self.assertRaisesRegex(RuntimeError, "injected manifest failure"),
+        ):
+            self.store.create_clip(self.project, "Second scene")
+
+        self.assertTrue(target.is_dir())
+        self.assertEqual(list(target.iterdir()), [])
+        self.assertTrue((displaced / "current_prompt.txt").is_file())
+
     def test_concurrent_clip_creation_serializes_ids_and_manifest(self):
         self.store.initialize(self.project, "Test project")
         with ThreadPoolExecutor(max_workers=8) as pool:
@@ -93,6 +160,65 @@ class ClipStoreTests(unittest.TestCase):
             {clip["id"] for clip in manifest["clips"]},
             {f"clip-{index:03d}" for index in range(1, 10)},
         )
+
+    def test_concurrent_manifest_readers_only_observe_complete_old_or_new_json(self):
+        self.store.initialize(self.project, "Test project")
+        old = self.store.describe(self.project)
+        new = json.loads(json.dumps(old))
+        new["clips"][0]["title"] = "New title"
+        reader_started = threading.Event()
+        writer_done = threading.Event()
+
+        def read_while_writing():
+            observed = []
+            reader_started.set()
+            while not writer_done.is_set():
+                observed.append(json.loads(
+                    (self.project / "project.json").read_text(encoding="utf-8")))
+            observed.append(json.loads(
+                (self.project / "project.json").read_text(encoding="utf-8")))
+            return observed
+
+        def alternate_manifests():
+            self.assertTrue(reader_started.wait(timeout=2))
+            try:
+                for index in range(100):
+                    self.store._write_manifest_unlocked(
+                        self.project, new if index % 2 == 0 else old)
+            finally:
+                writer_done.set()
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            reader = pool.submit(read_while_writing)
+            writer = pool.submit(alternate_manifests)
+            writer.result(timeout=5)
+            observed = reader.result(timeout=5)
+
+        self.assertTrue(observed)
+        self.assertTrue(all(value in (old, new) for value in observed))
+
+    def test_manifest_swap_at_descriptor_open_does_not_read_symlink_target(self):
+        self.store.initialize(self.project, "Test project")
+        manifest = self.project / "project.json"
+        outside = Path(self.temp.name) / "outside-manifest.json"
+        outside.write_text(manifest.read_text(encoding="utf-8"), encoding="utf-8")
+        real_open = os.open
+        swapped = False
+
+        def swap_at_open(path, flags, mode=0o777, *, dir_fd=None):
+            nonlocal swapped
+            if not swapped and Path(path).name == "project.json":
+                swapped = True
+                manifest.unlink()
+                manifest.symlink_to(outside)
+            return real_open(path, flags, mode, dir_fd=dir_fd)
+
+        with (
+            patch("webapp.safe_files.os.open", side_effect=swap_at_open),
+            self.assertRaisesRegex(ClipStoreError, "missing or unsafe"),
+        ):
+            self.store.describe(self.project)
+        self.assertTrue(swapped)
 
     def test_selects_and_clears_one_existing_video_take(self):
         self.store.initialize(self.project, "Test project")
@@ -383,6 +509,105 @@ class ProjectPathTests(unittest.TestCase):
         self.assertEqual(
             json.loads((generation / "settings.json").read_text()), settings)
 
+    def _assert_archive_swap_at_open_is_rejected(self, filename, source, outside):
+        real_open = os.open
+        swapped = False
+
+        def swap_at_open(path, flags, mode=0o777, *, dir_fd=None):
+            nonlocal swapped
+            if not swapped and Path(path).name == filename:
+                swapped = True
+                source.unlink()
+                source.symlink_to(outside)
+            return real_open(path, flags, mode, dir_fd=dir_fd)
+
+        with (
+            patch("webapp.safe_files.os.open", side_effect=swap_at_open),
+            self.assertRaises(ValueError),
+        ):
+            ds.archive_outputs(
+                self.root, self.project.name, "clip-001", ["result.png"],
+                source_root=source.parent if filename == "result.png" else outside.parent,
+            )
+        self.assertTrue(swapped)
+        self.assertEqual(outside.read_bytes(), b"SECRET")
+        self.assertEqual(
+            list((self.project / "clips" / "clip-001" / "generations").iterdir()),
+            [],
+        )
+
+    def test_archive_media_swap_at_descriptor_open_is_rejected(self):
+        source_root = Path(self.temp.name) / "media-swap"
+        source_root.mkdir()
+        source = source_root / "result.png"
+        source.write_bytes(b"safe image")
+        outside = Path(self.temp.name) / "outside-media.bin"
+        outside.write_bytes(b"SECRET")
+        self._assert_archive_swap_at_open_is_rejected(
+            "result.png", source, outside)
+
+    def test_archive_prompt_swap_at_descriptor_open_is_rejected(self):
+        source_root = Path(self.temp.name) / "prompt-swap"
+        source_root.mkdir()
+        media = source_root / "result.png"
+        media.write_bytes(b"safe image")
+        clip = self.project / "clips" / "clip-001"
+        prompt = clip / "current_prompt.txt"
+        prompt.write_text("safe prompt\n", encoding="utf-8")
+        outside = Path(self.temp.name) / "outside-prompt.txt"
+        outside.write_bytes(b"SECRET")
+        real_open = os.open
+        swapped = False
+
+        def swap_at_open(path, flags, mode=0o777, *, dir_fd=None):
+            nonlocal swapped
+            if not swapped and Path(path).name == "current_prompt.txt":
+                swapped = True
+                prompt.unlink()
+                prompt.symlink_to(outside)
+            return real_open(path, flags, mode, dir_fd=dir_fd)
+
+        with (
+            patch("webapp.safe_files.os.open", side_effect=swap_at_open),
+            self.assertRaises(ValueError),
+        ):
+            ds.archive_outputs(
+                self.root, self.project.name, "clip-001", ["result.png"],
+                source_root=source_root)
+        self.assertTrue(swapped)
+        self.assertEqual(outside.read_bytes(), b"SECRET")
+
+    def test_archive_settings_swap_at_descriptor_open_is_rejected(self):
+        source_root = Path(self.temp.name) / "settings-swap"
+        source_root.mkdir()
+        media = source_root / "result.png"
+        media.write_bytes(b"safe image")
+        clip = self.project / "clips" / "clip-001"
+        settings = clip / "current_generation.json"
+        settings.write_text('{"seed": 1}\n', encoding="utf-8")
+        outside = Path(self.temp.name) / "outside-settings.json"
+        outside.write_bytes(b"SECRET")
+        real_open = os.open
+        swapped = False
+
+        def swap_at_open(path, flags, mode=0o777, *, dir_fd=None):
+            nonlocal swapped
+            if not swapped and Path(path).name == "current_generation.json":
+                swapped = True
+                settings.unlink()
+                settings.symlink_to(outside)
+            return real_open(path, flags, mode, dir_fd=dir_fd)
+
+        with (
+            patch("webapp.safe_files.os.open", side_effect=swap_at_open),
+            self.assertRaises(ValueError),
+        ):
+            ds.archive_outputs(
+                self.root, self.project.name, "clip-001", ["result.png"],
+                source_root=source_root)
+        self.assertTrue(swapped)
+        self.assertEqual(outside.read_bytes(), b"SECRET")
+
     def test_archive_without_current_settings_records_exact_null_snapshot(self):
         comfy_output = Path(self.temp.name) / "comfy-output"
         comfy_output.mkdir()
@@ -414,6 +639,21 @@ class ProjectPathTests(unittest.TestCase):
                 self.root, self.project.name, "clip-001", ["linked.png"],
                 source_root=comfy_output)
 
+    def test_archive_rejects_symlinked_output_directory_component(self):
+        comfy_output = Path(self.temp.name) / "nested-comfy-output"
+        comfy_output.mkdir()
+        outside = Path(self.temp.name) / "outside-output-directory"
+        outside.mkdir()
+        (outside / "secret.png").write_bytes(b"SECRET")
+        (comfy_output / "linked").symlink_to(
+            outside, target_is_directory=True)
+
+        with self.assertRaisesRegex(ValueError, "symlink"):
+            ds.archive_outputs(
+                self.root, self.project.name, "clip-001",
+                ["linked/secret.png"], source_root=comfy_output)
+        self.assertEqual((outside / "secret.png").read_bytes(), b"SECRET")
+
     def test_archive_rejects_symlinked_generation_directory(self):
         comfy_output = Path(self.temp.name) / "comfy-output"
         comfy_output.mkdir()
@@ -436,7 +676,7 @@ class ProjectPathTests(unittest.TestCase):
         source = comfy_output / "result.png"
         source.write_bytes(b"image")
         visible_during_copy = []
-        real_copy = ds.shutil.copy2
+        real_copy = ds.copy_opened_file
 
         def inspect_copy(source_path, target_path):
             visible_during_copy.append([
@@ -446,13 +686,45 @@ class ProjectPathTests(unittest.TestCase):
             ])
             return real_copy(source_path, target_path)
 
-        with patch.object(ds.shutil, "copy2", side_effect=inspect_copy):
+        with patch.object(ds, "copy_opened_file", side_effect=inspect_copy):
             generation = ds.archive_outputs(
                 self.root, self.project.name, "clip-001", ["result.png"],
                 source_root=comfy_output)
         self.assertEqual(visible_during_copy, [[]])
         self.assertEqual(generation.name, "001")
         self.assertTrue((generation / "meta.json").is_file())
+
+    def test_archive_collision_at_publication_preserves_destination_and_source(self):
+        source_root = Path(self.temp.name) / "publication-collision"
+        source_root.mkdir()
+        source = source_root / "result.png"
+        source.write_bytes(b"safe image")
+        generations = self.project / "clips" / "clip-001" / "generations"
+        target = generations / "001"
+        real_publish = ds.atomic_publish_directory
+
+        def collide_at_publication(staging, destination):
+            destination.mkdir()
+            return real_publish(staging, destination)
+
+        with (
+            patch.object(
+                ds, "atomic_publish_directory",
+                side_effect=collide_at_publication,
+            ),
+            self.assertRaises(FileExistsError),
+        ):
+            ds.archive_outputs(
+                self.root, self.project.name, "clip-001", ["result.png"],
+                source_root=source_root)
+
+        self.assertEqual(source.read_bytes(), b"safe image")
+        self.assertTrue(target.is_dir())
+        self.assertEqual(list(target.iterdir()), [])
+        self.assertEqual(
+            [path for path in generations.iterdir() if path.name.startswith(".publishing-")],
+            [],
+        )
 
     def test_archives_grok_cache_with_xai_transport(self):
         grok_cache = Path(self.temp.name) / "grok-cache"

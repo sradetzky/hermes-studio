@@ -9,6 +9,14 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
+from webapp.safe_files import (
+    SafeFilesystemError,
+    atomic_publish_directory,
+    open_regular_file,
+    read_opened_text,
+    remove_published_directory_if_same,
+)
+
 
 PROJECT_MANIFEST = "project.json"
 PROJECT_SCHEMA_VERSION = 1
@@ -139,11 +147,12 @@ class ClipStore:
 
     def _read_manifest_unlocked(self, project: Path) -> dict:
         path = self._manifest_path(project)
-        if not path.is_file() or path.is_symlink():
-            raise ClipStoreError("project manifest is missing or unsafe")
         try:
-            value = json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError) as exc:
+            with open_regular_file(path) as opened:
+                value = json.loads(read_opened_text(opened))
+        except (FileNotFoundError, SafeFilesystemError) as exc:
+            raise ClipStoreError("project manifest is missing or unsafe") from exc
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
             raise ClipStoreError("project manifest is invalid") from exc
         return self._validate_manifest(value)
 
@@ -182,8 +191,12 @@ class ClipStore:
                 raise ClipStoreError("default clip already exists")
             staging = clips / f".creating-{uuid.uuid4().hex}"
             self._create_clip_tree(staging)
+            published_identity = None
             try:
-                staging.replace(target)
+                try:
+                    published_identity = atomic_publish_directory(staging, target)
+                except FileExistsError as exc:
+                    raise ClipStoreError("default clip already exists") from exc
                 manifest = {
                     "schema_version": PROJECT_SCHEMA_VERSION,
                     "title": title,
@@ -197,7 +210,9 @@ class ClipStore:
                 self._write_manifest_unlocked(project, manifest)
             except Exception:
                 shutil.rmtree(staging, ignore_errors=True)
-                shutil.rmtree(target, ignore_errors=True)
+                if published_identity is not None:
+                    remove_published_directory_if_same(
+                        target, published_identity)
                 raise
         return manifest
 
@@ -239,12 +254,13 @@ class ClipStore:
             target = clips / clip_id
             staging = clips / f".creating-{uuid.uuid4().hex}"
             self._create_clip_tree(staging)
-            published = False
+            published_identity = None
             try:
-                if os.path.lexists(target):
-                    raise ClipStoreError(f"clip target already exists: {clip_id}")
-                staging.replace(target)
-                published = True
+                try:
+                    published_identity = atomic_publish_directory(staging, target)
+                except FileExistsError as exc:
+                    raise ClipStoreError(
+                        f"clip target already exists: {clip_id}") from exc
                 entry = {
                     "id": clip_id,
                     "title": title,
@@ -255,8 +271,9 @@ class ClipStore:
                 self._write_manifest_unlocked(project, manifest)
             except Exception:
                 shutil.rmtree(staging, ignore_errors=True)
-                if published:
-                    shutil.rmtree(target, ignore_errors=True)
+                if published_identity is not None:
+                    remove_published_directory_if_same(
+                        target, published_identity)
                 raise
         return entry
 

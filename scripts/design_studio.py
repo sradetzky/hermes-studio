@@ -33,6 +33,7 @@ import sys
 import time
 import urllib.request
 import uuid
+from contextlib import ExitStack
 from dataclasses import replace
 from pathlib import Path
 
@@ -43,6 +44,14 @@ if __package__ in {None, ""} and str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from webapp.clip_store import ClipStore
+from webapp.safe_files import (
+    SafeFilesystemError,
+    atomic_publish_directory,
+    copy_opened_file,
+    open_regular_beneath,
+    open_regular_file,
+    read_opened_text,
+)
 
 RUN_H3 = Path.home() / ".hermes/skills/minimax-h3-run/scripts/run_h3.py"
 KREA2 = Path(__file__).resolve().parent / "krea2_image.py"
@@ -252,15 +261,17 @@ def read_project_text(project: Path, filename: str, limit: int | None = None,
     if Path(filename).name != filename:
         raise ValueError(f"invalid project filename: {filename!r}")
     path = project / filename
-    if not os.path.lexists(path):
+    try:
+        with open_regular_file(path) as opened:
+            value = read_opened_text(opened)
+    except FileNotFoundError as exc:
         if required:
-            raise ValueError(f"{filename} is missing")
+            raise ValueError(f"{filename} is missing") from exc
         return ""
-    if path.is_symlink() or not path.is_file():
+    except (SafeFilesystemError, OSError, UnicodeDecodeError) as exc:
         if required:
-            raise ValueError(f"{filename} is not a regular file")
+            raise ValueError(f"{filename} is not a regular file") from exc
         return ""
-    value = path.read_text(encoding="utf-8")
     return value[:limit] if limit is not None else value
 
 
@@ -272,80 +283,83 @@ def archive_outputs(root: Path, project: str, clip_id: str,
     """Archive outputs beneath one exact clip from one trusted source root."""
     clip = clip_path(root, project, clip_id)
     output_root = (source_root or COMFY_OUTPUT).resolve()
-    sources = []
-    for output in outputs:
-        source = Path(output).expanduser()
-        if not source.is_absolute():
-            source = output_root / source
-        if source.is_symlink():
-            raise ValueError(f"output may not be a symlink: {output!r}")
-        source = source.resolve()
-        if not source.is_relative_to(output_root):
-            raise ValueError(f"output escapes ComfyUI output directory: {output!r}")
-        if not source.is_file():
-            raise FileNotFoundError(f"ComfyUI output not found: {source}")
-        if source.name in {"prompt.txt", "settings.json", "meta.json"}:
-            raise ValueError(f"output filename is reserved: {source.name}")
-        sources.append(source)
-    if not sources:
-        raise ValueError("at least one output file is required")
+    with ExitStack() as source_descriptors:
+        sources = []
+        for output in outputs:
+            try:
+                source = source_descriptors.enter_context(
+                    open_regular_beneath(output_root, output))
+            except FileNotFoundError as exc:
+                raise FileNotFoundError(
+                    f"ComfyUI output not found: {output}") from exc
+            except SafeFilesystemError as exc:
+                raise ValueError(
+                    "output may not be a symlink, special file, or escape "
+                    f"the ComfyUI output directory: {output!r}"
+                ) from exc
+            if source.name in {"prompt.txt", "settings.json", "meta.json"}:
+                raise ValueError(f"output filename is reserved: {source.name}")
+            sources.append(source)
+        if not sources:
+            raise ValueError("at least one output file is required")
 
-    generations = clip / "generations"
-    if (generations.is_symlink() or not generations.is_dir()
-            or generations.resolve().parent != clip):
-        raise ValueError("generations directory is not a regular clip directory")
-    lock_path = clip / ".generation-archive.lock"
-    if lock_path.is_symlink():
-        raise ValueError("generation archive lock may not be a symlink")
-    lock_fd = os.open(
-        lock_path, os.O_RDWR | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(lock_fd, "a+b") as lock:
-        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-        gen_dir = next_generation_dir(root, project, clip_id)
-        staging = generations / f".publishing-{uuid.uuid4().hex}"
-        staging.mkdir()
-        copied = []
-        try:
-            for source in sources:
-                target = staging / source.name
-                if target.exists():
-                    raise FileExistsError(
-                        f"duplicate output filename: {source.name}")
-                shutil.copy2(source, target)
-                copied.append(target.name)
-            archived_prompt = (
-                read_project_text(clip, "current_prompt.txt", required=True)
-                if prompt_text is None else prompt_text.rstrip() + "\n"
-            )
-            (staging / "prompt.txt").write_text(
-                archived_prompt, encoding="utf-8")
-            settings_path = clip / "current_generation.json"
-            if os.path.lexists(settings_path):
-                if settings_path.is_symlink() or not settings_path.is_file():
+        generations = clip / "generations"
+        if (generations.is_symlink() or not generations.is_dir()
+                or generations.resolve().parent != clip):
+            raise ValueError("generations directory is not a regular clip directory")
+        lock_path = clip / ".generation-archive.lock"
+        if lock_path.is_symlink():
+            raise ValueError("generation archive lock may not be a symlink")
+        lock_fd = os.open(
+            lock_path, os.O_RDWR | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW,
+            0o600)
+        with os.fdopen(lock_fd, "a+b") as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            gen_dir = next_generation_dir(root, project, clip_id)
+            staging = generations / f".publishing-{uuid.uuid4().hex}"
+            staging.mkdir()
+            copied = []
+            try:
+                for source in sources:
+                    target = staging / source.name
+                    if target.exists():
+                        raise FileExistsError(
+                            f"duplicate output filename: {source.name}")
+                    copy_opened_file(source, target)
+                    copied.append(target.name)
+                archived_prompt = (
+                    read_project_text(clip, "current_prompt.txt", required=True)
+                    if prompt_text is None else prompt_text.rstrip() + "\n"
+                )
+                (staging / "prompt.txt").write_text(
+                    archived_prompt, encoding="utf-8")
+                settings_path = clip / "current_generation.json"
+                try:
+                    with open_regular_file(settings_path) as settings:
+                        copy_opened_file(settings, staging / "settings.json")
+                except FileNotFoundError:
+                    # JSON null is the stable snapshot for an unsaved state.
+                    (staging / "settings.json").write_text(
+                        "null\n", encoding="utf-8")
+                except SafeFilesystemError as exc:
                     raise ValueError(
-                        "current generation settings are not a regular clip file")
-                shutil.copy2(settings_path, staging / "settings.json")
-            else:
-                # JSON null is the stable snapshot for an unsaved settings state.
-                (staging / "settings.json").write_text(
-                    "null\n", encoding="utf-8")
-            meta = {
-                **(metadata or {}),
-                "generated": _dt.datetime.now().isoformat(timespec="seconds"),
-                "transport": transport,
-                "files": copied,
-                "sources": [str(source) for source in sources],
-            }
-            (staging / "meta.json").write_text(
-                json.dumps(meta, indent=2) + "\n", encoding="utf-8")
-            if os.path.lexists(gen_dir):
-                raise FileExistsError(f"generation already exists: {gen_dir.name}")
-            staging.replace(gen_dir)
-        except Exception:
-            shutil.rmtree(staging, ignore_errors=True)
-            raise
-        finally:
-            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+                        "current generation settings are not a regular clip file"
+                    ) from exc
+                meta = {
+                    **(metadata or {}),
+                    "generated": _dt.datetime.now().isoformat(timespec="seconds"),
+                    "transport": transport,
+                    "files": copied,
+                    "sources": [str(source.path) for source in sources],
+                }
+                (staging / "meta.json").write_text(
+                    json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+                atomic_publish_directory(staging, gen_dir)
+            except Exception:
+                shutil.rmtree(staging, ignore_errors=True)
+                raise
+            finally:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
     return gen_dir
 
 

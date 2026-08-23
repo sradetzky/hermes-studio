@@ -92,6 +92,8 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
   exact tool-call projection, and stale settings-form protection
 - Generation controls simplified: prompt-owned length/references, no SeedVR2 or
   model overrides, and accel now means Sol fused modulation + ChunkFF only
+- Clip/take publication and archival reads hardened against no-replace and
+  symlink-swap races with descriptor-based filesystem operations
 
 ## Next steps
 
