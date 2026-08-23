@@ -435,6 +435,33 @@ class SafeFilesystemTests(unittest.TestCase):
         self.assertEqual(outside.read_bytes(), b"outside")
         self.assertFalse(destination.exists())
 
+    def test_atomic_move_fsyncs_both_distinct_parent_directories(self):
+        source_parent = self.parent / "source-parent"
+        destination_parent = self.parent / "destination-parent"
+        source_parent.mkdir()
+        destination_parent.mkdir()
+        source = source_parent / "source.txt"
+        destination = destination_parent / "destination.txt"
+        source.write_bytes(b"source")
+        expected = [
+            (source_parent.stat().st_dev, source_parent.stat().st_ino),
+            (destination_parent.stat().st_dev, destination_parent.stat().st_ino),
+        ]
+        fsynced = []
+
+        def record_fsync(descriptor):
+            details = os.fstat(descriptor)
+            fsynced.append((details.st_dev, details.st_ino))
+
+        with patch.object(
+                safe_files, "_fsync_directory",
+                side_effect=record_fsync):
+            safe_files.atomic_move_no_replace(source, destination)
+
+        self.assertEqual(fsynced, expected)
+        self.assertFalse(source.exists())
+        self.assertEqual(destination.read_bytes(), b"source")
+
     def test_rollback_quarantine_preserves_moved_original_and_replacement(self):
         source = self.parent / "source"
         source.mkdir()
@@ -1377,6 +1404,23 @@ class LegacyClipMigrationTests(unittest.TestCase):
             for entry in path.rglob("*") if entry.is_file()
         }
 
+    @staticmethod
+    def metadata_snapshot(path):
+        result = []
+        for entry in [path, *sorted(path.rglob("*"))]:
+            details = entry.lstat()
+            result.append((
+                entry.relative_to(path).as_posix(),
+                details.st_mode,
+                details.st_dev,
+                details.st_ino,
+                details.st_nlink,
+                details.st_size,
+                details.st_mtime_ns,
+                details.st_ctime_ns,
+            ))
+        return result
+
     def migrate(self, project=None, *, apply=False):
         with patch.dict(os.environ, {
             "HERMES_STUDIO_RUNTIME_ROOT": str(self.runtime),
@@ -1456,10 +1500,12 @@ class LegacyClipMigrationTests(unittest.TestCase):
     def test_apply_is_idempotent_and_second_run_performs_no_writes(self):
         project = self.legacy_project()
         self.migrate(project.name, apply=True)
-        before = self.snapshot(project)
+        (project / ".project.lock").unlink()
+        before = self.metadata_snapshot(project)
         report = self.migrate(project.name, apply=True)
         self.assertEqual(report["projects"][0]["status"], "already-migrated")
-        self.assertEqual(self.snapshot(project), before)
+        self.assertEqual(self.metadata_snapshot(project), before)
+        self.assertFalse((project / ".project.lock").exists())
 
     def test_interrupted_apply_resumes_after_every_checkpoint(self):
         checkpoints = [
@@ -1547,6 +1593,84 @@ class LegacyClipMigrationTests(unittest.TestCase):
             self.assertRaises(RuntimeError),
         ):
             self.migrate(project.name, apply=True)
+
+    def test_rename_fsync_failure_does_not_advance_journal_and_resumes(self):
+        project = self.legacy_project()
+        self._prepare_journal(project)
+        journal_path = project / ds.CLIP_MIGRATION_JOURNAL
+        original_journal = journal_path.read_bytes()
+        fsynced = []
+
+        def fail_destination_fsync(descriptor):
+            details = os.fstat(descriptor)
+            fsynced.append((details.st_dev, details.st_ino))
+            if len(fsynced) == 2:
+                raise OSError("injected destination parent fsync failure")
+
+        with (
+            patch.object(
+                safe_files, "_fsync_directory",
+                side_effect=fail_destination_fsync,
+            ),
+            self.assertRaises(safe_files.SafeFilesystemError),
+        ):
+            self.migrate(project.name, apply=True)
+
+        target = project / "clips" / "clip-001" / "current_prompt.txt"
+        self.assertEqual(len(fsynced), 2)
+        self.assertFalse((project / "current_prompt.txt").exists())
+        self.assertEqual(target.read_bytes(), b"legacy prompt\n")
+        self.assertEqual(journal_path.read_bytes(), original_journal)
+        self.assertEqual(json.loads(original_journal)["completed"], [])
+
+        report = self.migrate(project.name, apply=True)
+        self.assertEqual(report["projects"][0]["status"], "migrated")
+        self.assertEqual(target.read_bytes(), b"legacy prompt\n")
+        self.assertFalse(journal_path.exists())
+
+    def test_destination_creation_fails_closed_during_clips_symlink_swap(self):
+        project = self.legacy_project()
+        outside = Path(self.temp.name) / "outside-destination"
+        outside.mkdir()
+        clips = project / "clips"
+        displaced = project / "displaced-clips"
+        real_mkdir = os.mkdir
+        swapped = False
+
+        def swap_clips_before_clip_creation(path, mode=0o777, *, dir_fd=None):
+            nonlocal swapped
+            name = os.fsdecode(path)
+            if (not swapped
+                    and (name == "clip-001" or Path(name) == clips / "clip-001")):
+                swapped = True
+                os.rename(clips, displaced)
+                clips.symlink_to(outside, target_is_directory=True)
+            return real_mkdir(path, mode, dir_fd=dir_fd)
+
+        with (
+            patch.object(ds.os, "mkdir", side_effect=swap_clips_before_clip_creation),
+            self.assertRaises((ValueError, safe_files.SafeFilesystemError)),
+        ):
+            self.migrate(project.name, apply=True)
+
+        self.assertTrue(swapped)
+        self.assertEqual(list(outside.iterdir()), [])
+        self.assertTrue((project / ds.CLIP_MIGRATION_JOURNAL).is_file())
+        self.assertTrue((project / "current_prompt.txt").is_file())
+
+    def test_resume_accepts_existing_safe_destination_directories(self):
+        project = self.legacy_project()
+        self._prepare_journal(project)
+        (project / "clips" / "clip-001").mkdir(parents=True)
+
+        report = self.migrate(project.name, apply=True)
+
+        self.assertEqual(report["projects"][0]["status"], "migrated")
+        self.assertEqual(
+            (project / "clips" / "clip-001" / "current_prompt.txt").read_bytes(),
+            b"legacy prompt\n",
+        )
+        self.assertFalse((project / ds.CLIP_MIGRATION_JOURNAL).exists())
 
     def test_resume_fails_closed_when_source_and_target_both_exist(self):
         project = self.legacy_project()

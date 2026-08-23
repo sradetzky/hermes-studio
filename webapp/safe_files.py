@@ -97,9 +97,23 @@ def _open_absolute_directory(path: Path | str) -> int:
         raise
 
 
+@contextmanager
+def open_directory(path: Path | str) -> Iterator[int]:
+    """Descriptor-walk and retain a directory without following symlinks."""
+    descriptor = _open_absolute_directory(path)
+    try:
+        yield descriptor
+    finally:
+        os.close(descriptor)
+
+
 def _identity(descriptor: int) -> tuple[int, int]:
     details = os.fstat(descriptor)
     return (details.st_dev, details.st_ino)
+
+
+def _fsync_directory(descriptor: int) -> None:
+    os.fsync(descriptor)
 
 
 def _verify_absolute_directory_identity(
@@ -317,6 +331,11 @@ def atomic_move_no_replace(
                 if _identity(destination_fd) != source_identity:
                     raise SafeFilesystemError(
                         "move target identity does not match the source")
+                source_parent_identity = _identity(source_parent_fd)
+                destination_parent_identity = _identity(destination_parent_fd)
+                _fsync_directory(source_parent_fd)
+                if destination_parent_identity != source_parent_identity:
+                    _fsync_directory(destination_parent_fd)
                 return source_identity
             finally:
                 if destination_fd is not None:

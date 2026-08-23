@@ -52,6 +52,7 @@ from webapp.safe_files import (
     atomic_move_no_replace,
     atomic_publish_directory,
     copy_opened_file,
+    open_directory,
     open_regular_beneath,
     open_regular_file,
     read_opened_text,
@@ -616,28 +617,89 @@ def _remove_regular_file(project: Path, filename: str) -> None:
         os.close(project_fd)
 
 
-def _create_migration_directories(project: Path) -> None:
-    clips = project / "clips"
-    if _entry_kind(clips) == "missing":
-        clips.mkdir()
-    if _entry_kind(clips) != "directory":
-        raise ValueError("clips migration destination is unsafe")
-    clip = clips / "clip-001"
-    if _entry_kind(clip) == "missing":
-        clip.mkdir()
-    if _entry_kind(clip) != "directory":
-        raise ValueError("default clip migration destination is unsafe")
-    for directory in (project, clips, clip):
+_MIGRATION_DIRECTORY_FLAGS = (
+    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+
+
+def _open_migration_directory(
+        parent_fd: int, name: str, *, label: str) -> int:
+    try:
         descriptor = os.open(
-            directory,
-            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+            name, _MIGRATION_DIRECTORY_FLAGS, dir_fd=parent_fd)
+    except OSError as exc:
+        raise SafeFilesystemError(f"{label} is unsafe") from exc
+    try:
+        if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise SafeFilesystemError(f"{label} is unsafe")
+        return descriptor
+    except Exception:
+        os.close(descriptor)
+        raise
+
+
+def _open_or_create_migration_directory(
+        parent_fd: int, name: str, *, label: str) -> tuple[int, bool]:
+    created = False
+    try:
+        os.mkdir(name, 0o777, dir_fd=parent_fd)
+        created = True
+    except FileExistsError:
+        pass
+    except OSError as exc:
+        raise SafeFilesystemError(f"could not create {label}") from exc
+    return _open_migration_directory(parent_fd, name, label=label), created
+
+
+def _verify_migration_directory_identity(
+        parent_fd: int, name: str, descriptor: int, *, label: str) -> None:
+    try:
+        current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except OSError as exc:
+        raise SafeFilesystemError(f"{label} changed during creation") from exc
+    retained = os.fstat(descriptor)
+    if (not stat.S_ISDIR(current.st_mode)
+            or (current.st_dev, current.st_ino)
+            != (retained.st_dev, retained.st_ino)):
+        raise SafeFilesystemError(f"{label} changed during creation")
+
+
+def _create_migration_directories(project: Path) -> None:
+    with open_directory(project) as project_fd:
+        clips_fd = None
+        clip_fd = None
         try:
-            os.fsync(descriptor)
+            clips_fd, clips_created = _open_or_create_migration_directory(
+                project_fd, "clips", label="clips migration destination")
+            _verify_migration_directory_identity(
+                project_fd, "clips", clips_fd,
+                label="clips migration destination")
+            if clips_created:
+                os.fsync(clips_fd)
+                os.fsync(project_fd)
+
+            clip_fd, clip_created = _open_or_create_migration_directory(
+                clips_fd, "clip-001",
+                label="default clip migration destination")
+            _verify_migration_directory_identity(
+                clips_fd, "clip-001", clip_fd,
+                label="default clip migration destination")
+            _verify_migration_directory_identity(
+                project_fd, "clips", clips_fd,
+                label="clips migration destination")
+            if clip_created:
+                os.fsync(clip_fd)
+                os.fsync(clips_fd)
         finally:
-            os.close(descriptor)
+            if clip_fd is not None:
+                os.close(clip_fd)
+            if clips_fd is not None:
+                os.close(clips_fd)
 
 
 def _apply_migration_project(project: Path) -> dict:
+    report, _journal = _assess_migration_project(project)
+    if report["status"] == "already-migrated":
+        return report
     with CLIP_STORE.locked_project(project):
         active = _active_migration_jobs([project.name])[project.name]
         if active:
