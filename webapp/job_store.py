@@ -10,7 +10,9 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
+from webapp.identifiers import validate_clip_id
 from webapp.models import ChatEvent, Job, JobEvent, JobStatus
+from webapp.runtime_schema import RuntimeSchemaError, initialize_runtime_schema
 from webapp.safe_files import (
     SafeFilesystemError,
     atomic_write_bytes_at,
@@ -83,133 +85,10 @@ class JobStore:
         with self._connection() as connection:
             self.database_path.chmod(0o600)
             connection.execute("PRAGMA journal_mode = WAL")
-            connection.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS jobs (
-                    id TEXT PRIMARY KEY,
-                    project TEXT NOT NULL,
-                    clip_id TEXT NOT NULL DEFAULT '',
-                    kind TEXT NOT NULL,
-                    profile TEXT NOT NULL DEFAULT 'studio',
-                    status TEXT NOT NULL CHECK (
-                        status IN ('queued', 'running', 'completed', 'failed')
-                    ),
-                    message TEXT NOT NULL,
-                    error TEXT NOT NULL DEFAULT '',
-                    created_at TEXT NOT NULL,
-                    started_at TEXT NOT NULL DEFAULT '',
-                    finished_at TEXT NOT NULL DEFAULT '',
-                    owner_id TEXT NOT NULL DEFAULT '',
-                    pid INTEGER,
-                    pid_start_time INTEGER
-                );
-
-                CREATE UNIQUE INDEX IF NOT EXISTS one_active_job_per_project
-                ON jobs(project)
-                WHERE status IN ('queued', 'running');
-
-                CREATE UNIQUE INDEX IF NOT EXISTS one_running_job_globally
-                ON jobs((1))
-                WHERE status = 'running';
-
-                CREATE INDEX IF NOT EXISTS jobs_project_created
-                ON jobs(project, created_at DESC);
-
-                CREATE TABLE IF NOT EXISTS sessions (
-                    project TEXT PRIMARY KEY,
-                    session_id TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS profile_sessions (
-                    project TEXT NOT NULL,
-                    profile TEXT NOT NULL,
-                    session_id TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    PRIMARY KEY(project, profile)
-                );
-
-                CREATE TABLE IF NOT EXISTS chat_events (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    project TEXT NOT NULL,
-                    job_id TEXT REFERENCES jobs(id) ON DELETE SET NULL,
-                    role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
-                    content TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    UNIQUE(job_id, role)
-                );
-
-                CREATE INDEX IF NOT EXISTS chat_project_id
-                ON chat_events(project, id);
-
-                CREATE TABLE IF NOT EXISTS job_events (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    project TEXT NOT NULL,
-                    job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
-                    profile TEXT NOT NULL,
-                    event_type TEXT NOT NULL,
-                    status TEXT NOT NULL DEFAULT '',
-                    summary TEXT NOT NULL,
-                    detail TEXT NOT NULL DEFAULT '{}',
-                    created_at TEXT NOT NULL
-                );
-
-                CREATE INDEX IF NOT EXISTS job_events_project_id
-                ON job_events(project, id);
-
-                CREATE INDEX IF NOT EXISTS job_events_job_id
-                ON job_events(job_id, id);
-
-                CREATE TABLE IF NOT EXISTS workers (
-                    owner_id TEXT PRIMARY KEY,
-                    pid INTEGER NOT NULL,
-                    heartbeat REAL NOT NULL
-                );
-                """
-            )
-            job_columns = {
-                row["name"] for row in connection.execute(
-                    "PRAGMA table_info(jobs)").fetchall()
-            }
-            if "profile" not in job_columns:
-                connection.execute(
-                    "ALTER TABLE jobs ADD COLUMN profile TEXT NOT NULL "
-                    "DEFAULT 'studio'")
-            if "clip_id" not in job_columns:
-                connection.execute(
-                    "ALTER TABLE jobs ADD COLUMN clip_id TEXT NOT NULL DEFAULT ''")
-            if "pid_start_time" not in job_columns:
-                connection.execute(
-                    "ALTER TABLE jobs ADD COLUMN pid_start_time INTEGER")
-            connection.execute(
-                "INSERT INTO job_events "
-                "(project, job_id, profile, event_type, status, summary, detail, "
-                "created_at) "
-                "SELECT jobs.project, jobs.id, jobs.profile, 'job.queued', "
-                "'queued', jobs.profile || ' queued', '{}', jobs.created_at "
-                "FROM jobs WHERE NOT EXISTS ("
-                "SELECT 1 FROM job_events WHERE job_events.job_id = jobs.id)"
-            )
-            connection.execute(
-                "INSERT INTO job_events "
-                "(project, job_id, profile, event_type, status, summary, detail, "
-                "created_at) "
-                "SELECT jobs.project, jobs.id, jobs.profile, "
-                "CASE jobs.status WHEN 'completed' THEN 'job.completed' "
-                "ELSE 'job.failed' END, jobs.status, "
-                "CASE jobs.status WHEN 'completed' THEN jobs.profile || ' completed' "
-                "ELSE jobs.error END, '{}', jobs.finished_at "
-                "FROM jobs WHERE jobs.status IN ('completed', 'failed') "
-                "AND NOT EXISTS (SELECT 1 FROM job_events "
-                "WHERE job_events.job_id = jobs.id "
-                "AND job_events.event_type IN ('job.completed', 'job.failed'))"
-            )
-            connection.execute(
-                "INSERT OR IGNORE INTO profile_sessions "
-                "(project, profile, session_id, updated_at) "
-                "SELECT project, 'studio', session_id, updated_at FROM sessions"
-            )
-            connection.commit()
+            try:
+                initialize_runtime_schema(connection)
+            except RuntimeSchemaError as exc:
+                raise JobStoreError(str(exc)) from exc
         for suffix in ("", "-wal", "-shm"):
             path = Path(f"{self.database_path}{suffix}")
             if path.exists():
@@ -284,7 +163,11 @@ class JobStore:
         )
 
     def create_chat_job(self, project: str, message: str,
-                        profile: str = "studio", *, clip_id: str = "") -> Job:
+                        profile: str = "studio", *, clip_id: str) -> Job:
+        try:
+            clip_id = validate_clip_id(clip_id)
+        except ValueError as exc:
+            raise JobStoreError(str(exc)) from exc
         now = utc_now()
         job = Job(
             id=uuid.uuid4().hex,

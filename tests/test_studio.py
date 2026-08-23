@@ -1024,7 +1024,8 @@ class ProjectPathTests(unittest.TestCase):
                 self.project.name, self.project / "chat.jsonl")
             ds.append_chat(
                 self.root, self.project.name, "system", "external-after-import")
-            job = store.create_chat_job(self.project.name, "question")
+            job = store.create_chat_job(
+                self.project.name, "question", clip_id="clip-001")
             store.claim_next("worker")
             store.complete(job.id, "worker", "answer", "session")
             store.export_chat(self.project.name, self.project / "chat.jsonl")

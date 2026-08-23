@@ -3,12 +3,12 @@ from __future__ import annotations
 import fcntl
 import json
 import os
-import re
 import shutil
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
+from webapp.identifiers import CLIP_ID_RE, validate_clip_id
 from webapp.safe_files import (
     SafeFilesystemError,
     atomic_publish_directory,
@@ -24,7 +24,6 @@ from webapp.safe_files import (
 
 PROJECT_MANIFEST = "project.json"
 PROJECT_SCHEMA_VERSION = 1
-CLIP_ID_RE = re.compile(r"clip-(\d{3,})")
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm"}
 
 
@@ -65,10 +64,10 @@ class ClipStore:
 
     @classmethod
     def _clip_id(cls, value: object) -> str:
-        value = cls._component(value, "clip id")
-        if not CLIP_ID_RE.fullmatch(value):
-            raise ClipStoreError(f"invalid clip id: {value!r}")
-        return value
+        try:
+            return validate_clip_id(value)
+        except ValueError as exc:
+            raise ClipStoreError(str(exc)) from exc
 
     @staticmethod
     def _clips_directory(project: Path, *, create: bool = False) -> Path:

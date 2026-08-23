@@ -20,6 +20,8 @@ no state in the UI that isn't already on disk; minimal dependencies.
 - `hermes_events.py` — read-only projection of structured Hermes session rows
   into safe per-job reasoning/tool activity
 - `studio_manager.py` — FIFO scheduler, worker lease, tracked Hermes process
+- `job_store.py` / `runtime_schema.py` — transactional job/chat/event state and
+  ordered SQLite migrations; every active job has a database-enforced clip id
 - `reference_store.py` — synchronous staging + atomic no-overwrite publication
 - `clip_store.py` — canonical project manifest, exact clip resolution, ordering,
   enabled state, and selected-take provenance

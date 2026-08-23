@@ -23,6 +23,7 @@ from webapp.config import Settings
 from webapp.hermes_events import HermesSessionEventBridge
 from webapp.job_store import ActiveJobError, JobStore, JobStoreError
 from webapp.models import JobStatus
+from webapp.runtime_schema import CURRENT_SCHEMA_VERSION, LEGACY_CLIP_ERROR
 from webapp import safe_files
 from webapp.studio_manager import StudioJobManager, process_start_time
 
@@ -31,7 +32,8 @@ def _create_job_in_process(database, barrier, results):
     store = JobStore(Path(database))
     barrier.wait()
     try:
-        results.put(store.create_chat_job("project", "message").id)
+        results.put(store.create_chat_job(
+            "project", "message", clip_id="clip-001").id)
     except ActiveJobError:
         results.put("rejected")
 
@@ -845,11 +847,15 @@ class JobStoreTests(WebAppTestCase):
         self.assertEqual(
             self.settings.database_path.stat().st_mode & 0o777, 0o600)
 
-    def test_historical_job_schema_adds_non_null_clip_column(self):
+    def test_historical_unbound_active_job_fails_closed_during_migration(self):
         store = self.store()
-        historical = store.create_chat_job("project", "message")
+        historical = store.create_chat_job(
+            "project", "message", clip_id="clip-001")
         with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            connection.execute("DROP TRIGGER jobs_require_active_clip_on_insert")
+            connection.execute("DROP TRIGGER jobs_require_active_clip_on_update")
             connection.execute("ALTER TABLE jobs DROP COLUMN clip_id")
+            connection.execute("PRAGMA user_version = 0")
             connection.commit()
 
         store.initialize()
@@ -858,8 +864,33 @@ class JobStoreTests(WebAppTestCase):
                 row[1] for row in connection.execute(
                     "PRAGMA table_info(jobs)").fetchall()
             }
+            version = connection.execute("PRAGMA user_version").fetchone()[0]
         self.assertIn("clip_id", columns)
-        self.assertEqual(store.get_job(historical.id).clip_id, "")
+        self.assertEqual(version, CURRENT_SCHEMA_VERSION)
+        migrated = store.get_job(historical.id)
+        self.assertEqual(migrated.clip_id, "")
+        self.assertEqual(migrated.status, JobStatus.FAILED)
+        self.assertEqual(migrated.error, LEGACY_CLIP_ERROR)
+        self.assertEqual(store.active_jobs(), [])
+
+    def test_active_jobs_require_a_valid_exact_clip(self):
+        store = self.store()
+        for clip_id in ("", "clip-1", "../clip-001", "clip-001/other"):
+            with self.subTest(clip_id=clip_id), self.assertRaises(JobStoreError):
+                store.create_chat_job(
+                    "project", "message", clip_id=clip_id)
+
+        job = store.create_chat_job(
+            "project", "message", clip_id="clip-001")
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            connection.execute(
+                "UPDATE jobs SET status = 'failed' WHERE id = ?", (job.id,))
+            with self.assertRaisesRegex(
+                    sqlite3.IntegrityError, "exact clip binding"):
+                connection.execute(
+                    "UPDATE jobs SET status = 'queued', clip_id = '' WHERE id = ?",
+                    (job.id,),
+                )
 
     def test_runtime_database_rejects_symlinked_paths(self):
         outside = Path(self.temp.name) / "outside"
@@ -879,11 +910,13 @@ class JobStoreTests(WebAppTestCase):
     def test_profile_sessions_are_isolated_per_project(self):
         store = self.store()
         first = store.create_chat_job(
-            "project", "plan", profile="studio-storyboarder")
+            "project", "plan", profile="studio-storyboarder",
+            clip_id="clip-001")
         store.claim(first.id, "worker")
         store.complete(first.id, "worker", "planned", "story-session")
         second = store.create_chat_job(
-            "project", "prompt", profile="studio-prompt-engineer")
+            "project", "prompt", profile="studio-prompt-engineer",
+            clip_id="clip-001")
         store.claim(second.id, "worker")
         store.complete(second.id, "worker", "prompted", "prompt-session")
 
@@ -898,7 +931,8 @@ class JobStoreTests(WebAppTestCase):
 
     def test_external_user_append_dedupes_active_web_turn(self):
         store = self.store()
-        store.create_chat_job("project", "same message")
+        store.create_chat_job(
+            "project", "same message", clip_id="clip-001")
         store.append_external_event("project", "user", "same message")
         cursor, events = store.chat_events("project")
         self.assertEqual(cursor, events[-1].id)
@@ -907,7 +941,8 @@ class JobStoreTests(WebAppTestCase):
 
     def test_job_event_cursor_only_advances_through_returned_events(self):
         store = self.store()
-        job = store.create_chat_job("project", "message")
+        job = store.create_chat_job(
+            "project", "message", clip_id="clip-001")
         cursor, initial = store.job_events("project")
         self.assertEqual(len(initial), 1)
         store.append_job_event(
@@ -937,7 +972,8 @@ class JobStoreTests(WebAppTestCase):
 
     def test_hermes_session_bridge_projects_reasoning_and_tools(self):
         store = self.store()
-        job = store.create_chat_job("project", "inspect")
+        job = store.create_chat_job(
+            "project", "inspect", clip_id="clip-001")
         home = Path(self.temp.name) / "hermes"
         state = home / "profiles" / "studio" / "state.db"
         state.parent.mkdir(parents=True)
@@ -1019,7 +1055,8 @@ class JobStoreTests(WebAppTestCase):
         def create(store):
             barrier.wait()
             try:
-                return store.create_chat_job("project", "message").id
+                return store.create_chat_job(
+                    "project", "message", clip_id="clip-001").id
             except ActiveJobError:
                 return "rejected"
 
@@ -1051,8 +1088,10 @@ class JobStoreTests(WebAppTestCase):
 
     def test_only_one_job_runs_globally(self):
         store = self.store()
-        first = store.create_chat_job("one", "first")
-        second = store.create_chat_job("two", "second")
+        first = store.create_chat_job(
+            "one", "first", clip_id="clip-001")
+        second = store.create_chat_job(
+            "two", "second", clip_id="clip-001")
         claimed = store.claim_next("worker-a")
         self.assertIsNotNone(claimed)
         assert claimed is not None
@@ -1066,7 +1105,8 @@ class JobStoreTests(WebAppTestCase):
 
     def test_chat_session_and_completion_commit_together(self):
         store = self.store()
-        job = store.create_chat_job("project", "question")
+        job = store.create_chat_job(
+            "project", "question", clip_id="clip-001")
         store.claim_next("worker")
         store.complete(job.id, "worker", "answer", "session-1")
         cursor, events = store.chat_events("project")
@@ -1320,7 +1360,8 @@ class StudioManagerTests(WebAppTestCase):
         project = ds.create_project(self.settings.studio_root, "recovery")
         store = JobStore(self.settings.database_path)
         store.initialize()
-        job = store.create_chat_job(project.name, "question")
+        job = store.create_chat_job(
+            project.name, "question", clip_id="clip-001")
         store.claim_next("dead-worker")
         cleanup_calls = []
         manager = StudioJobManager(
@@ -1343,7 +1384,8 @@ class StudioManagerTests(WebAppTestCase):
         store = JobStore(self.settings.database_path)
         store.initialize()
         job = store.create_chat_job(
-            project.name, "plan", "studio-storyboarder")
+            project.name, "plan", "studio-storyboarder",
+            clip_id="clip-001")
         store.claim_next("dead-worker")
         cleanup_calls = []
         manager = StudioJobManager(
@@ -1418,7 +1460,8 @@ class StudioManagerTests(WebAppTestCase):
     def test_orphan_reaper_refuses_unowned_process_with_hermes_in_path(self):
         store = JobStore(self.settings.database_path)
         store.initialize()
-        job = store.create_chat_job("project", "orphaned")
+        job = store.create_chat_job(
+            "project", "orphaned", clip_id="clip-001")
         running = store.claim_next("dead-owner")
         assert running is not None
         child = subprocess.Popen(
