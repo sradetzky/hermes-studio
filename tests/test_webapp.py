@@ -1,6 +1,7 @@
 import json
 import multiprocessing
 import os
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -11,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
-from threading import Barrier, Event
+from threading import Barrier, Event, Thread
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -100,6 +101,63 @@ class WebAppTestCase(unittest.TestCase):
             "/api/projects", json={"name": name, "brief": "test"})
         self.assertEqual(response.status_code, 200)
         return response.json()["id"]
+
+
+class LauncherScriptTests(unittest.TestCase):
+    def test_stop_refuses_active_jobs_without_force(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            webapp = root / "webapp"
+            runtime = root / ".runtime"
+            python_dir = root / ".venv" / "bin"
+            webapp.mkdir()
+            runtime.mkdir()
+            python_dir.mkdir(parents=True)
+            shutil.copy2(
+                Path(__file__).resolve().parent.parent / "webapp" / "stop.sh",
+                webapp / "stop.sh",
+            )
+            (webapp / "stop.sh").chmod(0o755)
+            (python_dir / "python").symlink_to(sys.executable)
+            database = runtime / "studio.db"
+            with sqlite3.connect(database) as connection:
+                connection.execute(
+                    "CREATE TABLE jobs (id TEXT, project TEXT, profile TEXT, "
+                    "status TEXT, created_at TEXT)")
+                connection.execute(
+                    "INSERT INTO jobs VALUES "
+                    "('job-1', 'project-1', 'studio', 'running', 'now')")
+
+            process = subprocess.Popen([
+                "bash", "-c",
+                f"exec -a {webapp / 'run.sh'} sleep 30",
+            ])
+            try:
+                (runtime / "webapp.pid").write_text(str(process.pid))
+                refused = subprocess.run(
+                    [webapp / "stop.sh"], capture_output=True, text=True,
+                    check=False,
+                )
+                self.assertEqual(refused.returncode, 1)
+                self.assertIn("jobs are active", refused.stderr)
+                self.assertIsNone(process.poll())
+
+                with sqlite3.connect(database) as connection:
+                    connection.execute("DELETE FROM jobs")
+                reaper = Thread(target=process.wait)
+                reaper.start()
+                stopped = subprocess.run(
+                    [webapp / "stop.sh"], capture_output=True, text=True,
+                    timeout=10, check=False,
+                    env={**os.environ, "HERMES_STUDIO_STOP_TIMEOUT_SECONDS": "5"},
+                )
+                reaper.join(timeout=5)
+                self.assertEqual(stopped.returncode, 0, stopped.stderr)
+                self.assertIsNotNone(process.poll())
+            finally:
+                if process.poll() is None:
+                    process.terminate()
+                    process.wait(timeout=5)
 
 
 class AppFactoryTests(WebAppTestCase):
