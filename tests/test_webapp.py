@@ -392,6 +392,33 @@ class AppFactoryTests(WebAppTestCase):
             self.assertEqual(
                 client.get(f"/api/project/{project}").json()["brief"], "")
 
+    def test_project_metadata_parent_swap_is_not_read(self):
+        with TestClient(self.app()) as client:
+            project = self.create_project(client, "metadata-parent-swap")
+            root = self.settings.studio_root / "projects" / project
+            displaced = Path(self.temp.name) / "displaced-project"
+            outside = Path(self.temp.name) / "outside-project"
+            outside.mkdir()
+            (outside / "brief.md").write_text("outside secret")
+            real_open = os.open
+            swapped = False
+
+            def swap_parent_at_final_open(path, flags, mode=0o777, *, dir_fd=None):
+                nonlocal swapped
+                if not swapped and Path(path).name == "brief.md":
+                    swapped = True
+                    root.rename(displaced)
+                    root.symlink_to(outside, target_is_directory=True)
+                return real_open(path, flags, mode, dir_fd=dir_fd)
+
+            with patch("webapp.safe_files.os.open",
+                       side_effect=swap_parent_at_final_open):
+                listing = client.get("/api/projects").json()["projects"]
+
+            self.assertTrue(swapped)
+            self.assertEqual(listing[0]["brief"], "")
+            self.assertEqual((outside / "brief.md").read_text(), "outside secret")
+
     def test_media_route_exposes_only_media_areas(self):
         with TestClient(self.app()) as client:
             project = self.create_project(client)

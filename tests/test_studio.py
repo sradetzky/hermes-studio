@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, patch
 from scripts import design_studio as ds
 from scripts import krea2_image
 from scripts.krea2_image import parse_loras
-from webapp import clip_store
+from webapp import clip_store, safe_files
 from webapp.clip_store import ClipStore, ClipStoreError
 from webapp.job_store import JobStore
 
@@ -145,6 +145,55 @@ class ClipStoreTests(unittest.TestCase):
         self.assertEqual(list(target.iterdir()), [])
         self.assertTrue((displaced / "current_prompt.txt").is_file())
 
+    def test_create_clip_source_swap_is_not_blessed_or_deleted(self):
+        self.store.initialize(self.project, "Test project")
+        manifest_path = self.project / "project.json"
+        original_manifest = manifest_path.read_bytes()
+        target = self.project / "clips" / "clip-002"
+        displaced = self.project / "clips" / ".displaced-clip-source"
+        real_renameat2 = safe_files._renameat2
+        assert real_renameat2 is not None
+        swapped = False
+
+        def swap_source(parent_fd, source_name, destination_fd,
+                        destination_name, flags):
+            nonlocal swapped
+            source = os.fsdecode(source_name)
+            if not swapped and source.startswith(".creating-"):
+                swapped = True
+                os.rename(source, displaced.name,
+                          src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+                os.mkdir(source, dir_fd=parent_fd)
+                replacement_fd = os.open(
+                    source, os.O_RDONLY | os.O_DIRECTORY, dir_fd=parent_fd)
+                try:
+                    marker_fd = os.open(
+                        "replacement.txt",
+                        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                        0o600,
+                        dir_fd=replacement_fd,
+                    )
+                    try:
+                        os.write(marker_fd, b"replacement")
+                    finally:
+                        os.close(marker_fd)
+                finally:
+                    os.close(replacement_fd)
+            return real_renameat2(
+                parent_fd, source_name, destination_fd, destination_name, flags)
+
+        with (
+            patch.object(safe_files, "_renameat2", side_effect=swap_source),
+            self.assertRaisesRegex(safe_files.SafeFilesystemError,
+                                   "publication identity"),
+        ):
+            self.store.create_clip(self.project, "Second scene")
+
+        self.assertTrue(swapped)
+        self.assertEqual(manifest_path.read_bytes(), original_manifest)
+        self.assertEqual((target / "replacement.txt").read_bytes(), b"replacement")
+        self.assertTrue((displaced / "current_prompt.txt").is_file())
+
     def test_concurrent_clip_creation_serializes_ids_and_manifest(self):
         self.store.initialize(self.project, "Test project")
         with ThreadPoolExecutor(max_workers=8) as pool:
@@ -166,36 +215,50 @@ class ClipStoreTests(unittest.TestCase):
         old = self.store.describe(self.project)
         new = json.loads(json.dumps(old))
         new["clips"][0]["title"] = "New title"
-        reader_started = threading.Event()
-        writer_done = threading.Event()
+        publication_entered = threading.Barrier(2)
+        old_read = threading.Barrier(2)
+        publication_finished = threading.Barrier(2)
+        new_read = threading.Barrier(2)
+        writer_returned = threading.Event()
+        real_replace = Path.replace
+
+        def publish_between_barriers(temp, target):
+            publication_entered.wait(timeout=2)
+            old_read.wait(timeout=2)
+            result = real_replace(temp, target)
+            publication_finished.wait(timeout=2)
+            new_read.wait(timeout=2)
+            return result
 
         def read_while_writing():
-            observed = []
-            reader_started.set()
-            while not writer_done.is_set():
-                observed.append(json.loads(
-                    (self.project / "project.json").read_text(encoding="utf-8")))
-            observed.append(json.loads(
-                (self.project / "project.json").read_text(encoding="utf-8")))
-            return observed
+            publication_entered.wait(timeout=2)
+            observed_old = self.store.describe(self.project)
+            self.assertFalse(writer_returned.is_set())
+            old_read.wait(timeout=2)
+            publication_finished.wait(timeout=2)
+            observed_new = self.store.describe(self.project)
+            self.assertFalse(writer_returned.is_set())
+            new_read.wait(timeout=2)
+            return [observed_old, observed_new]
 
-        def alternate_manifests():
-            self.assertTrue(reader_started.wait(timeout=2))
+        def publish_manifest():
             try:
-                for index in range(100):
-                    self.store._write_manifest_unlocked(
-                        self.project, new if index % 2 == 0 else old)
+                self.store._write_manifest_unlocked(self.project, new)
             finally:
-                writer_done.set()
+                writer_returned.set()
 
-        with ThreadPoolExecutor(max_workers=2) as pool:
+        with (
+            patch.object(Path, "replace", autospec=True,
+                         side_effect=publish_between_barriers),
+            ThreadPoolExecutor(max_workers=2) as pool,
+        ):
             reader = pool.submit(read_while_writing)
-            writer = pool.submit(alternate_manifests)
-            writer.result(timeout=5)
+            writer = pool.submit(publish_manifest)
             observed = reader.result(timeout=5)
+            writer.result(timeout=5)
 
-        self.assertTrue(observed)
-        self.assertTrue(all(value in (old, new) for value in observed))
+        self.assertEqual(observed, [old, new])
+        self.assertTrue(writer_returned.is_set())
 
     def test_manifest_swap_at_descriptor_open_does_not_read_symlink_target(self):
         self.store.initialize(self.project, "Test project")
@@ -219,6 +282,37 @@ class ClipStoreTests(unittest.TestCase):
         ):
             self.store.describe(self.project)
         self.assertTrue(swapped)
+
+    def test_manifest_parent_swap_at_final_open_fails_closed(self):
+        self.store.initialize(self.project, "Test project")
+        displaced = Path(self.temp.name) / "displaced-project"
+        outside = Path(self.temp.name) / "outside-project"
+        outside.mkdir()
+        (outside / "project.json").write_text(
+            json.dumps({"outside": "secret"}), encoding="utf-8")
+        real_open = os.open
+        swapped = False
+
+        def swap_parent_at_final_open(path, flags, mode=0o777, *, dir_fd=None):
+            nonlocal swapped
+            if not swapped and Path(path).name == "project.json":
+                swapped = True
+                self.project.rename(displaced)
+                self.project.symlink_to(outside, target_is_directory=True)
+            return real_open(path, flags, mode, dir_fd=dir_fd)
+
+        with (
+            patch("webapp.safe_files.os.open",
+                  side_effect=swap_parent_at_final_open),
+            self.assertRaisesRegex(ClipStoreError, "missing or unsafe"),
+        ):
+            self.store.describe(self.project)
+
+        self.assertTrue(swapped)
+        self.assertEqual(
+            json.loads((outside / "project.json").read_text()),
+            {"outside": "secret"},
+        )
 
     def test_selects_and_clears_one_existing_video_take(self):
         self.store.initialize(self.project, "Test project")
@@ -259,6 +353,105 @@ class ClipStoreTests(unittest.TestCase):
         clip.symlink_to(outside, target_is_directory=True)
         with self.assertRaisesRegex(ClipStoreError, "clip not found"):
             self.store.describe(self.project)
+
+
+class SafeFilesystemTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.parent = Path(self.temp.name) / "publication"
+        self.parent.mkdir()
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def test_atomic_publication_rejects_swapped_source_identity(self):
+        source = self.parent / "source"
+        source.mkdir()
+        (source / "original.txt").write_text("original")
+        destination = self.parent / "destination"
+        displaced = self.parent / "displaced-source"
+        real_renameat2 = safe_files._renameat2
+        assert real_renameat2 is not None
+
+        def swap_source(parent_fd, source_name, destination_fd,
+                        destination_name, flags):
+            os.rename("source", "displaced-source",
+                      src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+            os.mkdir("source", dir_fd=parent_fd)
+            replacement_fd = os.open(
+                "source", os.O_RDONLY | os.O_DIRECTORY, dir_fd=parent_fd)
+            try:
+                marker_fd = os.open(
+                    "replacement.txt",
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                    dir_fd=replacement_fd,
+                )
+                try:
+                    os.write(marker_fd, b"replacement")
+                finally:
+                    os.close(marker_fd)
+            finally:
+                os.close(replacement_fd)
+            return real_renameat2(
+                parent_fd, source_name, destination_fd, destination_name, flags)
+
+        with (
+            patch.object(safe_files, "_renameat2", side_effect=swap_source),
+            self.assertRaisesRegex(safe_files.SafeFilesystemError,
+                                   "publication identity"),
+        ):
+            safe_files.atomic_publish_directory(source, destination)
+
+        self.assertEqual((displaced / "original.txt").read_text(), "original")
+        self.assertEqual(
+            (destination / "replacement.txt").read_text(), "replacement")
+
+    def test_rollback_quarantine_preserves_moved_original_and_replacement(self):
+        source = self.parent / "source"
+        source.mkdir()
+        (source / "original.txt").write_text("original")
+        destination = self.parent / "destination"
+        identity = safe_files.atomic_publish_directory(source, destination)
+        displaced = self.parent / "displaced-publication"
+        real_open_directory = safe_files._open_directory
+        swapped = False
+
+        def swap_quarantine_before_verification(path, *, dir_fd=None):
+            nonlocal swapped
+            name = os.fsdecode(path)
+            if (not swapped and dir_fd is not None
+                    and ".rollback-" in name):
+                swapped = True
+                os.rename(name, displaced.name,
+                          src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+                os.mkdir(name, dir_fd=dir_fd)
+                replacement_fd = os.open(
+                    name, os.O_RDONLY | os.O_DIRECTORY, dir_fd=dir_fd)
+                try:
+                    marker_fd = os.open(
+                        "replacement.txt",
+                        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                        0o600,
+                        dir_fd=replacement_fd,
+                    )
+                    os.close(marker_fd)
+                finally:
+                    os.close(replacement_fd)
+            return real_open_directory(path, dir_fd=dir_fd)
+
+        with patch.object(
+                safe_files, "_open_directory",
+                side_effect=swap_quarantine_before_verification):
+            removed = safe_files.remove_published_directory_if_same(
+                destination, identity)
+
+        self.assertFalse(removed)
+        self.assertTrue(swapped)
+        self.assertEqual((displaced / "original.txt").read_text(), "original")
+        quarantines = list(self.parent.glob("*.rollback-*"))
+        self.assertEqual(len(quarantines), 1)
+        self.assertTrue((quarantines[0] / "replacement.txt").is_file())
 
 
 class ProjectPathTests(unittest.TestCase):
@@ -333,6 +526,59 @@ class ProjectPathTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "missing"):
             ds.read_project_text(self.project, "missing.md", required=True)
+
+    def test_optional_project_metadata_parent_swap_does_not_read_outside(self):
+        displaced = Path(self.temp.name) / "displaced-project"
+        outside = Path(self.temp.name) / "outside-project"
+        outside.mkdir()
+        (outside / "brief.md").write_text("outside secret", encoding="utf-8")
+        real_open = os.open
+        swapped = False
+
+        def swap_parent_at_final_open(path, flags, mode=0o777, *, dir_fd=None):
+            nonlocal swapped
+            if not swapped and Path(path).name == "brief.md":
+                swapped = True
+                self.project.rename(displaced)
+                self.project.symlink_to(outside, target_is_directory=True)
+            return real_open(path, flags, mode, dir_fd=dir_fd)
+
+        with patch("webapp.safe_files.os.open",
+                   side_effect=swap_parent_at_final_open):
+            value = ds.read_project_text(self.project, "brief.md")
+
+        self.assertTrue(swapped)
+        self.assertEqual(value, "")
+        self.assertEqual((outside / "brief.md").read_text(), "outside secret")
+
+    def test_required_clip_prompt_parent_swap_fails_closed(self):
+        clip = self.project / "clips" / "clip-001"
+        displaced = Path(self.temp.name) / "displaced-clip"
+        outside = Path(self.temp.name) / "outside-clip"
+        outside.mkdir()
+        (outside / "current_prompt.txt").write_text(
+            "outside secret", encoding="utf-8")
+        real_open = os.open
+        swapped = False
+
+        def swap_parent_at_final_open(path, flags, mode=0o777, *, dir_fd=None):
+            nonlocal swapped
+            if not swapped and Path(path).name == "current_prompt.txt":
+                swapped = True
+                clip.rename(displaced)
+                clip.symlink_to(outside, target_is_directory=True)
+            return real_open(path, flags, mode, dir_fd=dir_fd)
+
+        with (
+            patch("webapp.safe_files.os.open",
+                  side_effect=swap_parent_at_final_open),
+            self.assertRaisesRegex(ValueError, "regular file"),
+        ):
+            ds.read_project_text(clip, "current_prompt.txt", required=True)
+
+        self.assertTrue(swapped)
+        self.assertEqual(
+            (outside / "current_prompt.txt").read_text(), "outside secret")
 
     def test_prompt_writes_are_atomic_and_clip_scoped(self):
         second = ClipStore().create_clip(self.project, "Second")
@@ -608,6 +854,103 @@ class ProjectPathTests(unittest.TestCase):
         self.assertTrue(swapped)
         self.assertEqual(outside.read_bytes(), b"SECRET")
 
+    def test_archive_settings_parent_swap_does_not_copy_outside(self):
+        source_root = Path(self.temp.name) / "settings-parent-swap"
+        source_root.mkdir()
+        (source_root / "result.png").write_bytes(b"safe image")
+        clip = self.project / "clips" / "clip-001"
+        (clip / "current_generation.json").write_text(
+            '{"seed": 1}\n', encoding="utf-8")
+        displaced = Path(self.temp.name) / "displaced-settings-clip"
+        outside = Path(self.temp.name) / "outside-settings-clip"
+        outside.mkdir()
+        (outside / "current_generation.json").write_text(
+            '{"outside": "secret"}\n', encoding="utf-8")
+        real_open = os.open
+        swapped = False
+        copied_settings = []
+        real_copy = ds.copy_opened_file
+
+        def swap_parent_at_final_open(path, flags, mode=0o777, *, dir_fd=None):
+            nonlocal swapped
+            if not swapped and Path(path).name == "current_generation.json":
+                swapped = True
+                clip.rename(displaced)
+                clip.symlink_to(outside, target_is_directory=True)
+            return real_open(path, flags, mode, dir_fd=dir_fd)
+
+        def inspect_copy(source, target):
+            if source.name == "current_generation.json":
+                copied_settings.append(os.pread(source.descriptor, 4096, 0))
+            return real_copy(source, target)
+
+        with (
+            patch("webapp.safe_files.os.open",
+                  side_effect=swap_parent_at_final_open),
+            patch.object(ds, "copy_opened_file", side_effect=inspect_copy),
+            self.assertRaises(ValueError),
+        ):
+            ds.archive_outputs(
+                self.root, self.project.name, "clip-001", ["result.png"],
+                source_root=source_root)
+
+        self.assertTrue(swapped)
+        self.assertNotIn(b'{"outside": "secret"}\n', copied_settings)
+        self.assertEqual(
+            (outside / "current_generation.json").read_text(),
+            '{"outside": "secret"}\n',
+        )
+
+    def test_archive_publication_rejects_swapped_staging_identity(self):
+        source_root = Path(self.temp.name) / "archive-publication-swap"
+        source_root.mkdir()
+        source = source_root / "result.png"
+        source.write_bytes(b"safe image")
+        generations = self.project / "clips" / "clip-001" / "generations"
+        target = generations / "001"
+        displaced = generations / ".displaced-archive-source"
+        real_renameat2 = safe_files._renameat2
+        assert real_renameat2 is not None
+        swapped = False
+
+        def swap_source(parent_fd, source_name, destination_fd,
+                        destination_name, flags):
+            nonlocal swapped
+            name = os.fsdecode(source_name)
+            if not swapped and name.startswith(".publishing-"):
+                swapped = True
+                os.rename(name, displaced.name,
+                          src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+                os.mkdir(name, dir_fd=parent_fd)
+                replacement_fd = os.open(
+                    name, os.O_RDONLY | os.O_DIRECTORY, dir_fd=parent_fd)
+                try:
+                    marker_fd = os.open(
+                        "replacement.txt",
+                        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                        0o600,
+                        dir_fd=replacement_fd,
+                    )
+                    os.close(marker_fd)
+                finally:
+                    os.close(replacement_fd)
+            return real_renameat2(
+                parent_fd, source_name, destination_fd, destination_name, flags)
+
+        with (
+            patch.object(safe_files, "_renameat2", side_effect=swap_source),
+            self.assertRaisesRegex(safe_files.SafeFilesystemError,
+                                   "publication identity"),
+        ):
+            ds.archive_outputs(
+                self.root, self.project.name, "clip-001", ["result.png"],
+                source_root=source_root)
+
+        self.assertTrue(swapped)
+        self.assertEqual(source.read_bytes(), b"safe image")
+        self.assertTrue((target / "replacement.txt").is_file())
+        self.assertEqual((displaced / "result.png").read_bytes(), b"safe image")
+
     def test_archive_without_current_settings_records_exact_null_snapshot(self):
         comfy_output = Path(self.temp.name) / "comfy-output"
         comfy_output.mkdir()
@@ -653,6 +996,44 @@ class ProjectPathTests(unittest.TestCase):
                 self.root, self.project.name, "clip-001",
                 ["linked/secret.png"], source_root=comfy_output)
         self.assertEqual((outside / "secret.png").read_bytes(), b"SECRET")
+
+    def test_archive_rejects_swapped_media_root_parent(self):
+        media_parent = Path(self.temp.name) / "media-parent"
+        source_root = media_parent / "source"
+        source_root.mkdir(parents=True)
+        (source_root / "result.png").write_bytes(b"safe image")
+        displaced = Path(self.temp.name) / "displaced-media-parent"
+        outside_parent = Path(self.temp.name) / "outside-media-parent"
+        outside_root = outside_parent / "source"
+        outside_root.mkdir(parents=True)
+        (outside_root / "result.png").write_bytes(b"OUTSIDE")
+        real_open = os.open
+        swapped = False
+
+        def swap_parent_before_root_open(path, flags, mode=0o777, *, dir_fd=None):
+            nonlocal swapped
+            component_walk = dir_fd is not None and os.fsdecode(path) == media_parent.name
+            if not swapped and (Path(path) == source_root or component_walk):
+                swapped = True
+                media_parent.rename(displaced)
+                media_parent.symlink_to(outside_parent, target_is_directory=True)
+            return real_open(path, flags, mode, dir_fd=dir_fd)
+
+        with (
+            patch("webapp.safe_files.os.open",
+                  side_effect=swap_parent_before_root_open),
+            self.assertRaises(ValueError),
+        ):
+            ds.archive_outputs(
+                self.root, self.project.name, "clip-001", ["result.png"],
+                source_root=source_root)
+
+        self.assertTrue(swapped)
+        self.assertEqual((outside_root / "result.png").read_bytes(), b"OUTSIDE")
+        self.assertEqual(
+            list((self.project / "clips" / "clip-001" / "generations").iterdir()),
+            [],
+        )
 
     def test_archive_rejects_symlinked_generation_directory(self):
         comfy_output = Path(self.temp.name) / "comfy-output"

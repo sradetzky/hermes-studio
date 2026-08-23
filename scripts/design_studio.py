@@ -282,7 +282,8 @@ def archive_outputs(root: Path, project: str, clip_id: str,
                     prompt_text: str | None = None) -> Path:
     """Archive outputs beneath one exact clip from one trusted source root."""
     clip = clip_path(root, project, clip_id)
-    output_root = (source_root or COMFY_OUTPUT).resolve()
+    output_root = Path(os.path.abspath(
+        os.path.expanduser(os.fspath(source_root or COMFY_OUTPUT))))
     with ExitStack() as source_descriptors:
         sources = []
         for output in outputs:

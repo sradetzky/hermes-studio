@@ -4,6 +4,7 @@ import ctypes
 import errno
 import os
 import stat
+import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -75,22 +76,73 @@ def _open_directory(path: Path | str, *, dir_fd: int | None = None) -> int:
         raise
 
 
+def _absolute_path(path: Path | str) -> Path:
+    """Normalize a path lexically without following any filesystem entry."""
+    return Path(os.path.abspath(os.path.expanduser(os.fspath(path))))
+
+
+def _open_absolute_directory(path: Path | str) -> int:
+    """Open an absolute directory by walking from an already-open `/`."""
+    absolute = _absolute_path(path)
+    descriptor = _open_directory(absolute.anchor)
+    try:
+        for part in absolute.parts[1:]:
+            next_fd = _open_directory(
+                _component(part, "directory component"), dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = next_fd
+        return descriptor
+    except Exception:
+        os.close(descriptor)
+        raise
+
+
+def _identity(descriptor: int) -> tuple[int, int]:
+    details = os.fstat(descriptor)
+    return (details.st_dev, details.st_ino)
+
+
+def _verify_absolute_directory_identity(
+        path: Path, descriptor: int, *, label: str) -> None:
+    """Verify that a retained directory is still named by an absolute path."""
+    try:
+        current_fd = _open_absolute_directory(path)
+    except (FileNotFoundError, SafeFilesystemError, OSError) as exc:
+        raise SafeFilesystemError(f"{label} changed while opening") from exc
+    try:
+        if _identity(current_fd) != _identity(descriptor):
+            raise SafeFilesystemError(f"{label} changed while opening")
+    finally:
+        os.close(current_fd)
+
+
 @contextmanager
 def open_regular_file(path: Path) -> Iterator[OpenedRegularFile]:
-    """Open one path once without following its final component."""
+    """Descriptor-walk a path and retain its final regular-file fd."""
+    absolute = _absolute_path(path)
+    directory_fd = _open_absolute_directory(absolute.parent)
     try:
-        descriptor = os.open(path, _FILE_FLAGS)
-    except FileNotFoundError:
-        raise
-    except OSError as exc:
-        raise SafeFilesystemError(f"not a safe regular file: {path}") from exc
-    try:
-        details = os.fstat(descriptor)
-        if not stat.S_ISREG(details.st_mode):
-            raise SafeFilesystemError(f"not a safe regular file: {path}")
-        yield OpenedRegularFile(descriptor, path, details)
+        try:
+            descriptor = os.open(
+                _component(absolute.name, "filename"), _FILE_FLAGS,
+                dir_fd=directory_fd)
+        except FileNotFoundError:
+            raise
+        except OSError as exc:
+            raise SafeFilesystemError(
+                f"not a safe regular file: {absolute}") from exc
+        try:
+            details = os.fstat(descriptor)
+            if not stat.S_ISREG(details.st_mode):
+                raise SafeFilesystemError(
+                    f"not a safe regular file: {absolute}")
+            _verify_absolute_directory_identity(
+                absolute.parent, directory_fd, label="file parent directory")
+            yield OpenedRegularFile(descriptor, absolute, details)
+        finally:
+            os.close(descriptor)
     finally:
-        os.close(descriptor)
+        os.close(directory_fd)
 
 
 def _relative_beneath(trusted_root: Path, candidate: Path | str) -> Path:
@@ -115,9 +167,9 @@ def _relative_beneath(trusted_root: Path, candidate: Path | str) -> Path:
 def open_regular_beneath(
         trusted_root: Path, candidate: Path | str) -> Iterator[OpenedRegularFile]:
     """Walk beneath an opened root and retain the final regular-file fd."""
-    root = Path(trusted_root).expanduser().resolve(strict=True)
+    root = _absolute_path(trusted_root)
     relative = _relative_beneath(root, candidate)
-    directory_fd = _open_directory(root)
+    directory_fd = _open_absolute_directory(root)
     try:
         for part in relative.parts[:-1]:
             part = _component(part, "path component")
@@ -137,6 +189,9 @@ def open_regular_beneath(
             if not stat.S_ISREG(details.st_mode):
                 raise SafeFilesystemError(
                     f"not a safe regular file beneath {root}: {relative}")
+            _verify_absolute_directory_identity(
+                root.joinpath(*relative.parts[:-1]), directory_fd,
+                label="trusted file parent directory")
             yield OpenedRegularFile(descriptor, root / relative, details)
         finally:
             os.close(descriptor)
@@ -198,33 +253,46 @@ def atomic_publish_directory(source: Path, destination: Path) -> tuple[int, int]
         raise AtomicPublicationUnavailable(
             "renameat2(RENAME_NOREPLACE) is unavailable")
 
-    parent_fd = _open_directory(source.parent)
+    parent_fd = _open_absolute_directory(source.parent)
     try:
         try:
-            source_stat = os.stat(
-                source_name, dir_fd=parent_fd, follow_symlinks=False)
-        except OSError as exc:
+            source_fd = _open_directory(source_name, dir_fd=parent_fd)
+        except (FileNotFoundError, SafeFilesystemError, OSError) as exc:
             raise SafeFilesystemError(
                 f"publication source is unsafe: {source}") from exc
-        if not stat.S_ISDIR(source_stat.st_mode):
-            raise SafeFilesystemError(
-                f"publication source is not a directory: {source}")
-        result = _renameat2(
-            parent_fd,
-            os.fsencode(source_name),
-            parent_fd,
-            os.fsencode(destination_name),
-            _RENAME_NOREPLACE,
-        )
-        if result != 0:
-            error = ctypes.get_errno()
-            if error in {errno.EEXIST, errno.ENOTEMPTY}:
-                raise FileExistsError(error, os.strerror(error), destination)
-            if error in {errno.ENOSYS, errno.EINVAL, errno.ENOTSUP}:
-                raise AtomicPublicationUnavailable(
-                    "renameat2(RENAME_NOREPLACE) is unavailable")
-            raise OSError(error, os.strerror(error), destination)
-        return (source_stat.st_dev, source_stat.st_ino)
+        try:
+            source_identity = _identity(source_fd)
+            result = _renameat2(
+                parent_fd,
+                os.fsencode(source_name),
+                parent_fd,
+                os.fsencode(destination_name),
+                _RENAME_NOREPLACE,
+            )
+            if result != 0:
+                error = ctypes.get_errno()
+                if error in {errno.EEXIST, errno.ENOTEMPTY}:
+                    raise FileExistsError(error, os.strerror(error), destination)
+                if error in {errno.ENOSYS, errno.EINVAL, errno.ENOTSUP}:
+                    raise AtomicPublicationUnavailable(
+                        "renameat2(RENAME_NOREPLACE) is unavailable")
+                raise OSError(error, os.strerror(error), destination)
+
+            try:
+                destination_fd = _open_directory(
+                    destination_name, dir_fd=parent_fd)
+            except (FileNotFoundError, SafeFilesystemError, OSError) as exc:
+                raise SafeFilesystemError(
+                    "publication identity could not be verified") from exc
+            try:
+                if _identity(destination_fd) != source_identity:
+                    raise SafeFilesystemError(
+                        "publication identity does not match the source")
+            finally:
+                os.close(destination_fd)
+            return source_identity
+        finally:
+            os.close(source_fd)
     finally:
         os.close(parent_fd)
 
@@ -245,11 +313,13 @@ def _remove_contents(directory_fd: int) -> None:
 
 def remove_published_directory_if_same(
         path: Path, identity: tuple[int, int]) -> bool:
-    """Rollback only when the destination still has the published identity."""
+    """Quarantine and remove only the exact directory that was published."""
     path = Path(path)
     name = _component(path.name, "published directory")
+    if _renameat2 is None:
+        return False
     try:
-        parent_fd = _open_directory(path.parent)
+        parent_fd = _open_absolute_directory(path.parent)
     except (FileNotFoundError, SafeFilesystemError):
         return False
     try:
@@ -258,16 +328,38 @@ def remove_published_directory_if_same(
         except (FileNotFoundError, SafeFilesystemError):
             return False
         try:
-            details = os.fstat(directory_fd)
-            if (details.st_dev, details.st_ino) != identity:
+            if _identity(directory_fd) != identity:
                 return False
-            _remove_contents(directory_fd)
-            current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
-            if ((current.st_dev, current.st_ino) != identity
-                    or not stat.S_ISDIR(current.st_mode)):
+
+            quarantine = f".{name}.rollback-{uuid.uuid4().hex}"
+            result = _renameat2(
+                parent_fd,
+                os.fsencode(name),
+                parent_fd,
+                os.fsencode(quarantine),
+                _RENAME_NOREPLACE,
+            )
+            if result != 0:
                 return False
-            os.rmdir(name, dir_fd=parent_fd)
-            return True
+
+            try:
+                quarantine_fd = _open_directory(quarantine, dir_fd=parent_fd)
+            except (FileNotFoundError, SafeFilesystemError):
+                return False
+            try:
+                if (_identity(quarantine_fd) != identity
+                        or _identity(quarantine_fd) != _identity(directory_fd)):
+                    return False
+                _remove_contents(quarantine_fd)
+                current = os.stat(
+                    quarantine, dir_fd=parent_fd, follow_symlinks=False)
+                if ((current.st_dev, current.st_ino) != identity
+                        or not stat.S_ISDIR(current.st_mode)):
+                    return False
+                os.rmdir(quarantine, dir_fd=parent_fd)
+                return True
+            finally:
+                os.close(quarantine_fd)
         finally:
             os.close(directory_fd)
     finally:
