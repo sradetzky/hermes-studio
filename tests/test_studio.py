@@ -1658,6 +1658,95 @@ class LegacyClipMigrationTests(unittest.TestCase):
         self.assertTrue((project / ds.CLIP_MIGRATION_JOURNAL).is_file())
         self.assertTrue((project / "current_prompt.txt").is_file())
 
+    def test_injected_destination_symlink_after_creation_blocks_and_resumes(self):
+        project = self.legacy_project()
+        outside = Path(self.temp.name) / "outside-injected-after-creation.txt"
+        outside.write_bytes(b"outside must remain untouched")
+        unexpected = project / "clips" / "clip-001" / "unexpected"
+
+        def inject(checkpoint):
+            if checkpoint == "directories-created":
+                unexpected.symlink_to(outside)
+
+        with (
+            patch.object(ds, "_migration_checkpoint", side_effect=inject),
+            self.assertRaises((ValueError, safe_files.SafeFilesystemError)),
+        ):
+            self.migrate(project.name, apply=True)
+
+        self.assertTrue(unexpected.is_symlink())
+        self.assertEqual(outside.read_bytes(), b"outside must remain untouched")
+        self.assertTrue((project / ds.CLIP_MIGRATION_JOURNAL).is_file())
+        self.assertFalse((project / "project.json").exists())
+
+        unexpected.unlink()
+        report = self.migrate(project.name, apply=True)
+        self.assertEqual(report["projects"][0]["status"], "migrated")
+        self.assertFalse((project / ds.CLIP_MIGRATION_JOURNAL).exists())
+
+    def test_late_injected_destination_symlink_blocks_journal_removal_and_resumes(self):
+        project = self.legacy_project()
+        outside = Path(self.temp.name) / "outside-injected-before-removal.txt"
+        outside.write_bytes(b"outside must remain untouched")
+        unexpected = project / "clips" / "clip-001" / "unexpected"
+
+        def inject(checkpoint):
+            if checkpoint == "journal-manifest-published":
+                unexpected.symlink_to(outside)
+
+        with (
+            patch.object(ds, "_migration_checkpoint", side_effect=inject),
+            self.assertRaises((ValueError, safe_files.SafeFilesystemError)),
+        ):
+            self.migrate(project.name, apply=True)
+
+        self.assertTrue(unexpected.is_symlink())
+        self.assertEqual(outside.read_bytes(), b"outside must remain untouched")
+        self.assertTrue((project / ds.CLIP_MIGRATION_JOURNAL).is_file())
+        self.assertTrue((project / "project.json").is_file())
+
+        unexpected.unlink()
+        report = self.migrate(project.name, apply=True)
+        self.assertEqual(report["projects"][0]["status"], "migrated")
+        self.assertFalse((project / ds.CLIP_MIGRATION_JOURNAL).exists())
+
+    def test_destination_parent_swap_during_inventory_fails_closed_and_resumes(self):
+        project = self.legacy_project()
+        outside = Path(self.temp.name) / "outside-swapped-clips"
+        outside.mkdir()
+        clips = project / "clips"
+        displaced = project / "displaced-clips"
+        real_validate = ds._validate_migration_inventory_directory
+        swapped = False
+
+        def swap_after_inventory(descriptor, tree, *, label):
+            nonlocal swapped
+            real_validate(descriptor, tree, label=label)
+            if not swapped and label == "migration target generations":
+                swapped = True
+                clips.rename(displaced)
+                clips.symlink_to(outside, target_is_directory=True)
+
+        with (
+            patch.object(
+                ds, "_validate_migration_inventory_directory",
+                side_effect=swap_after_inventory,
+            ),
+            self.assertRaises((ValueError, safe_files.SafeFilesystemError)),
+        ):
+            self.migrate(project.name, apply=True)
+
+        self.assertTrue(swapped)
+        self.assertEqual(list(outside.iterdir()), [])
+        self.assertTrue((project / ds.CLIP_MIGRATION_JOURNAL).is_file())
+        self.assertFalse((project / "project.json").exists())
+
+        clips.unlink()
+        displaced.rename(clips)
+        report = self.migrate(project.name, apply=True)
+        self.assertEqual(report["projects"][0]["status"], "migrated")
+        self.assertFalse((project / ds.CLIP_MIGRATION_JOURNAL).exists())
+
     def test_resume_accepts_existing_safe_destination_directories(self):
         project = self.legacy_project()
         self._prepare_journal(project)
