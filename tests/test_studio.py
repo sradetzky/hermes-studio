@@ -64,6 +64,20 @@ class ClipStoreTests(unittest.TestCase):
             ["clip-003", "clip-001", "clip-002"],
         )
 
+    def test_create_clip_rejects_unmanifested_existing_target(self):
+        self.store.initialize(self.project, "Test project")
+        manifest_path = self.project / "project.json"
+        original_manifest = manifest_path.read_bytes()
+        target = self.project / "clips" / "clip-002"
+        target.mkdir()
+
+        with self.assertRaisesRegex(ClipStoreError, "already exists"):
+            self.store.create_clip(self.project, "Second scene")
+
+        self.assertEqual(manifest_path.read_bytes(), original_manifest)
+        self.assertTrue(target.is_dir())
+        self.assertEqual(list(target.iterdir()), [])
+
     def test_concurrent_clip_creation_serializes_ids_and_manifest(self):
         self.store.initialize(self.project, "Test project")
         with ThreadPoolExecutor(max_workers=8) as pool:
@@ -175,6 +189,24 @@ class ProjectPathTests(unittest.TestCase):
             ds.write_prompt(
                 self.root, self.project.name, "clip-001", "replacement")
         self.assertEqual(target.read_text(), "secret")
+
+    def test_optional_project_metadata_ignores_missing_and_unsafe_entries(self):
+        self.assertEqual(ds.read_project_text(self.project, "missing.md"), "")
+
+        outside = Path(self.temp.name) / "outside-metadata.txt"
+        outside.write_text("secret", encoding="utf-8")
+        (self.project / "linked.md").symlink_to(outside)
+        (self.project / "metadata-dir").mkdir()
+        for filename in ("linked.md", "metadata-dir"):
+            with self.subTest(filename=filename):
+                self.assertEqual(
+                    ds.read_project_text(self.project, filename), "")
+                with self.assertRaisesRegex(ValueError, "missing|regular file"):
+                    ds.read_project_text(
+                        self.project, filename, required=True)
+
+        with self.assertRaisesRegex(ValueError, "missing"):
+            ds.read_project_text(self.project, "missing.md", required=True)
 
     def test_prompt_writes_are_atomic_and_clip_scoped(self):
         second = ClipStore().create_clip(self.project, "Second")

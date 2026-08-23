@@ -239,8 +239,12 @@ class ClipStore:
             target = clips / clip_id
             staging = clips / f".creating-{uuid.uuid4().hex}"
             self._create_clip_tree(staging)
+            published = False
             try:
+                if os.path.lexists(target):
+                    raise ClipStoreError(f"clip target already exists: {clip_id}")
                 staging.replace(target)
+                published = True
                 entry = {
                     "id": clip_id,
                     "title": title,
@@ -251,7 +255,8 @@ class ClipStore:
                 self._write_manifest_unlocked(project, manifest)
             except Exception:
                 shutil.rmtree(staging, ignore_errors=True)
-                shutil.rmtree(target, ignore_errors=True)
+                if published:
+                    shutil.rmtree(target, ignore_errors=True)
                 raise
         return entry
 

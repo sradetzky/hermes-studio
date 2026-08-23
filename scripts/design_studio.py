@@ -248,7 +248,7 @@ def next_generation_dir(root: Path, project: str, clip_id: str) -> Path:
 
 def read_project_text(project: Path, filename: str, limit: int | None = None,
                       *, required: bool = False) -> str:
-    """Read one regular metadata file without following symlinks."""
+    """Read safe metadata, returning empty for unsafe optional entries."""
     if Path(filename).name != filename:
         raise ValueError(f"invalid project filename: {filename!r}")
     path = project / filename
@@ -257,7 +257,9 @@ def read_project_text(project: Path, filename: str, limit: int | None = None,
             raise ValueError(f"{filename} is missing")
         return ""
     if path.is_symlink() or not path.is_file():
-        raise ValueError(f"{filename} is not a regular file")
+        if required:
+            raise ValueError(f"{filename} is not a regular file")
+        return ""
     value = path.read_text(encoding="utf-8")
     return value[:limit] if limit is not None else value
 
