@@ -66,7 +66,11 @@ concurrently.
 5. Wait through `mcp_comfyui_queue` / `mcp_comfyui_get_history` until success,
    error, or timeout. Never start another job while one is running.
 6. On success, archive output with `design_studio.py archive-output` and the
-   same exact project + clip IDs.
+   same exact project + clip IDs. If the configured ComfyUI root is itself a
+   symlink and the safe-filesystem guard rejects it, do not copy manually:
+   import `scripts/design_studio.py` and call `archive_outputs(...)` with the
+   canonical real output directory as `source_root` plus a relative output
+   filename. This preserves the same descriptor-safe archive transaction.
 7. **Finally, always call `mcp_comfyui_clear_vram`** with model unload and
    memory free enabled — after success, error, cancellation, or timeout.
 8. On timeout/error, cancel through `mcp_comfyui_queue` first, verify the job
