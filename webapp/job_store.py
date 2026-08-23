@@ -11,6 +11,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from webapp.models import ChatEvent, Job, JobEvent, JobStatus
+from webapp.safe_files import (
+    SafeFilesystemError,
+    atomic_write_bytes_at,
+    open_directory,
+    open_regular_file,
+    read_opened_text,
+)
 
 
 log = logging.getLogger(__name__)
@@ -554,44 +561,58 @@ class JobStore:
             return row["session_id"] if row else None
 
     def import_chat_if_empty(self, project: str, chat_path: Path) -> None:
-        if chat_path.is_symlink() or not chat_path.is_file():
+        try:
+            with open_regular_file(chat_path):
+                pass
+        except FileNotFoundError:
             return
-        lock_path = chat_path.with_name(".chat.lock")
-        if lock_path.is_symlink():
-            raise ValueError("chat lock may not be a symlink")
-        with lock_path.open("a+b") as lock:
-            fcntl.flock(lock.fileno(), fcntl.LOCK_SH)
-            try:
-                with self._transaction() as connection:
-                    count = connection.execute(
-                        "SELECT COUNT(*) AS n FROM chat_events WHERE project = ?",
-                        (project,),
-                    ).fetchone()["n"]
-                    if count:
-                        return
-                    for line_number, line in enumerate(
-                            chat_path.read_text(encoding="utf-8").splitlines(), start=1):
-                        try:
-                            item = json.loads(line)
-                        except json.JSONDecodeError as exc:
-                            log.warning(
-                                "Skipping corrupt chat record %s:%d: %s",
-                                chat_path, line_number, exc)
-                            continue
-                        role = item.get("role")
-                        content = item.get("content")
-                        if (role not in {"user", "assistant", "system"} or
-                                not isinstance(content, str)):
-                            continue
-                        connection.execute(
-                            "INSERT INTO chat_events "
-                            "(project, job_id, role, content, created_at) "
-                            "VALUES (?, NULL, ?, ?, ?)",
-                            (project, role, content,
-                             item.get("ts") or utc_now()),
-                        )
-            finally:
-                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+        except (SafeFilesystemError, OSError) as exc:
+            raise ValueError("chat export is unsafe") from exc
+        try:
+            with open_directory(chat_path.parent) as parent_fd:
+                lock_fd = os.open(
+                    ".chat.lock",
+                    os.O_RDWR | os.O_CREAT | os.O_APPEND |
+                    os.O_NOFOLLOW | os.O_CLOEXEC,
+                    0o600,
+                    dir_fd=parent_fd,
+                )
+                with os.fdopen(lock_fd, "a+b") as lock:
+                    fcntl.flock(lock.fileno(), fcntl.LOCK_SH)
+                    try:
+                        with open_regular_file(chat_path) as opened:
+                            lines = read_opened_text(opened).splitlines()
+                        with self._transaction() as connection:
+                            count = connection.execute(
+                                "SELECT COUNT(*) AS n FROM chat_events "
+                                "WHERE project = ?", (project,),
+                            ).fetchone()["n"]
+                            if count:
+                                return
+                            for line_number, line in enumerate(lines, start=1):
+                                try:
+                                    item = json.loads(line)
+                                except json.JSONDecodeError as exc:
+                                    log.warning(
+                                        "Skipping corrupt chat record %s:%d: %s",
+                                        chat_path, line_number, exc)
+                                    continue
+                                role = item.get("role")
+                                content = item.get("content")
+                                if (role not in {"user", "assistant", "system"}
+                                        or not isinstance(content, str)):
+                                    continue
+                                connection.execute(
+                                    "INSERT INTO chat_events "
+                                    "(project, job_id, role, content, created_at) "
+                                    "VALUES (?, NULL, ?, ?, ?)",
+                                    (project, role, content,
+                                     item.get("ts") or utc_now()),
+                                )
+                    finally:
+                        fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+        except (SafeFilesystemError, OSError, UnicodeDecodeError) as exc:
+            raise ValueError("chat export is unsafe") from exc
 
     def append_external_event(self, project: str, role: str,
                               content: str) -> None:
@@ -683,20 +704,27 @@ class JobStore:
             return total, events
 
     def export_chat(self, project: str, chat_path: Path) -> None:
-        chat_path.parent.mkdir(parents=True, exist_ok=True)
-        lock_path = chat_path.with_name(".chat.lock")
-        if lock_path.is_symlink():
-            raise ValueError("chat lock may not be a symlink")
-        with lock_path.open("a+b") as lock:
-            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-            try:
-                _, events = self.chat_events(project)
-                temp = chat_path.with_name(
-                    f".{chat_path.name}.{uuid.uuid4().hex}.tmp")
-                with temp.open("w", encoding="utf-8") as handle:
-                    for event in events:
-                        handle.write(json.dumps(
-                            event.to_dict(), ensure_ascii=False) + "\n")
-                temp.replace(chat_path)
-            finally:
-                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+        _, events = self.chat_events(project)
+        data = "".join(
+            json.dumps(event.to_dict(), ensure_ascii=False) + "\n"
+            for event in events
+        ).encode("utf-8")
+        try:
+            with open_directory(chat_path.parent) as parent_fd:
+                lock_fd = os.open(
+                    ".chat.lock",
+                    os.O_RDWR | os.O_CREAT | os.O_APPEND |
+                    os.O_NOFOLLOW | os.O_CLOEXEC,
+                    0o600,
+                    dir_fd=parent_fd,
+                )
+                with os.fdopen(lock_fd, "a+b") as lock:
+                    fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+                    try:
+                        atomic_write_bytes_at(
+                            parent_fd, chat_path.name, data,
+                            label="project chat export")
+                    finally:
+                        fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+        except (SafeFilesystemError, OSError) as exc:
+            raise ValueError("chat export is unsafe") from exc

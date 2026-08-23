@@ -103,6 +103,19 @@ def open_directory(path: Path | str) -> Iterator[int]:
     """Descriptor-walk and retain a directory without following symlinks."""
     descriptor = _open_absolute_directory(path)
     try:
+        verify_absolute_directory_identity(
+            path, descriptor, label="directory")
+        yield descriptor
+    finally:
+        os.close(descriptor)
+
+
+@contextmanager
+def open_directory_at(parent_fd: int, name: str) -> Iterator[int]:
+    """Open and retain one literal child directory beneath a retained parent."""
+    descriptor = _open_directory(
+        _component(name, "directory component"), dir_fd=parent_fd)
+    try:
         yield descriptor
     finally:
         os.close(descriptor)
@@ -159,6 +172,27 @@ def open_regular_file(path: Path) -> Iterator[OpenedRegularFile]:
             os.close(descriptor)
     finally:
         os.close(directory_fd)
+
+
+@contextmanager
+def open_regular_file_at(
+        parent_fd: int, name: str, *, path: Path | None = None,
+) -> Iterator[OpenedRegularFile]:
+    """Open and retain one literal regular file beneath a retained directory."""
+    name = _component(name, "filename")
+    try:
+        descriptor = os.open(name, _FILE_FLAGS, dir_fd=parent_fd)
+    except FileNotFoundError:
+        raise
+    except OSError as exc:
+        raise SafeFilesystemError(f"not a safe regular file: {name}") from exc
+    try:
+        details = os.fstat(descriptor)
+        if not stat.S_ISREG(details.st_mode):
+            raise SafeFilesystemError(f"not a safe regular file: {name}")
+        yield OpenedRegularFile(descriptor, path or Path(name), details)
+    finally:
+        os.close(descriptor)
 
 
 def _relative_beneath(trusted_root: Path, candidate: Path | str) -> Path:
@@ -229,13 +263,17 @@ def read_opened_text(opened: OpenedRegularFile, *, encoding: str = "utf-8") -> s
     return read_opened_bytes(opened).decode(encoding)
 
 
-def copy_opened_file(opened: OpenedRegularFile, target: Path) -> None:
-    """Copy data and basic copy2 metadata from an already-open descriptor."""
+def copy_opened_file_at(
+        opened: OpenedRegularFile, parent_fd: int, name: str,
+) -> tuple[int, int]:
+    """Copy an opened file to one exclusive name beneath a retained directory."""
+    name = _component(name, "copy target")
     mode = stat.S_IMODE(opened.stat.st_mode)
     descriptor = os.open(
-        target,
+        name,
         os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
         mode,
+        dir_fd=parent_fd,
     )
     try:
         os.lseek(opened.descriptor, 0, os.SEEK_SET)
@@ -248,13 +286,28 @@ def copy_opened_file(opened: OpenedRegularFile, target: Path) -> None:
                 written = os.write(descriptor, view)
                 view = view[written:]
         os.fchmod(descriptor, mode)
+        os.fsync(descriptor)
+        details = os.fstat(descriptor)
     finally:
         os.close(descriptor)
     os.utime(
-        target,
+        name,
         ns=(opened.stat.st_atime_ns, opened.stat.st_mtime_ns),
         follow_symlinks=False,
+        dir_fd=parent_fd,
     )
+    _fsync_directory(parent_fd)
+    return (details.st_dev, details.st_ino)
+
+
+def copy_opened_file(opened: OpenedRegularFile, target: Path) -> None:
+    """Copy data and basic copy2 metadata from an already-open descriptor."""
+    target = Path(target)
+    parent_fd = _open_absolute_directory(target.parent)
+    try:
+        copy_opened_file_at(opened, parent_fd, target.name)
+    finally:
+        os.close(parent_fd)
 
 
 def _atomic_move_no_replace_at(
@@ -659,6 +712,68 @@ def atomic_remove_regular_file_at(
     finally:
         if descriptor is not None:
             os.close(descriptor)
+
+
+def write_new_regular_file_at(
+        parent_fd: int, name: str, data: bytes, *, mode: int = 0o600,
+) -> tuple[int, int]:
+    """Write, flush, and retain the identity of one exclusive regular file."""
+    name = _component(name, "new file")
+    descriptor = os.open(
+        name,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+        mode,
+        dir_fd=parent_fd,
+    )
+    try:
+        view = memoryview(data)
+        while view:
+            written = os.write(descriptor, view)
+            view = view[written:]
+        os.fchmod(descriptor, mode)
+        os.fsync(descriptor)
+        details = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    _fsync_directory(parent_fd)
+    return (details.st_dev, details.st_ino)
+
+
+def atomic_write_bytes_at(
+        parent_fd: int, target_name: str, data: bytes, *,
+        label: str, mode: int = 0o600,
+) -> tuple[int, int]:
+    """CAS-publish complete bytes without following or overwriting a replacement."""
+    target_name = _component(target_name, label)
+    temp_name = f".safe-write-{uuid.uuid4().hex}.tmp"
+    temp_identity = write_new_regular_file_at(
+        parent_fd, temp_name, data, mode=mode)
+    published = False
+    try:
+        try:
+            target_identity = _named_regular_identity(
+                parent_fd, target_name, label=label)
+        except FileNotFoundError:
+            identity = atomic_move_no_replace_at(
+                parent_fd, temp_name, target_name,
+                expected_source_identity=temp_identity)
+        else:
+            identity = atomic_exchange_regular_file_at(
+                parent_fd, temp_name, target_name,
+                expected_source_identity=temp_identity,
+                expected_target_identity=target_identity,
+                label=label,
+            )
+        published = True
+        return identity
+    finally:
+        if not published:
+            try:
+                atomic_remove_regular_file_at(
+                    parent_fd, temp_name, temp_identity,
+                    label=f"{label} temporary file")
+            except FileNotFoundError:
+                pass
 
 
 def atomic_move_no_replace(

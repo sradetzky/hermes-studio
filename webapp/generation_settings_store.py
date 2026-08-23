@@ -6,12 +6,20 @@ import json
 import math
 import os
 import re
-import uuid
+import stat
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from webapp.config import Settings
+from webapp.reference_store import ReferenceStore, ReferenceStoreError
+from webapp.safe_files import (
+    SafeFilesystemError,
+    atomic_write_bytes_at,
+    open_directory,
+    open_regular_file,
+    read_opened_text,
+)
 
 
 MANIFEST_NAME = "current_generation.json"
@@ -122,9 +130,13 @@ class GenerationSettingsStore:
     @staticmethod
     def _prompt(clip: Path) -> str:
         path = clip / "current_prompt.txt"
-        if not path.is_file() or path.is_symlink():
+        try:
+            with open_regular_file(path) as opened:
+                return read_opened_text(opened)
+        except FileNotFoundError:
             return ""
-        return path.read_text(encoding="utf-8")
+        except (SafeFilesystemError, OSError, UnicodeDecodeError) as exc:
+            raise GenerationSettingsError("current prompt is unsafe") from exc
 
     @staticmethod
     def prompt_hash(prompt: str) -> str:
@@ -236,13 +248,14 @@ class GenerationSettingsStore:
 
     def _read_manifest(self, clip: Path) -> tuple[dict | None, str | None]:
         path = self._manifest_path(clip)
-        if not path.exists():
-            return None, None
-        if not path.is_file() or path.is_symlink():
-            return None, "generation settings manifest is not a regular file"
         try:
-            value = json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
+            with open_regular_file(path) as opened:
+                value = json.loads(read_opened_text(opened))
+        except FileNotFoundError:
+            return None, None
+        except (SafeFilesystemError, OSError):
+            return None, "generation settings manifest is not a regular file"
+        except (json.JSONDecodeError, UnicodeDecodeError):
             return None, "generation settings manifest is invalid"
         if not isinstance(value, dict):
             return None, "generation settings manifest is invalid"
@@ -261,15 +274,14 @@ class GenerationSettingsStore:
 
     @staticmethod
     def _reference_names(project: Path) -> list[str]:
-        directory = project / "references"
-        if not directory.is_dir() or directory.is_symlink():
-            return []
-        return sorted(
-            item.name for item in directory.iterdir()
-            if item.is_file() and not item.is_symlink()
-            and not item.name.startswith(".")
-            and item.suffix.lower() in IMAGE_REFERENCE_EXTENSIONS
-        )
+        try:
+            return [
+                name for name in ReferenceStore.list_references(project)
+                if Path(name).suffix.lower() in IMAGE_REFERENCE_EXTENSIONS
+            ]
+        except ReferenceStoreError as exc:
+            raise GenerationSettingsError(
+                "references directory is unsafe") from exc
 
     def readiness(self, project: Path, clip: Path, manifest: dict | None,
                   manifest_error: str | None = None) -> dict:
@@ -375,18 +387,30 @@ class GenerationSettingsStore:
             **normalized,
         }
         target = self._manifest_path(clip)
-        lock_path = clip / ".generation-settings.lock"
-        with lock_path.open("a+b") as lock:
-            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-            temp = clip / f".{uuid.uuid4().hex}.generation-settings"
-            try:
-                with temp.open("x", encoding="utf-8") as handle:
-                    json.dump(manifest, handle, indent=2, ensure_ascii=False)
-                    handle.write("\n")
-                    handle.flush()
-                    os.fsync(handle.fileno())
-                temp.replace(target)
-            finally:
-                temp.unlink(missing_ok=True)
-                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+        data = (json.dumps(
+            manifest, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+        try:
+            with open_directory(clip) as clip_fd:
+                lock_fd = os.open(
+                    ".generation-settings.lock",
+                    os.O_RDWR | os.O_CREAT | os.O_APPEND |
+                    os.O_NOFOLLOW | os.O_CLOEXEC,
+                    0o600,
+                    dir_fd=clip_fd,
+                )
+                if not stat.S_ISREG(os.fstat(lock_fd).st_mode):
+                    os.close(lock_fd)
+                    raise GenerationSettingsError(
+                        "generation settings lock is unsafe")
+                with os.fdopen(lock_fd, "a+b") as lock:
+                    fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+                    try:
+                        atomic_write_bytes_at(
+                            clip_fd, target.name, data,
+                            label="generation settings manifest")
+                    finally:
+                        fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+        except (SafeFilesystemError, OSError) as exc:
+            raise GenerationSettingsError(
+                "generation settings publication is unsafe") from exc
         return self.describe(project, clip, include_options=True)

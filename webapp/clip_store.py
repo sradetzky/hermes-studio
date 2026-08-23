@@ -12,7 +12,11 @@ from pathlib import Path
 from webapp.safe_files import (
     SafeFilesystemError,
     atomic_publish_directory,
+    atomic_write_bytes_at,
+    open_directory,
+    open_directory_at,
     open_regular_file,
+    open_regular_file_at,
     read_opened_text,
     remove_published_directory_if_same,
 )
@@ -35,9 +39,12 @@ class ClipNotFoundError(ClipStoreError):
 class ClipStore:
     @staticmethod
     def _project(project: Path) -> Path:
-        if not project.is_dir() or project.is_symlink():
+        try:
+            with open_directory(project):
+                pass
+        except (FileNotFoundError, SafeFilesystemError, OSError) as exc:
             raise ClipStoreError("project must be a regular directory")
-        return project.resolve()
+        return Path(os.path.abspath(project))
 
     @staticmethod
     def _component(value: object, label: str) -> str:
@@ -66,30 +73,46 @@ class ClipStore:
     @staticmethod
     def _clips_directory(project: Path, *, create: bool = False) -> Path:
         directory = project / "clips"
-        if directory.is_symlink():
-            raise ClipStoreError("clips directory may not be a symlink")
-        if create:
-            directory.mkdir(exist_ok=True)
-        if not directory.is_dir() or directory.resolve().parent != project:
-            raise ClipStoreError("clips directory is not a regular project directory")
+        try:
+            with open_directory(project) as project_fd:
+                if create:
+                    try:
+                        os.mkdir("clips", mode=0o700, dir_fd=project_fd)
+                    except FileExistsError:
+                        pass
+                with open_directory_at(project_fd, "clips"):
+                    pass
+        except (FileNotFoundError, SafeFilesystemError, OSError) as exc:
+            raise ClipStoreError(
+                "clips directory is not a regular project directory") from exc
         return directory
 
     @contextmanager
     def _lock(self, project: Path):
-        lock_path = project / ".project.lock"
-        if lock_path.is_symlink():
-            raise ClipStoreError("project lock may not be a symlink")
-        descriptor = os.open(
-            lock_path,
-            os.O_RDWR | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW,
-            0o600,
-        )
-        with os.fdopen(descriptor, "a+b") as lock:
-            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+        directory = open_directory(project)
+        entered = False
+        try:
+            project_fd = directory.__enter__()
+            entered = True
+            descriptor = os.open(
+                ".project.lock",
+                os.O_RDWR | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW,
+                0o600,
+                dir_fd=project_fd,
+            )
+        except (SafeFilesystemError, OSError) as exc:
+            if entered:
+                directory.__exit__(None, None, None)
+            raise ClipStoreError("project lock is unsafe") from exc
+        try:
+            with os.fdopen(descriptor, "a+b") as lock:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+        finally:
+            directory.__exit__(None, None, None)
 
     @contextmanager
     def locked_project(self, project: Path):
@@ -165,19 +188,15 @@ class ClipStore:
 
     def _write_manifest_unlocked(self, project: Path, manifest: dict) -> None:
         manifest = self._validate_manifest(manifest)
-        target = self._manifest_path(project)
-        if target.is_symlink():
-            raise ClipStoreError("project manifest may not be a symlink")
-        temp = project / f".{uuid.uuid4().hex}.project-manifest"
+        data = (json.dumps(
+            manifest, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
         try:
-            with temp.open("x", encoding="utf-8") as handle:
-                json.dump(manifest, handle, indent=2, ensure_ascii=False)
-                handle.write("\n")
-                handle.flush()
-                os.fsync(handle.fileno())
-            temp.replace(target)
-        finally:
-            temp.unlink(missing_ok=True)
+            with open_directory(project) as project_fd:
+                atomic_write_bytes_at(
+                    project_fd, PROJECT_MANIFEST, data,
+                    label="project manifest")
+        except (SafeFilesystemError, OSError) as exc:
+            raise ClipStoreError("project manifest publication is unsafe") from exc
 
     @staticmethod
     def _create_clip_tree(directory: Path) -> None:
@@ -233,8 +252,11 @@ class ClipStore:
     def _resolve_clip_directory(self, project: Path, clip_id: str) -> Path:
         clips = self._clips_directory(project)
         clip = clips / clip_id
-        if (not clip.is_dir() or clip.is_symlink()
-                or clip.resolve().parent != clips.resolve()):
+        try:
+            with open_directory(clips) as clips_fd:
+                with open_directory_at(clips_fd, clip_id):
+                    pass
+        except (FileNotFoundError, SafeFilesystemError, OSError):
             raise ClipNotFoundError(f"clip not found: {clip_id}")
         return clip
 
@@ -338,16 +360,17 @@ class ClipStore:
                 raise ClipStoreError("selected take must be a video")
             clip = self.resolve_clip(project, clip_id)
             generations = clip / "generations"
-            if generations.is_symlink() or not generations.is_dir():
+            try:
+                with open_directory(generations) as generations_fd:
+                    with open_directory_at(
+                            generations_fd, generation_id) as generation_fd:
+                        with open_regular_file_at(generation_fd, filename):
+                            pass
+            except FileNotFoundError as exc:
+                raise ClipStoreError(
+                    f"generation media not found: {filename}") from exc
+            except (SafeFilesystemError, OSError) as exc:
                 raise ClipStoreError("generations directory is unsafe")
-            generation = generations / generation_id
-            if (not generation.is_dir() or generation.is_symlink()
-                    or generation.resolve().parent != generations.resolve()):
-                raise ClipStoreError(f"generation not found: {generation_id}")
-            media = generation / filename
-            if (not media.is_file() or media.is_symlink()
-                    or media.resolve().parent != generation.resolve()):
-                raise ClipStoreError(f"generation media not found: {filename}")
             selected = {"generation": generation_id, "filename": filename}
         elif filename is not None:
             raise ClipStoreError("filename requires a generation id")

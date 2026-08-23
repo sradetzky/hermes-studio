@@ -23,6 +23,7 @@ from webapp.config import Settings
 from webapp.hermes_events import HermesSessionEventBridge
 from webapp.job_store import ActiveJobError, JobStore, JobStoreError
 from webapp.models import JobStatus
+from webapp import safe_files
 from webapp.studio_manager import StudioJobManager
 
 
@@ -540,6 +541,60 @@ class AppFactoryTests(WebAppTestCase):
                 f"/media/projects/{project}/research/note.md"
             ).status_code, 404)
 
+    def test_media_response_remains_bound_to_validated_file_identity(self):
+        with TestClient(self.app()) as client:
+            project = self.create_project(client, "media-identity")
+            root = self.settings.studio_root / "projects" / project
+            source = root / "references" / "reference.png"
+            displaced = root / "references" / "validated.png"
+            outside = Path(self.temp.name) / "outside-secret.png"
+            source.write_bytes(b"validated")
+            outside.write_bytes(b"secret")
+            real_pread = os.pread
+            swapped = False
+
+            def swap_before_read(descriptor, amount, offset):
+                nonlocal swapped
+                if not swapped:
+                    swapped = True
+                    source.rename(displaced)
+                    source.symlink_to(outside)
+                return real_pread(descriptor, amount, offset)
+
+            with patch("webapp.safe_response.os.pread",
+                       side_effect=swap_before_read):
+                response = client.get(
+                    f"/media/projects/{project}/references/reference.png")
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.content, b"validated")
+            self.assertTrue(swapped)
+            self.assertEqual(source.read_bytes(), b"secret")
+
+    def test_media_response_supports_single_byte_ranges(self):
+        with TestClient(self.app()) as client:
+            project = self.create_project(client, "media-range")
+            root = self.settings.studio_root / "projects" / project
+            (root / "references" / "reference.png").write_bytes(b"012345")
+            url = f"/media/projects/{project}/references/reference.png"
+
+            partial = client.get(url, headers={"Range": "bytes=1-3"})
+            self.assertEqual(partial.status_code, 206)
+            self.assertEqual(partial.content, b"123")
+            self.assertEqual(partial.headers["content-range"], "bytes 1-3/6")
+            self.assertEqual(partial.headers["accept-ranges"], "bytes")
+
+            unsatisfied = client.get(url, headers={"Range": "bytes=9-10"})
+            self.assertEqual(unsatisfied.status_code, 416)
+            self.assertEqual(unsatisfied.headers["content-range"], "bytes */6")
+
+            (root / "references" / "empty.png").write_bytes(b"")
+            empty = client.get(
+                f"/media/projects/{project}/references/empty.png")
+            self.assertEqual(empty.status_code, 200)
+            self.assertEqual(empty.content, b"")
+            self.assertEqual(empty.headers["content-length"], "0")
+
     def test_generation_detail_and_review_actions(self):
         with TestClient(self.app()) as client:
             project = self.create_project(client, "review")
@@ -636,6 +691,34 @@ class AppFactoryTests(WebAppTestCase):
             self.assertEqual(traversal.status_code, 400)
             self.assertEqual(unsupported.status_code, 415)
             self.assertEqual(missing.status_code, 404)
+
+    def test_review_rollback_preserves_replacement_at_published_name(self):
+        with TestClient(self.app()) as client:
+            project = self.create_project(client, "review-rollback-identity")
+            root = self.settings.studio_root / "projects" / project
+            generation = root / "clips" / "clip-001" / "generations" / "001"
+            generation.mkdir()
+            (generation / "video.mp4").write_bytes(b"video")
+            target = root / "final" / "clip-001_001_video.mp4"
+            displaced = root / "final" / ".published-original"
+
+            def replace_target_then_fail(*_args, **_kwargs):
+                target.rename(displaced)
+                target.write_bytes(b"replacement")
+                raise safe_files.SafeFilesystemError("injected review failure")
+
+            with patch(
+                    "webapp.media_review_store.atomic_write_bytes_at",
+                    side_effect=replace_target_then_fail):
+                response = client.post(
+                    f"/api/project/{project}/clips/clip-001/"
+                    "generations/001/promote",
+                    json={"filename": "video.mp4"},
+                )
+
+            self.assertEqual(response.status_code, 400)
+            self.assertEqual(target.read_bytes(), b"replacement")
+            self.assertEqual(displaced.read_bytes(), b"video")
 
     def test_concurrent_promote_is_idempotent(self):
         with TestClient(self.app()) as client:

@@ -223,12 +223,12 @@ class ClipStoreTests(unittest.TestCase):
         publication_finished = threading.Barrier(2)
         new_read = threading.Barrier(2)
         writer_returned = threading.Event()
-        real_replace = Path.replace
+        real_exchange = safe_files.atomic_exchange_regular_file_at
 
-        def publish_between_barriers(temp, target):
+        def publish_between_barriers(*args, **kwargs):
             publication_entered.wait(timeout=2)
             old_read.wait(timeout=2)
-            result = real_replace(temp, target)
+            result = real_exchange(*args, **kwargs)
             publication_finished.wait(timeout=2)
             new_read.wait(timeout=2)
             return result
@@ -251,7 +251,7 @@ class ClipStoreTests(unittest.TestCase):
                 writer_returned.set()
 
         with (
-            patch.object(Path, "replace", autospec=True,
+            patch.object(safe_files, "atomic_exchange_regular_file_at",
                          side_effect=publish_between_barriers),
             ThreadPoolExecutor(max_workers=2) as pool,
         ):

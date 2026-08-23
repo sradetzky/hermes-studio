@@ -3,14 +3,29 @@ from __future__ import annotations
 import fcntl
 import json
 import os
-import shutil
+import stat
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
 
 from webapp.reference_store import REFERENCE_EXTENSIONS
+from webapp.safe_files import (
+    OpenedRegularFile,
+    SafeFilesystemError,
+    atomic_move_no_replace_at,
+    atomic_remove_regular_file_at,
+    atomic_write_bytes_at,
+    copy_opened_file_at,
+    open_directory,
+    open_directory_at,
+    open_regular_file_at,
+    read_opened_text,
+    verify_absolute_directory_identity,
+)
 
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
@@ -80,44 +95,58 @@ class MediaReviewStore:
             return "audio"
         raise UnsupportedMediaError(f"unsupported generation media type: {suffix}")
 
-    def resolve_generation(self, project: Path, clip: Path,
-                           generation_id: str) -> Path:
+    @contextmanager
+    def _open_generation(self, clip: Path,
+                         generation_id: str) -> Iterator[tuple[Path, int]]:
         generation_id = self._component(generation_id, "generation id")
-        directory = clip / "generations"
-        if directory.is_symlink():
-            raise MediaNotFoundError("generations directory may not be a symlink")
-        base = directory.resolve()
-        if base.parent != clip.resolve():
-            raise MediaNotFoundError("generations directory escapes clip")
-        generation = directory / generation_id
-        if (not generation.is_dir() or generation.is_symlink()
-                or generation.resolve().parent != base):
-            raise MediaNotFoundError(f"generation not found: {generation_id}")
-        return generation
+        generation = clip / "generations" / generation_id
+        directory = open_directory(generation)
+        try:
+            generation_fd = directory.__enter__()
+        except FileNotFoundError as exc:
+            raise MediaNotFoundError(
+                f"generation not found: {generation_id}") from exc
+        except (SafeFilesystemError, OSError) as exc:
+            raise MediaNotFoundError(
+                f"generation is unsafe: {generation_id}") from exc
+        try:
+            yield generation, generation_fd
+        finally:
+            directory.__exit__(None, None, None)
 
-    def resolve_media(self, project: Path, clip: Path, generation_id: str,
-                      filename: str) -> tuple[Path, Path]:
+    @contextmanager
+    def open_media(self, clip: Path, generation_id: str,
+                   filename: str) -> Iterator[OpenedRegularFile]:
         filename = self._component(filename, "generation filename")
         self.media_kind(filename)
-        generation = self.resolve_generation(project, clip, generation_id)
-        source = generation / filename
-        if (not source.is_file() or source.is_symlink()
-                or source.resolve().parent != generation.resolve()):
-            raise MediaNotFoundError(f"generation media not found: {filename}")
-        return generation, source
+        with self._open_generation(clip, generation_id) as (generation, generation_fd):
+            try:
+                with open_regular_file_at(
+                        generation_fd, filename,
+                        path=generation / filename) as opened:
+                    yield opened
+            except FileNotFoundError as exc:
+                raise MediaNotFoundError(
+                    f"generation media not found: {filename}") from exc
+            except (SafeFilesystemError, OSError) as exc:
+                raise MediaNotFoundError(
+                    f"generation media is unsafe: {filename}") from exc
 
     @staticmethod
-    def _read_json(path: Path) -> dict:
-        if not path.is_file() or path.is_symlink():
-            return {}
+    def _read_json(generation_fd: int, name: str) -> dict:
         try:
-            value = json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
+            with open_regular_file_at(generation_fd, name) as opened:
+                value = json.loads(read_opened_text(opened))
+        except FileNotFoundError:
             return {}
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return {}
+        except (SafeFilesystemError, OSError) as exc:
+            raise MediaReviewError(f"unsafe generation metadata: {name}") from exc
         return value if isinstance(value, dict) else {}
 
-    def _review(self, generation: Path) -> dict:
-        value = self._read_json(generation / REVIEW_FILE)
+    def _review(self, generation_fd: int) -> dict:
+        value = self._read_json(generation_fd, REVIEW_FILE)
         actions = value.get("actions")
         if not isinstance(actions, list):
             actions = []
@@ -133,33 +162,41 @@ class MediaReviewStore:
             if action.get("action") == action_name and action.get("source")
         }
 
-    def describe_generation(self, project: Path, clip: Path, generation_id: str,
-                            include_prompt: bool = True) -> dict:
-        generation = self.resolve_generation(project, clip, generation_id)
-        review = self._review(generation)
+    def _describe_open_generation(
+            self, project: Path, clip: Path, generation: Path,
+            generation_fd: int, include_prompt: bool,
+    ) -> dict:
+        review = self._review(generation_fd)
         promoted = self._action_sources(review, "promote")
         references = self._action_sources(review, "reference")
         media = []
-        for item in sorted(generation.iterdir()):
-            if not item.is_file() or item.is_symlink() or item.name.startswith("."):
+        for name in sorted(os.listdir(generation_fd)):
+            if name.startswith("."):
                 continue
             try:
-                kind = self.media_kind(item.name)
+                kind = self.media_kind(name)
             except UnsupportedMediaError:
                 continue
-            media.append(MediaItem(
-                name=item.name,
-                kind=kind,
-                size=item.stat().st_size,
-                url=(
-                    f"/media/projects/{quote(project.name)}/clips/{quote(clip.name)}/"
-                    "generations/"
-                    f"{quote(generation.name)}/{quote(item.name)}"
-                ),
-                promoted=item.name in promoted,
-                reference=item.name in references,
-            ).to_dict())
-        meta = self._read_json(generation / "meta.json")
+            try:
+                with open_regular_file_at(
+                        generation_fd, name,
+                        path=generation / name) as opened:
+                    media.append(MediaItem(
+                        name=name,
+                        kind=kind,
+                        size=opened.stat.st_size,
+                        url=(
+                            f"/media/projects/{quote(project.name)}/clips/"
+                            f"{quote(clip.name)}/generations/"
+                            f"{quote(generation.name)}/{quote(name)}"
+                        ),
+                        promoted=name in promoted,
+                        reference=name in references,
+                    ).to_dict())
+            except (FileNotFoundError, SafeFilesystemError, OSError) as exc:
+                raise MediaReviewError(
+                    f"generation media changed while listing: {name}") from exc
+        meta = self._read_json(generation_fd, "meta.json")
         result = {
             "gen": generation.name,
             "files": [item["name"] for item in media],
@@ -171,128 +208,208 @@ class MediaReviewStore:
             },
         }
         if include_prompt:
-            prompt = generation / "prompt.txt"
-            result["prompt"] = (
-                prompt.read_text(encoding="utf-8") if prompt.is_file()
-                and not prompt.is_symlink() else ""
-            )
+            try:
+                with open_regular_file_at(
+                        generation_fd, "prompt.txt") as opened:
+                    result["prompt"] = read_opened_text(opened)
+            except FileNotFoundError:
+                result["prompt"] = ""
+            except (SafeFilesystemError, OSError, UnicodeDecodeError) as exc:
+                raise MediaReviewError("generation prompt is unsafe") from exc
             result["actions"] = review["actions"]
         return result
 
+    def describe_generation(self, project: Path, clip: Path, generation_id: str,
+                            include_prompt: bool = True) -> dict:
+        with self._open_generation(clip, generation_id) as (generation, generation_fd):
+            return self._describe_open_generation(
+                project, clip, generation, generation_fd, include_prompt)
+
+    def list_generations(self, project: Path, clip: Path) -> list[dict]:
+        directory = clip / "generations"
+        try:
+            with open_directory(directory) as directory_fd:
+                result = []
+                for generation_id in sorted(os.listdir(directory_fd), reverse=True):
+                    if generation_id.startswith("."):
+                        continue
+                    details = os.stat(
+                        generation_id, dir_fd=directory_fd,
+                        follow_symlinks=False)
+                    if not stat.S_ISDIR(details.st_mode):
+                        raise MediaReviewError(
+                            f"unsafe generation entry: {generation_id}")
+                    with open_directory_at(
+                            directory_fd, generation_id) as generation_fd:
+                        opened = os.fstat(generation_fd)
+                        if (opened.st_dev, opened.st_ino) != (
+                                details.st_dev, details.st_ino):
+                            raise MediaReviewError(
+                                f"generation changed while listing: {generation_id}")
+                        result.append(self._describe_open_generation(
+                            project, clip, directory / generation_id,
+                            generation_fd, False))
+                return result
+        except FileNotFoundError as exc:
+            raise MediaReviewError("generations directory is missing") from exc
+        except (SafeFilesystemError, OSError) as exc:
+            raise MediaReviewError("generations directory is unsafe") from exc
+
     @staticmethod
-    def _target_directory(project: Path, action: str) -> tuple[str, Path]:
+    def _area(action: str) -> str:
         areas = {"promote": "final", "reference": "references"}
         area = areas.get(action)
         if not area:
             raise MediaReviewError(f"unsupported media action: {action}")
-        directory = project / area
-        if directory.is_symlink():
-            raise MediaReviewError(f"{area} directory may not be a symlink")
-        directory.mkdir(exist_ok=True)
-        if directory.resolve().parent != project.resolve():
-            raise MediaReviewError(f"{area} directory escapes project")
-        return area, directory
+        return area
 
     @staticmethod
-    def _candidate(directory: Path, filename: str, index: int) -> Path:
+    def _candidate(filename: str, index: int) -> str:
         if index == 1:
-            return directory / filename
+            return filename
         path = Path(filename)
-        return directory / f"{path.stem}_{index}{path.suffix}"
+        return f"{path.stem}_{index}{path.suffix}"
 
     @staticmethod
-    def _publish(temp: Path, directory: Path, requested_name: str) -> Path:
+    def _publish(directory_fd: int, temp_name: str,
+                 temp_identity: tuple[int, int],
+                 requested_name: str) -> tuple[str, tuple[int, int]]:
         index = 1
         while True:
-            target = MediaReviewStore._candidate(
-                directory, requested_name, index)
+            target = MediaReviewStore._candidate(requested_name, index)
             try:
-                os.link(temp, target)
-                return target
+                identity = atomic_move_no_replace_at(
+                    directory_fd, temp_name, target,
+                    expected_source_identity=temp_identity)
+                return target, identity
             except FileExistsError:
                 index += 1
 
     @staticmethod
-    def _write_review(generation: Path, review: dict) -> None:
-        target = generation / REVIEW_FILE
-        temp = generation / f".{uuid.uuid4().hex}.review"
-        try:
-            with temp.open("x", encoding="utf-8") as handle:
-                json.dump(review, handle, indent=2, ensure_ascii=False)
-                handle.write("\n")
-                handle.flush()
-                os.fsync(handle.fileno())
-            temp.replace(target)
-        finally:
-            temp.unlink(missing_ok=True)
+    def _write_review(generation_fd: int, review: dict) -> None:
+        data = (json.dumps(
+            review, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+        atomic_write_bytes_at(
+            generation_fd, REVIEW_FILE, data,
+            label="generation review manifest")
+
+    @staticmethod
+    def _saved_action(project: Path, area: str, action: str,
+                      source_name: str, target_name: str, size: int,
+                      created_at: str) -> SavedMediaAction:
+        return SavedMediaAction(
+            action=action,
+            source=source_name,
+            target=target_name,
+            area=area,
+            size=size,
+            url=(
+                f"/media/projects/{quote(project.name)}/{area}/"
+                f"{quote(target_name)}"
+            ),
+            created_at=created_at,
+        )
 
     def publish(self, project: Path, clip: Path, generation_id: str,
                 filename: str, action: str) -> SavedMediaAction:
-        generation, source = self.resolve_media(
-            project, clip, generation_id, filename)
-        area, directory = self._target_directory(project, action)
-        lock_path = project / ".media-review.lock"
-        with lock_path.open("a+b") as lock:
-            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        filename = self._component(filename, "generation filename")
+        self.media_kind(filename)
+        area = self._area(action)
+        try:
+            with open_directory(project) as project_fd:
+                try:
+                    os.mkdir(area, mode=0o700, dir_fd=project_fd)
+                except FileExistsError:
+                    pass
+                with open_directory_at(project_fd, area) as directory_fd:
+                    lock_fd = os.open(
+                        ".media-review.lock",
+                        os.O_RDWR | os.O_CREAT | os.O_APPEND |
+                        os.O_NOFOLLOW | os.O_CLOEXEC,
+                        0o600,
+                        dir_fd=project_fd,
+                    )
+                    if not stat.S_ISREG(os.fstat(lock_fd).st_mode):
+                        os.close(lock_fd)
+                        raise MediaReviewError("media review lock is unsafe")
+                    with os.fdopen(lock_fd, "a+b") as lock:
+                        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+                        try:
+                            with self._open_generation(
+                                    clip, generation_id) as (
+                                        generation, generation_fd):
+                                try:
+                                    with open_regular_file_at(
+                                            generation_fd, filename,
+                                            path=generation / filename) as source:
+                                        return self._publish_opened(
+                                            project, clip, generation,
+                                            generation_fd, source, area,
+                                            project_fd, directory_fd, action)
+                                except FileNotFoundError as exc:
+                                    raise MediaNotFoundError(
+                                        f"generation media not found: {filename}") from exc
+                        finally:
+                            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+        except (MediaReviewError, MediaNotFoundError, UnsupportedMediaError):
+            raise
+        except (SafeFilesystemError, OSError) as exc:
+            raise MediaReviewError("media publication is unsafe") from exc
+
+    def _publish_opened(
+            self, project: Path, clip: Path, generation: Path,
+            generation_fd: int, source: OpenedRegularFile, area: str,
+            project_fd: int, directory_fd: int, action: str,
+    ) -> SavedMediaAction:
+        review = self._review(generation_fd)
+        for existing in review["actions"]:
+            if (existing.get("action") == action
+                    and existing.get("source") == source.name):
+                target_name = self._component(
+                    str(existing.get("target") or ""), "published media target")
+                try:
+                    with open_regular_file_at(
+                            directory_fd, target_name) as target:
+                        return self._saved_action(
+                            project, area, action, source.name, target_name,
+                            target.stat.st_size,
+                            str(existing.get("created_at") or ""))
+                except FileNotFoundError:
+                    pass
+
+        requested_name = f"{clip.name}_{generation.name}_{source.name}"
+        temp_name = f".{uuid.uuid4().hex}.review"
+        temp_identity = copy_opened_file_at(source, directory_fd, temp_name)
+        target_name = ""
+        target_identity = None
+        try:
+            target_name, target_identity = self._publish(
+                directory_fd, temp_name, temp_identity, requested_name)
+            created_at = datetime.now(timezone.utc).isoformat()
+            review["actions"].append({
+                "action": action,
+                "source": source.name,
+                "target": target_name,
+                "area": area,
+                "created_at": created_at,
+            })
             try:
-                review = self._review(generation)
-                for existing in review["actions"]:
-                    if (existing.get("action") == action
-                            and existing.get("source") == source.name):
-                        target_name = str(existing.get("target") or "")
-                        target = directory / target_name
-                        if (target_name and target.is_file()
-                                and not target.is_symlink()
-                                and target.resolve().parent == directory.resolve()):
-                            return SavedMediaAction(
-                                action=action,
-                                source=source.name,
-                                target=target.name,
-                                area=area,
-                                size=target.stat().st_size,
-                                url=(
-                                    f"/media/projects/{quote(project.name)}/"
-                                    f"{area}/{quote(target.name)}"
-                                ),
-                                created_at=str(existing.get("created_at") or ""),
-                            )
-
-                requested_name = f"{clip.name}_{generation.name}_{source.name}"
-                temp = directory / f".{uuid.uuid4().hex}.review"
+                self._write_review(generation_fd, review)
+            except Exception:
+                atomic_remove_regular_file_at(
+                    directory_fd, target_name, target_identity,
+                    label="published media rollback")
+                raise
+            verify_absolute_directory_identity(
+                project, project_fd, label="media review project")
+            return self._saved_action(
+                project, area, action, source.name, target_name,
+                source.stat.st_size, created_at)
+        finally:
+            if target_identity is None:
                 try:
-                    with source.open("rb") as input_handle, temp.open("xb") as output:
-                        shutil.copyfileobj(input_handle, output, 1024 * 1024)
-                        output.flush()
-                        os.fsync(output.fileno())
-                    target = self._publish(temp, directory, requested_name)
-                finally:
-                    temp.unlink(missing_ok=True)
-
-                created_at = datetime.now(timezone.utc).isoformat()
-                entry = {
-                    "action": action,
-                    "source": source.name,
-                    "target": target.name,
-                    "area": area,
-                    "created_at": created_at,
-                }
-                review["actions"].append(entry)
-                try:
-                    self._write_review(generation, review)
-                except Exception:
-                    target.unlink(missing_ok=True)
-                    raise
-                return SavedMediaAction(
-                    action=action,
-                    source=source.name,
-                    target=target.name,
-                    area=area,
-                    size=target.stat().st_size,
-                    url=(
-                        f"/media/projects/{quote(project.name)}/{area}/"
-                        f"{quote(target.name)}"
-                    ),
-                    created_at=created_at,
-                )
-            finally:
-                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+                    atomic_remove_regular_file_at(
+                        directory_fd, temp_name, temp_identity,
+                        label="media publication temporary file")
+                except FileNotFoundError:
+                    pass

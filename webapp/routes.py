@@ -4,7 +4,6 @@ from pathlib import Path
 from typing import NoReturn
 
 from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict
 
 from scripts import design_studio as ds
@@ -27,6 +26,7 @@ from webapp.reference_store import (
     ReferenceTooLargeError,
     UnsupportedReferenceError,
 )
+from webapp.safe_response import DescriptorFileResponse
 from webapp.studio_manager import StudioJobManager
 
 
@@ -242,11 +242,14 @@ def get_clip(request: Request, project_id: str, clip_id: str):
     except ClipStoreError as exc:
         _raise_clip_store_error(exc)
     entry = next(item for item in manifest["clips"] if item["id"] == clip_id)
+    try:
+        generation_settings = _generation_settings(request).describe(project, clip)
+    except GenerationSettingsError as exc:
+        raise HTTPException(400, str(exc))
     return {
         **entry,
         "current_prompt": ds.read_project_text(clip, "current_prompt.txt"),
-        "generation_settings": _generation_settings(request).describe(
-            project, clip),
+        "generation_settings": generation_settings,
     }
 
 
@@ -276,8 +279,11 @@ def select_clip_take(request: Request, project_id: str, clip_id: str,
 def get_generation_settings(request: Request, project_id: str, clip_id: str):
     project = resolve_project(request, project_id)
     clip = resolve_clip(request, project, clip_id)
-    return _generation_settings(request).describe(
-        project, clip, include_options=True)
+    try:
+        return _generation_settings(request).describe(
+            project, clip, include_options=True)
+    except GenerationSettingsError as exc:
+        raise HTTPException(400, str(exc))
 
 
 @router.put("/api/project/{project_id}/clips/{clip_id}/generation-settings")
@@ -306,20 +312,11 @@ def get_chat(request: Request, project_id: str,
 def get_generations(request: Request, project_id: str, clip_id: str):
     project = resolve_project(request, project_id)
     clip = resolve_clip(request, project, clip_id)
-    reviews = _media_reviews(request)
-    generations = []
-    directory = clip / "generations"
-    if directory.is_symlink() or not directory.is_dir():
-        raise HTTPException(400, "generations directory is unsafe")
-    for generation in sorted(directory.iterdir(), reverse=True):
-        if not generation.is_dir() or generation.is_symlink():
-            continue
-        try:
-            generations.append(reviews.describe_generation(
-                project, clip, generation.name, include_prompt=False))
-        except MediaReviewError:
-            continue
-    return {"generations": generations}
+    try:
+        return {"generations": _media_reviews(request).list_generations(
+            project, clip)}
+    except MediaReviewError as exc:
+        _raise_media_review_error(exc)
 
 
 @router.get(
@@ -368,15 +365,10 @@ def use_generation_as_reference(request: Request, project_id: str, clip_id: str,
 @router.get("/api/project/{project_id}/references")
 def get_references(request: Request, project_id: str):
     project = resolve_project(request, project_id)
-    directory = project / "references"
-    if directory.is_symlink():
-        return {"references": []}
-    references = sorted(
-        item.name for item in directory.iterdir()
-        if item.is_file() and not item.is_symlink()
-        and not item.name.startswith(".")
-    ) if directory.is_dir() else []
-    return {"references": references}
+    try:
+        return {"references": _references(request).list_references(project)}
+    except ReferenceStoreError as exc:
+        raise HTTPException(400, str(exc))
 
 
 @router.post("/api/project/{project_id}/references", status_code=201)
@@ -448,11 +440,11 @@ def clip_generation_media(request: Request, project_id: str, clip_id: str,
     project = resolve_project(request, project_id)
     clip = resolve_clip(request, project, clip_id)
     try:
-        _, source = _media_reviews(request).resolve_media(
-            project, clip, generation_id, filename)
+        with _media_reviews(request).open_media(
+                clip, generation_id, filename) as opened:
+            return DescriptorFileResponse(opened)
     except MediaReviewError as exc:
         _raise_media_review_error(exc)
-    return FileResponse(source)
 
 
 @router.get("/media/projects/{project_id}/{area}/{relative_path:path}")
@@ -461,17 +453,13 @@ def project_media(request: Request, project_id: str, area: str,
     if area not in MEDIA_AREAS:
         raise HTTPException(404, "media area not found")
     project = resolve_project(request, project_id)
-    area_path = project / area
-    if area_path.is_symlink():
-        raise HTTPException(404, "media area not found")
-    base = area_path.resolve()
-    if base.parent != project.resolve():
-        raise HTTPException(404, "media area not found")
-    relative = Path(relative_path)
-    if (not relative_path or relative.is_absolute() or
-            any(part.startswith(".") for part in relative.parts)):
-        raise HTTPException(400, "invalid media path")
-    target = (base / relative).resolve()
-    if not target.is_relative_to(base) or not target.is_file():
+    try:
+        with _references(request).open_media(
+                project, area, relative_path) as opened:
+            return DescriptorFileResponse(opened)
+    except FileNotFoundError:
         raise HTTPException(404, "media not found")
-    return FileResponse(target)
+    except ReferenceStoreError as exc:
+        if str(exc) == "invalid media path":
+            raise HTTPException(400, str(exc))
+        raise HTTPException(404, "media not found")
