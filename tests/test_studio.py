@@ -981,8 +981,9 @@ class ProjectPathTests(unittest.TestCase):
         }):
             ds.append_chat(self.root, self.project.name, "user", "transactional")
         store = JobStore(runtime / "studio.db")
-        total, events = store.chat_events(self.project.name)
-        self.assertEqual(total, 1)
+        cursor, events = store.chat_events(self.project.name)
+        self.assertEqual(cursor, events[-1].id)
+        self.assertEqual(len(events), 1)
         self.assertEqual(events[0].content, "transactional")
         exported = [json.loads(line) for line in
                     (self.project / "chat.jsonl").read_text().splitlines()]
@@ -1006,8 +1007,9 @@ class ProjectPathTests(unittest.TestCase):
             check=True,
         )
         store = JobStore(runtime / "studio.db")
-        total, events = store.chat_events(self.project.name)
-        self.assertEqual(total, 1)
+        cursor, events = store.chat_events(self.project.name)
+        self.assertEqual(cursor, events[-1].id)
+        self.assertEqual(len(events), 1)
         self.assertEqual(events[0].content, "direct-entrypoint")
 
     def test_cli_append_after_import_survives_web_job_export(self):

@@ -6,7 +6,7 @@ export const state = {
   clips: [],
   projects: [],
   profiles: [],
-  chatCount: 0,
+  chatCursor: 0,
   activityCursor: 0,
   activityByJob: {},
   jobActive: false,

@@ -191,7 +191,7 @@ async function selectProject(projectId) {
   state.current = projectId;
   state.currentClip = null;
   state.clips = [];
-  state.chatCount = 0;
+  state.chatCursor = 0;
   state.activityCursor = 0;
   state.activityByJob = {};
   resetClipState();
@@ -231,7 +231,7 @@ async function refreshProject() {
   try {
     const [project, chat, references, jobs, activity] = await Promise.all([
       requestJson(`/api/project/${projectId}`),
-      requestJson(`/api/project/${projectId}/chat?after=${state.chatCount}`),
+      requestJson(`/api/project/${projectId}/chat?after=${state.chatCursor}`),
       requestJson(`/api/project/${projectId}/references`),
       requestJson(`/api/project/${projectId}/jobs?limit=5`),
       requestJson(`/api/project/${projectId}/events?after=${state.activityCursor}`),
@@ -277,16 +277,8 @@ async function refreshProject() {
       resetClipState();
       document.title = `${project.id} — Hermes Studio`;
     }
-    if (chat.total < state.chatCount) {
-      state.chatCount = 0;
-      $('#chatlog').replaceChildren();
-      const all = await requestJson(`/api/project/${projectId}/chat`);
-      appendMessages(all.messages);
-      state.chatCount = all.total;
-    } else {
-      appendMessages(chat.messages);
-      state.chatCount = chat.total;
-    }
+    appendMessages(chat.messages);
+    state.chatCursor = chat.cursor;
     appendActivities(activity.events);
     state.activityCursor = activity.cursor;
     const referenceSignature = JSON.stringify(references.references);
@@ -309,7 +301,7 @@ async function refreshProject() {
 function appendMessages(messages) {
   const chat = $('#chatlog');
   const shouldScroll = chat.scrollHeight - chat.scrollTop - chat.clientHeight < 80;
-  if (!messages.length && state.chatCount === 0 && !chat.children.length) {
+  if (!messages.length && state.chatCursor === 0 && !chat.children.length) {
     showEmpty(chat, 'Say hello to start planning…');
     return;
   }

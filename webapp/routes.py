@@ -192,7 +192,6 @@ def get_project(request: Request, project_id: str):
     project = resolve_project(request, project_id)
     store = _store(request)
     store.import_chat_if_empty(project.name, project / "chat.jsonl")
-    chat_count, _ = store.chat_events(project.name)
     try:
         manifest = _clips(request).describe(project)
     except ClipStoreError as exc:
@@ -201,7 +200,6 @@ def get_project(request: Request, project_id: str):
         "id": project.name,
         "title": manifest["title"],
         "brief": ds.read_project_text(project, "brief.md"),
-        "chat_count": chat_count,
         "clips": manifest["clips"],
     }
 
@@ -304,8 +302,8 @@ def get_chat(request: Request, project_id: str,
     project = resolve_project(request, project_id)
     store = _store(request)
     store.import_chat_if_empty(project.name, project / "chat.jsonl")
-    total, events = store.chat_events(project.name, after)
-    return {"total": total, "messages": [event.to_dict() for event in events]}
+    cursor, events = store.chat_events(project.name, after)
+    return {"cursor": cursor, "messages": [event.to_dict() for event in events]}
 
 
 @router.get("/api/project/{project_id}/clips/{clip_id}/generations")

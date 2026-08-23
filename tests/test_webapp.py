@@ -222,6 +222,12 @@ class AppFactoryTests(WebAppTestCase):
                 [(message["role"], message["content"]) for message in chat["messages"]],
                 [("user", "hello")],
             )
+            self.assertEqual(chat["cursor"], chat["messages"][-1]["id"])
+            unchanged = client.get(
+                f"/api/project/{project}/chat?after={chat['cursor']}"
+            ).json()
+            self.assertEqual(unchanged, {
+                "cursor": chat["cursor"], "messages": []})
             activity = client.get(
                 f"/api/project/{project}/events").json()
             self.assertEqual(activity["events"][0]["event_type"], "job.queued")
@@ -892,8 +898,9 @@ class JobStoreTests(WebAppTestCase):
         store = self.store()
         store.create_chat_job("project", "same message")
         store.append_external_event("project", "user", "same message")
-        total, events = store.chat_events("project")
-        self.assertEqual(total, 1)
+        cursor, events = store.chat_events("project")
+        self.assertEqual(cursor, events[-1].id)
+        self.assertEqual(len(events), 1)
         self.assertEqual(events[0].content, "same message")
 
     def test_job_event_cursor_only_advances_through_returned_events(self):
@@ -906,6 +913,25 @@ class JobStoreTests(WebAppTestCase):
         next_cursor, added = store.job_events("project", cursor)
         self.assertEqual([event.summary for event in added], ["Still working"])
         self.assertGreater(next_cursor, cursor)
+
+    def test_chat_cursor_uses_delivered_row_ids_not_project_counts(self):
+        store = self.store()
+        store.append_external_event("project", "user", "first")
+        store.append_external_event("other", "user", "unrelated")
+        store.append_external_event("project", "assistant", "second")
+
+        cursor, events = store.chat_events("project")
+        self.assertEqual([event.id for event in events], [1, 3])
+        self.assertEqual(cursor, 3)
+
+        unchanged, no_events = store.chat_events("project", cursor)
+        self.assertEqual(unchanged, cursor)
+        self.assertEqual(no_events, [])
+
+        store.append_external_event("project", "system", "third")
+        next_cursor, added = store.chat_events("project", cursor)
+        self.assertEqual([event.content for event in added], ["third"])
+        self.assertEqual(next_cursor, added[-1].id)
 
     def test_hermes_session_bridge_projects_reasoning_and_tools(self):
         store = self.store()
@@ -1041,8 +1067,9 @@ class JobStoreTests(WebAppTestCase):
         job = store.create_chat_job("project", "question")
         store.claim_next("worker")
         store.complete(job.id, "worker", "answer", "session-1")
-        total, events = store.chat_events("project")
-        self.assertEqual(total, 2)
+        cursor, events = store.chat_events("project")
+        self.assertEqual(cursor, events[-1].id)
+        self.assertEqual(len(events), 2)
         self.assertEqual(
             [(event.role, event.content) for event in events],
             [("user", "question"), ("assistant", "answer")],
@@ -1062,8 +1089,9 @@ class JobStoreTests(WebAppTestCase):
         with self.assertLogs("webapp.job_store", level="WARNING"):
             store.import_chat_if_empty("project", chat)
         store.import_chat_if_empty("project", chat)
-        total, events = store.chat_events("project")
-        self.assertEqual(total, 2)
+        cursor, events = store.chat_events("project")
+        self.assertEqual(cursor, events[-1].id)
+        self.assertEqual(len(events), 2)
         self.assertEqual([event.content for event in events], ["one", "two"])
 
 
@@ -1218,8 +1246,9 @@ class StudioManagerTests(WebAppTestCase):
         finally:
             manager.stop()
         self.assertEqual(failed.status, JobStatus.FAILED)
-        total, events = store.chat_events(project.name)
-        self.assertEqual(total, 2)
+        cursor, events = store.chat_events(project.name)
+        self.assertEqual(cursor, events[-1].id)
+        self.assertEqual(len(events), 2)
         self.assertEqual(
             [event.role for event in events], ["user", "system"])
         self.assertIn("failed", events[1].content.lower())

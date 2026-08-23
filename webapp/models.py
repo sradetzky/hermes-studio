@@ -50,6 +50,7 @@ class ChatEvent:
 
     def to_dict(self) -> dict:
         return {
+            "id": self.id,
             "role": self.role,
             "content": self.content,
             "ts": self.created_at,

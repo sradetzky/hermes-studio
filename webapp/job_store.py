@@ -682,15 +682,11 @@ class JobStore:
 
     def chat_events(self, project: str, after: int = 0) -> tuple[int, list[ChatEvent]]:
         with self._connection() as connection:
-            total = connection.execute(
-                "SELECT COUNT(*) AS n FROM chat_events WHERE project = ?",
-                (project,),
-            ).fetchone()["n"]
             rows = connection.execute(
                 "SELECT chat_events.*, COALESCE(jobs.profile, '') AS profile "
                 "FROM chat_events LEFT JOIN jobs ON jobs.id = chat_events.job_id "
-                "WHERE chat_events.project = ? "
-                "ORDER BY chat_events.id LIMIT -1 OFFSET ?", (project, after)
+                "WHERE chat_events.project = ? AND chat_events.id > ? "
+                "ORDER BY chat_events.id", (project, after)
             ).fetchall()
             events = [
                 ChatEvent(
@@ -701,7 +697,7 @@ class JobStore:
                 )
                 for row in rows
             ]
-            return total, events
+            return rows[-1]["id"] if rows else after, events
 
     def export_chat(self, project: str, chat_path: Path) -> None:
         _, events = self.chat_events(project)
