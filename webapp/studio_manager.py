@@ -29,6 +29,25 @@ PROFILE_TOOLSETS = {
 }
 
 
+def process_start_time(pid: int) -> int:
+    """Return Linux process start ticks, which disambiguate PID reuse."""
+    value = Path(f"/proc/{pid}/stat").read_text(encoding="ascii")
+    command_end = value.rfind(")")
+    if command_end < 0:
+        raise OSError(f"invalid process stat for pid {pid}")
+    fields = value[command_end + 2:].split()
+    if len(fields) <= 19:
+        raise OSError(f"incomplete process stat for pid {pid}")
+    return int(fields[19])
+
+
+def process_environment(pid: int) -> set[bytes]:
+    return {
+        item for item in Path(f"/proc/{pid}/environ").read_bytes().split(b"\0")
+        if item
+    }
+
+
 class StudioJobManager:
     def __init__(self, settings: Settings, store: JobStore,
                  command_builder: CommandBuilder | None = None,
@@ -162,7 +181,9 @@ class StudioJobManager:
                     start_new_session=True,
                     env=self._job_environment(job),
                 )
-                self.store.set_pid(job.id, self.owner_id, process.pid)
+                self.store.set_process(
+                    job.id, self.owner_id, process.pid,
+                    process_start_time(process.pid))
                 self._processes[job.id] = process
             try:
                 stdout, stderr = self._communicate(process, bridge)
@@ -297,7 +318,7 @@ class StudioJobManager:
 
     def _recover_claimed_job(self, job: Job) -> None:
         if job.pid:
-            self._terminate_orphan_pid(job.pid)
+            self._terminate_orphan_process(job)
         if job.profile == self.settings.studio_profile:
             self._cleanup_safely()
         self.store.fail(
@@ -335,25 +356,59 @@ class StudioJobManager:
                 pass
 
     @staticmethod
-    def _terminate_orphan_pid(pid: int) -> None:
-        cmdline = Path(f"/proc/{pid}/cmdline")
+    def _orphan_identity_matches(job: Job) -> bool:
+        if job.pid is None or job.pid_start_time is None:
+            log.error(
+                "Refusing to terminate orphan job %s without a complete process identity",
+                job.id)
+            return False
         try:
-            command = cmdline.read_bytes()
-        except OSError:
+            if process_start_time(job.pid) != job.pid_start_time:
+                log.error(
+                    "Refusing to terminate reused orphan pid %d for job %s",
+                    job.pid, job.id)
+                return False
+            if os.getpgid(job.pid) != job.pid:
+                log.error(
+                    "Refusing to terminate orphan pid %d outside its own process group",
+                    job.pid)
+                return False
+            environment = process_environment(job.pid)
+        except (OSError, ProcessLookupError, ValueError):
+            return False
+        expected = {
+            f"HERMES_STUDIO_JOB_ID={job.id}".encode(),
+            f"HERMES_STUDIO_PROJECT={job.project}".encode(),
+            f"HERMES_STUDIO_CLIP={job.clip_id}".encode(),
+            f"HERMES_STUDIO_PROFILE={job.profile}".encode(),
+        }
+        if not expected.issubset(environment):
+            log.error(
+                "Refusing to terminate orphan pid %d without exact job ownership",
+                job.pid)
+            return False
+        return True
+
+    @classmethod
+    def _terminate_orphan_process(cls, job: Job) -> None:
+        if not cls._orphan_identity_matches(job):
             return
-        if b"hermes" not in command:
-            log.error("Refusing to terminate non-Hermes orphan pid %d", pid)
-            return
+        assert job.pid is not None
         try:
-            os.killpg(pid, signal.SIGTERM)
+            os.killpg(job.pid, signal.SIGTERM)
         except ProcessLookupError:
             return
         for _ in range(20):
-            if not Path(f"/proc/{pid}").exists():
+            try:
+                if process_start_time(job.pid) != job.pid_start_time:
+                    return
+            except (OSError, ValueError):
                 return
             time.sleep(0.1)
+        if not cls._orphan_identity_matches(job):
+            return
         try:
-            os.killpg(pid, signal.SIGKILL)
+            os.killpg(job.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
 

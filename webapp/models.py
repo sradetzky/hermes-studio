@@ -30,6 +30,7 @@ class Job:
     finished_at: str
     owner_id: str
     pid: int | None
+    pid_start_time: int | None
     reply: str = ""
 
     def to_dict(self) -> dict:

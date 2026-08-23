@@ -24,7 +24,7 @@ from webapp.hermes_events import HermesSessionEventBridge
 from webapp.job_store import ActiveJobError, JobStore, JobStoreError
 from webapp.models import JobStatus
 from webapp import safe_files
-from webapp.studio_manager import StudioJobManager
+from webapp.studio_manager import StudioJobManager, process_start_time
 
 
 def _create_job_in_process(database, barrier, results):
@@ -1413,6 +1413,59 @@ class StudioManagerTests(WebAppTestCase):
         self.assertEqual(first_done.status, JobStatus.FAILED)
         self.assertEqual(second_done.status, JobStatus.COMPLETED)
 
+    def test_orphan_reaper_refuses_unowned_process_with_hermes_in_path(self):
+        store = JobStore(self.settings.database_path)
+        store.initialize()
+        job = store.create_chat_job("project", "orphaned")
+        running = store.claim_next("dead-owner")
+        assert running is not None
+        child = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            start_new_session=True,
+        )
+        try:
+            store.set_process(
+                job.id, "dead-owner", child.pid,
+                process_start_time(child.pid))
+            with self.assertLogs("webapp.studio_manager", level="ERROR"):
+                StudioJobManager._terminate_orphan_process(store.get_job(job.id))
+            self.assertIsNone(child.poll())
+        finally:
+            if child.poll() is None:
+                child.kill()
+            child.wait()
+
+    def test_orphan_reaper_refuses_reused_pid_identity(self):
+        store = JobStore(self.settings.database_path)
+        store.initialize()
+        job = store.create_chat_job(
+            "project", "orphaned", clip_id="clip-001")
+        running = store.claim_next("dead-owner")
+        assert running is not None
+        environment = {
+            **os.environ,
+            "HERMES_STUDIO_JOB_ID": running.id,
+            "HERMES_STUDIO_PROJECT": running.project,
+            "HERMES_STUDIO_CLIP": running.clip_id,
+            "HERMES_STUDIO_PROFILE": running.profile,
+        }
+        child = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            start_new_session=True,
+            env=environment,
+        )
+        try:
+            store.set_process(
+                job.id, "dead-owner", child.pid,
+                process_start_time(child.pid) + 1)
+            with self.assertLogs("webapp.studio_manager", level="ERROR"):
+                StudioJobManager._terminate_orphan_process(store.get_job(job.id))
+            self.assertIsNone(child.poll())
+        finally:
+            if child.poll() is None:
+                child.kill()
+            child.wait()
+
     def test_surviving_manager_reaps_peer_after_lease_expires(self):
         settings = replace(
             self.settings, worker_lease_timeout_seconds=1)
@@ -1422,13 +1475,25 @@ class StudioManagerTests(WebAppTestCase):
         store = JobStore(settings.database_path)
         store.initialize()
         store.register_worker("dead-owner")
-        first_job = store.create_chat_job(first_project.name, "orphaned")
-        store.claim_next("dead-owner")
+        first_job = store.create_chat_job(
+            first_project.name, "orphaned", clip_id="clip-001")
+        running = store.claim_next("dead-owner")
+        assert running is not None
+        environment = {
+            **os.environ,
+            "HERMES_STUDIO_JOB_ID": running.id,
+            "HERMES_STUDIO_PROJECT": running.project,
+            "HERMES_STUDIO_CLIP": running.clip_id,
+            "HERMES_STUDIO_PROFILE": running.profile,
+        }
         child = subprocess.Popen(
             [sys.executable, "-c", "import time; time.sleep(30)"],
             start_new_session=True,
+            env=environment,
         )
-        store.set_pid(first_job.id, "dead-owner", child.pid)
+        store.set_process(
+            first_job.id, "dead-owner", child.pid,
+            process_start_time(child.pid))
 
         def command(_job, _session):
             return [sys.executable, "-c", "print('next')"]

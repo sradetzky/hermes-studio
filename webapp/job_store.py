@@ -100,7 +100,8 @@ class JobStore:
                     started_at TEXT NOT NULL DEFAULT '',
                     finished_at TEXT NOT NULL DEFAULT '',
                     owner_id TEXT NOT NULL DEFAULT '',
-                    pid INTEGER
+                    pid INTEGER,
+                    pid_start_time INTEGER
                 );
 
                 CREATE UNIQUE INDEX IF NOT EXISTS one_active_job_per_project
@@ -177,6 +178,9 @@ class JobStore:
             if "clip_id" not in job_columns:
                 connection.execute(
                     "ALTER TABLE jobs ADD COLUMN clip_id TEXT NOT NULL DEFAULT ''")
+            if "pid_start_time" not in job_columns:
+                connection.execute(
+                    "ALTER TABLE jobs ADD COLUMN pid_start_time INTEGER")
             connection.execute(
                 "INSERT INTO job_events "
                 "(project, job_id, profile, event_type, status, summary, detail, "
@@ -250,6 +254,7 @@ class JobStore:
             finished_at=row["finished_at"],
             owner_id=row["owner_id"],
             pid=row["pid"],
+            pid_start_time=row["pid_start_time"],
             reply=reply,
         )
 
@@ -295,19 +300,22 @@ class JobStore:
             finished_at="",
             owner_id="",
             pid=None,
+            pid_start_time=None,
         )
         try:
             with self._transaction() as connection:
                 connection.execute(
                     "INSERT INTO jobs "
                     "(id, project, clip_id, kind, profile, status, message, error, "
-                    "created_at, started_at, finished_at, owner_id, pid) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "created_at, started_at, finished_at, owner_id, pid, "
+                    "pid_start_time) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         job.id, job.project, job.clip_id, job.kind, job.profile,
                         job.status.value,
                         job.message, job.error, job.created_at, job.started_at,
                         job.finished_at, job.owner_id, job.pid,
+                        job.pid_start_time,
                     ),
                 )
                 connection.execute(
@@ -453,11 +461,13 @@ class JobStore:
                 return None
         return self.get_job(row["id"])
 
-    def set_pid(self, job_id: str, owner_id: str, pid: int) -> None:
+    def set_process(self, job_id: str, owner_id: str, pid: int,
+                    pid_start_time: int) -> None:
         with self._transaction() as connection:
             cursor = connection.execute(
-                "UPDATE jobs SET pid = ? WHERE id = ? AND status = 'running' "
-                "AND owner_id = ?", (pid, job_id, owner_id)
+                "UPDATE jobs SET pid = ?, pid_start_time = ? "
+                "WHERE id = ? AND status = 'running' AND owner_id = ?",
+                (pid, pid_start_time, job_id, owner_id)
             )
             if cursor.rowcount != 1:
                 raise InvalidTransitionError(
@@ -490,7 +500,8 @@ class JobStore:
                 )
             connection.execute(
                 "UPDATE jobs SET status = 'completed', finished_at = ?, "
-                "error = '', pid = NULL WHERE id = ?", (now, job_id)
+                "error = '', pid = NULL, pid_start_time = NULL WHERE id = ?",
+                (now, job_id)
             )
             self._append_job_event(
                 connection,
@@ -521,7 +532,8 @@ class JobStore:
             )
             connection.execute(
                 "UPDATE jobs SET status = 'failed', finished_at = ?, "
-                "error = ?, pid = NULL WHERE id = ?", (now, error, job_id)
+                "error = ?, pid = NULL, pid_start_time = NULL WHERE id = ?",
+                (now, error, job_id)
             )
             self._append_job_event(
                 connection,
