@@ -14,7 +14,111 @@ from unittest.mock import MagicMock, patch
 from scripts import design_studio as ds
 from scripts import krea2_image
 from scripts.krea2_image import parse_loras
+from webapp.clip_store import ClipStore, ClipStoreError
 from webapp.job_store import JobStore
+
+
+class ClipStoreTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.project = Path(self.temp.name) / "project"
+        self.project.mkdir()
+        self.store = ClipStore()
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def test_initializes_project_with_one_safe_clip(self):
+        manifest = self.store.initialize(self.project, "Test project")
+        self.assertEqual(manifest, {
+            "schema_version": 1,
+            "title": "Test project",
+            "clips": [{
+                "id": "clip-001",
+                "title": "Main clip",
+                "enabled": True,
+                "selected_take": None,
+            }],
+        })
+        clip = self.store.resolve_clip(self.project, "clip-001")
+        self.assertTrue((clip / "current_prompt.txt").is_file())
+        self.assertTrue((clip / "generations").is_dir())
+        self.assertEqual(
+            json.loads((self.project / "project.json").read_text()), manifest)
+
+    def test_creates_updates_and_reorders_clips(self):
+        self.store.initialize(self.project, "Test project")
+        second = self.store.create_clip(self.project, "Second scene")
+        third = self.store.create_clip(self.project, "Third scene")
+        self.assertEqual((second["id"], third["id"]),
+                         ("clip-002", "clip-003"))
+
+        updated = self.store.update_clip(
+            self.project, "clip-002", title="Reveal", enabled=False)
+        self.assertEqual(updated["title"], "Reveal")
+        self.assertFalse(updated["enabled"])
+        reordered = self.store.reorder(
+            self.project, ["clip-003", "clip-001", "clip-002"])
+        self.assertEqual(
+            [clip["id"] for clip in reordered["clips"]],
+            ["clip-003", "clip-001", "clip-002"],
+        )
+
+    def test_concurrent_clip_creation_serializes_ids_and_manifest(self):
+        self.store.initialize(self.project, "Test project")
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            created = list(pool.map(
+                lambda index: self.store.create_clip(
+                    self.project, f"Clip {index}")["id"],
+                range(8),
+            ))
+        self.assertEqual(len(set(created)), 8)
+        manifest = self.store.describe(self.project)
+        self.assertEqual(len(manifest["clips"]), 9)
+        self.assertEqual(
+            {clip["id"] for clip in manifest["clips"]},
+            {f"clip-{index:03d}" for index in range(1, 10)},
+        )
+
+    def test_selects_and_clears_one_existing_video_take(self):
+        self.store.initialize(self.project, "Test project")
+        generation = (
+            self.project / "clips" / "clip-001" / "generations" / "001")
+        generation.mkdir()
+        (generation / "video.mp4").write_bytes(b"video")
+        selected = self.store.select_take(
+            self.project, "clip-001", "001", "video.mp4")
+        self.assertEqual(selected["selected_take"], {
+            "generation": "001", "filename": "video.mp4"})
+        cleared = self.store.select_take(
+            self.project, "clip-001", None)
+        self.assertIsNone(cleared["selected_take"])
+
+    def test_rejects_invalid_order_selection_and_symlinked_clip(self):
+        self.store.initialize(self.project, "Test project")
+        self.store.create_clip(self.project, "Second")
+        with self.assertRaisesRegex(ClipStoreError, "every clip"):
+            self.store.reorder(self.project, ["clip-001"])
+        with self.assertRaisesRegex(ClipStoreError, "must be a video"):
+            generation = (
+                self.project / "clips" / "clip-001" / "generations" / "001")
+            generation.mkdir()
+            (generation / "still.png").write_bytes(b"image")
+            self.store.select_take(
+                self.project, "clip-001", "001", "still.png")
+
+        outside = Path(self.temp.name) / "outside"
+        outside.mkdir()
+        clip = self.project / "clips" / "clip-002"
+        for item in clip.iterdir():
+            if item.is_dir():
+                item.rmdir()
+            else:
+                item.unlink()
+        clip.rmdir()
+        clip.symlink_to(outside, target_is_directory=True)
+        with self.assertRaisesRegex(ClipStoreError, "clip not found"):
+            self.store.describe(self.project)
 
 
 class ProjectPathTests(unittest.TestCase):
