@@ -28,6 +28,17 @@
         <button class="btn" id="new-project" type="button">+</button>
       </div>
       <nav id="projects"></nav>
+      <div class="clip-heading">
+        <span>Clips</span>
+        <button class="btn" id="new-clip" type="button" disabled>+</button>
+      </div>
+      <nav id="clips"></nav>
+      <div class="clip-actions" id="clip-actions">
+        <button class="btn" id="rename-clip" type="button" disabled>Rename</button>
+        <button class="btn" id="move-clip-up" type="button" disabled>↑</button>
+        <button class="btn" id="move-clip-down" type="button" disabled>↓</button>
+        <button class="btn" id="toggle-clip" type="button" disabled>Disable</button>
+      </div>
     </aside>
 
     <section class="flex flex-col gap-3 min-h-0">
@@ -52,6 +63,7 @@
         </details>
       </div>
       <form class="panel p-2 flex gap-2" id="chat-form">
+        <span class="active-clip-label" id="active-clip-label">No clip</span>
         <label class="sr-only" for="profile-select">Studio profile</label>
         <select id="profile-select" class="profile-select" title="Send to profile"></select>
         <input id="chatinput"
@@ -63,7 +75,7 @@
 
     <aside class="panel p-3 overflow-auto">
       <div class="flex items-center justify-between mb-2">
-        <span class="text-xs uppercase tracking-wider text-gray-500">Generations</span>
+        <span class="text-xs uppercase tracking-wider text-gray-500">Takes</span>
         <span class="generation-count" id="generation-count"></span>
       </div>
       <div class="generation-filters" aria-label="Generation filters">
@@ -103,8 +115,8 @@
     <div class="media-dialog-shell">
       <header class="media-dialog-header">
         <div>
-          <div class="media-dialog-kicker">Generation review</div>
-          <h2 id="generation-title">Generation</h2>
+          <div class="media-dialog-kicker">Take review</div>
+          <h2 id="generation-title">Take</h2>
         </div>
         <div class="media-dialog-nav">
           <button class="btn" id="generation-previous" type="button">Previous</button>
@@ -123,6 +135,9 @@
             <span id="generation-file-state"></span>
           </div>
           <div class="media-actions">
+            <button class="btn" id="select-generation" type="button">
+              Select take
+            </button>
             <button class="btn primary" id="promote-generation" type="button">
               Promote to final
             </button>

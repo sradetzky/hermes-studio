@@ -51,7 +51,7 @@ function renderGenerationReadiness(contract) {
 }
 
 async function openGenerationSettings(opener = null) {
-  if (!state.current) return;
+  if (!state.current || !state.currentClip) return;
   state.settingsOpener = opener || state.settingsOpener;
   const dialog = $('#generation-settings-dialog');
   const save = $('#generation-settings-save');
@@ -60,10 +60,13 @@ async function openGenerationSettings(opener = null) {
   $('#generation-settings-status').textContent = 'Loading settings…';
   if (!dialog.open) dialog.showModal();
   const selectedProject = state.current;
+  const selectedClip = state.currentClip;
   try {
     const contract = await requestJson(
-      `/api/project/${encodeURIComponent(selectedProject)}/generation-settings`);
-    if (selectedProject !== state.current || !dialog.open) return;
+      `/api/project/${encodeURIComponent(selectedProject)}/clips/` +
+      `${encodeURIComponent(selectedClip)}/generation-settings`);
+    if (selectedProject !== state.current || selectedClip !== state.currentClip ||
+        !dialog.open) return;
     state.generationSettings = contract;
     state.generationSettingsOptions = contract.options;
     populateGenerationSettings(contract);
@@ -147,14 +150,16 @@ async function saveGenerationSettings(event) {
   save.disabled = true;
   status.textContent = 'Saving settings…';
   const selectedProject = state.current;
+  const selectedClip = state.currentClip;
   try {
     const contract = await requestJson(
-      `/api/project/${encodeURIComponent(selectedProject)}/generation-settings`, {
+      `/api/project/${encodeURIComponent(selectedProject)}/clips/` +
+      `${encodeURIComponent(selectedClip)}/generation-settings`, {
         method: 'PUT',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify(generationSettingsPayload()),
       });
-    if (selectedProject !== state.current) return;
+    if (selectedProject !== state.current || selectedClip !== state.currentClip) return;
     renderGenerationReadiness(contract);
     closeGenerationSettings();
     await refreshProject();

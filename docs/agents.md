@@ -16,16 +16,17 @@ specialist.
 ## Dataflow
 
 ```
-brief → studio-storyboarder → storyboard.md
-      → studio-prompt-engineer → current_prompt.txt (+ length/reference mapping)
-      → web settings editor    → current_generation.json (compact render knobs)
-      → studio (orchestrator)  → comfyui-mcp → archive-output → clear_vram
+brief → studio-storyboarder → project-shared storyboard.md
+      → studio-prompt-engineer → clip/current_prompt.txt (+ length/reference mapping)
+      → web settings editor    → clip/current_generation.json (compact render knobs)
+      → studio (orchestrator)  → comfyui-mcp → clip take archive → clear_vram
       → studio-grok (optional) → xAI web/X/Imagine → research/ or archive-grok
       → studio-reviewer        → PASS/REVISE/REJECT appended to chat.jsonl
 ```
 
-Handoffs travel through the filesystem (project folders), never through chat
-context. One role per step; escalate problems sideways, not around.
+Handoffs carry exact project + clip IDs and travel through the filesystem,
+never through chat context. One role per step; escalate problems sideways, not
+around. Chat/references stay project-shared; prompt/settings/takes stay clip-local.
 
 ## Spawning
 

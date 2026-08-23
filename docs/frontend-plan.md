@@ -8,7 +8,8 @@ no state in the UI that isn't already on disk; minimal dependencies.
 - **FastAPI** backend (`.venv/`; production/dev dependencies pinned separately)
 - **Vanilla ES module + locally compiled Tailwind CSS** — no runtime CDN and
   no SPA framework
-- Media served only through guarded references/generations/final routes
+- Media served only through guarded shared references/final routes and exact
+  project/clip/take routes
 - Chat jobs resume one persistent Hermes session per project/profile and run
   asynchronously behind a transactional SQLite runtime store
 
@@ -20,6 +21,8 @@ no state in the UI that isn't already on disk; minimal dependencies.
   into safe per-job reasoning/tool activity
 - `studio_manager.py` — FIFO scheduler, worker lease, tracked Hermes process
 - `reference_store.py` — synchronous staging + atomic no-overwrite publication
+- `clip_store.py` — canonical project manifest, exact clip resolution, ordering,
+  enabled state, and selected-take provenance
 - `media_review_store.py` — guarded generation detail, idempotent promotion and
   generation-to-reference publication with filesystem provenance
 - `generation_settings_store.py` — typed `current_generation.json`, strict H3
@@ -33,19 +36,19 @@ no state in the UI that isn't already on disk; minimal dependencies.
 ```
 ┌──────────┬──────────────────────────────┬────────────┐
 │ PROJECTS │  CHAT (with studio agent)    │ MEDIA      │
-│ list     │  persistent project session  │ references │
-│ + new    │                              │ generations│
-│          │  CURRENT PROMPT panel        │ video/img  │
-│          │  (from current_prompt.txt)   │ players    │
+│ + clips  │  persistent project session  │ references │
+│ + new    │  exact active clip context   │ takes      │
+│          │  ACTIVE CLIP PROMPT panel    │ video/img  │
+│          │  (clip/current_prompt.txt)   │ players    │
 └──────────┴──────────────────────────────┴────────────┘
 ```
 
-- Project switcher = left rail, reads folders; new project button
+- Project + ordered clip switcher = left rail; add/rename/reorder/enable controls
 - Center: chat with the studio agent; below it the current structured prompt
 - Prompt panel: readiness badge and compact H3 run contract (mode, MP or
   explicit canvas, seed, steps, and fused-modulation/ChunkFF acceleration);
   clip length and ordered references come from the prompt itself
-- Right: reference thumbnails, generation gallery (newest first), HTML5 video
+- Right: shared reference thumbnails, active-clip take gallery (newest first), HTML5 video
   player for clips, media/recipe/review filters, and a keyboard-accessible detail
   dialog with every archived asset, prompt, metadata and review action
 - Polling every 2s uses incremental chat/activity cursors and only rebuilds media DOM when the
@@ -58,29 +61,35 @@ no state in the UI that isn't already on disk; minimal dependencies.
 | GET | `/api/projects` | list projects |
 | GET | `/api/profiles` | dispatchable Studio profiles |
 | POST | `/api/projects` | create project {name, brief} |
-| GET | `/api/project/{id}` | brief, current prompt, chat count, settings readiness |
-| GET | `/api/project/{id}/generation-settings` | settings, readiness and installed options |
-| PUT | `/api/project/{id}/generation-settings` | validate and atomically save current run contract |
-| GET | `/api/project/{id}/generations` | listing w/ meta.json contents |
-| GET | `/api/project/{id}/generations/{gen}` | complete media/prompt/meta/review detail |
-| POST | `/api/project/{id}/generations/{gen}/promote` | copy selected media to `final/` |
-| POST | `/api/project/{id}/generations/{gen}/use-as-reference` | copy selected media to `references/` |
+| GET | `/api/project/{id}` | brief, chat count, ordered clip manifest |
+| GET/POST | `/api/project/{id}/clips` | list/create clips |
+| GET/PATCH | `/api/project/{id}/clips/{clip}` | clip metadata, prompt, readiness / update title or enabled state |
+| PUT | `/api/project/{id}/clips/order` | atomically replace exact clip order |
+| GET/PUT | `/api/project/{id}/clips/{clip}/generation-settings` | inspect/save the clip's prompt-bound run contract |
+| GET | `/api/project/{id}/clips/{clip}/generations` | active clip take listing w/ metadata |
+| GET | `/api/project/{id}/clips/{clip}/generations/{gen}` | complete take media/prompt/meta/review detail |
+| PUT | `/api/project/{id}/clips/{clip}/selected-take` | select/clear one exact video take |
+| POST | `/api/project/{id}/clips/{clip}/generations/{gen}/promote` | copy selected media to shared `final/` |
+| POST | `/api/project/{id}/clips/{clip}/generations/{gen}/use-as-reference` | copy selected media to shared `references/` |
 | GET | `/api/project/{id}/chat?after=N` | poll new chat lines |
-| POST | `/api/chat` | queue Studio work → HTTP 202 + job record |
+| POST | `/api/project/{id}/clips/{clip}/chat` | queue exact-clip Studio work → HTTP 202 + job record |
 | GET | `/api/jobs/{id}` | one job's queued/running/completed/failed state |
 | GET | `/api/project/{id}/jobs` | recent project activity |
 | GET | `/api/project/{id}/events?after=N` | incremental profile/tool/reasoning activity |
 | GET | `/api/project/{id}/references` | list current project references |
 | POST | `/api/project/{id}/references` | multi-file drag/drop upload |
-| GET | `/media/projects/{id}/{area}/{path}` | guarded references/generations/final media |
+| GET | `/media/projects/{id}/{area}/{path}` | guarded shared references/final media |
+| GET | `/media/projects/{id}/clips/{clip}/generations/{gen}/{file}` | guarded exact take media |
 
 ## Chat → Hermes wiring
 
-POST /api/chat accepts an explicit allowlisted profile, rejects a second active
-project job, returns HTTP 202 immediately, and atomically inserts the user turn,
-job and queued activity event. A lifespan-owned scheduler atomically claims
+The nested clip chat endpoint accepts an explicit allowlisted profile, validates
+the exact clip, rejects a second active project job, returns HTTP 202 immediately,
+and atomically inserts the user turn, clip-scoped job and queued activity event.
+A lifespan-owned scheduler atomically claims
 the oldest global job and spawns
 `hermes -p PROFILE [-r SESSION] chat -Q -t TOOLSETS --source studio-web -q "<msg>"`.
+The command carries exact project/clip IDs and paths in its query and environment.
 The orchestrator receives `all`; specialists receive fixed minimal toolsets.
 While the subprocess remains isolated, the manager reads that profile's
 structured SQLite session messages to project model reasoning, commentary and
@@ -118,10 +127,10 @@ auto-chained, and their result never starts a render without a separate request.
   and lock + hard-link publication makes name collisions non-overwriting
 - Exact project ids only; the core resolver rejects separators, symlink
   escapes, fuzzy suffix matching and paths outside `projects/`
-- `/media` exposes only references, generations and final—not briefs, chats,
-  prompts, research, shared or temporary files
+- `/media` exposes only shared references/final and exact nested take media—not
+  briefs, chats, live prompts/settings, research, shared assets, or temporary files
 - Review actions accept one exact allowlisted media filename from one exact
-  generation, copy rather than move, serialize through a project lock, publish
+  project/clip/take, copy rather than move, serialize through a project lock, publish
   atomically without overwrite, and record idempotent provenance in the hidden
   generation `.review.json`. Symlink/path escapes are rejected.
 - Generation settings enforce 0.1–1.1 MP or a ≤1.1MP explicit 32px-grid canvas
@@ -140,6 +149,8 @@ auto-chained, and their result never starts a render without a separate request.
 - M3.5 (done): live per-profile reasoning/tool timeline + specialist dispatch
 - M4 (done): media detail viewer, filters, promote-to-final and use-as-reference
 - M4.1 (done): typed generation manifest, readiness summary and settings editor
+- M4.2 (done): clip-local prompts/settings/takes, exact clip jobs and nested media,
+  ordered clip controls, selected-take provenance, and clip-safe polling
 
 ## Out of scope (v1)
 

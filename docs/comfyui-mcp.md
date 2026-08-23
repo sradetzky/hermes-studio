@@ -43,7 +43,7 @@ image handoffs.
 5. On success, archive MCP output into the project:
 
    ```bash
-   python3 scripts/design_studio.py archive-output <project-id> \
+   python3 scripts/design_studio.py archive-output <project-id> <clip-id> \
      <filename-under-ComfyUI-output> --prompt-id <id> --kind <image|video>
    ```
 

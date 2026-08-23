@@ -34,7 +34,7 @@ This skill belongs to the `studio-grok` backup profile (Grok 4.6 / xAI OAuth).
 
 ```bash
 python3 ~/repos/hermes-studio/scripts/design_studio.py archive-grok \
-  <project-id> <absolute-image-path> --meta-json '{"prompt":"..."}'
+  <project-id> <clip-id> <absolute-image-path> --meta-json '{"prompt":"..."}'
 ```
 
 ## Boundaries

@@ -50,7 +50,7 @@ Imagine returns an absolute cache path under:
 Archive an accepted image safely into the project:
 
 ```bash
-python3 scripts/design_studio.py archive-grok <project-id> <image-path> \
+python3 scripts/design_studio.py archive-grok <project-id> <clip-id> <image-path> \
   --meta-json '{"prompt":"exact prompt","aspect_ratio":"landscape"}'
 ```
 

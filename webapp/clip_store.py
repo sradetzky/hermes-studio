@@ -358,6 +358,8 @@ class ClipStore:
                           if item["id"] == clip_id), None)
             if entry is None:
                 raise ClipNotFoundError(f"clip not found: {clip_id}")
+            if selected is not None and not entry["enabled"]:
+                raise ClipStoreError("cannot select a take for a disabled clip")
             entry["selected_take"] = selected
             self._write_manifest_unlocked(project, manifest)
         return entry

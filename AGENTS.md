@@ -94,6 +94,9 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
   model overrides, and accel now means Sol fused modulation + ChunkFF only
 - Clip/take publication and archival reads hardened against no-replace and
   symlink-swap races with descriptor-based filesystem operations
+- Project → Clips → Takes transition completed end to end: exact clip-scoped
+  jobs, nested settings/media APIs, ordered clip web controls, selected-take
+  provenance, explicit verified legacy migration, and synchronized Studio docs
 
 ## Next steps
 

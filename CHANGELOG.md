@@ -7,6 +7,13 @@ preview and production releases.
 
 ## [Unreleased]
 
+### Added
+
+- Ordered Project → Clips → Takes hierarchy with immutable clip IDs, enabled
+  state, selected video-take provenance, and an explicit resumable legacy migration
+- Clip navigation and Add/Rename/Up/Down/Enable controls in the web UI
+- Exact clip context on every new Studio job and nested clip/take APIs/media URLs
+
 ### Changed
 
 - Simplified H3 settings to mode, canvas, seed, steps, and acceleration; clip
@@ -14,6 +21,8 @@ preview and production releases.
 - Removed SeedVR2, turbo, W4A8, model, and reference controls from the dialog
 - Acceleration now uses only Sol fused modulation and ChunkFF, without Sage,
   sparse Sol attention, or EasyCache
+- Prompt, generation settings, and take archives moved from project scope to
+  `clips/<clip-id>/`; project chat, references, research, and final stay shared
 
 ## [0.1.0-preview.1] - 2026-08-23
 

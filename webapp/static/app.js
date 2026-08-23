@@ -9,7 +9,7 @@ import {
   renderGenerations,
   updateGenerationRecipeFilter,
 } from './media-review.js';
-import {$, requestJson, showEmpty, state} from './shared.js';
+import {$, activeClip, requestJson, showEmpty, state} from './shared.js';
 
 async function loadProfiles() {
   const data = await requestJson('/api/profiles');
@@ -51,13 +51,7 @@ function renderProjects() {
   }
 }
 
-async function selectProject(projectId) {
-  closeGenerationDialog(false);
-  closeGenerationSettings(false);
-  state.current = projectId;
-  state.chatCount = 0;
-  state.activityCursor = 0;
-  state.activityByJob = {};
+function resetClipState() {
   state.generations = [];
   state.filteredGenerations = [];
   state.generationDetail = null;
@@ -65,13 +59,149 @@ async function selectProject(projectId) {
   state.generationSettings = null;
   state.generationSettingsOptions = null;
   state.generationSignature = '';
+  $('#prompt').textContent = '—';
+  $('#gens').replaceChildren();
+  $('#generation-count').textContent = '';
+  renderGenerationReadiness(null);
+}
+
+function renderClips() {
+  const navigation = $('#clips');
+  navigation.replaceChildren();
+  if (!state.clips.length) {
+    showEmpty(navigation, state.current ? 'no clips' : 'pick a project');
+  } else {
+    state.clips.forEach((clip, index) => {
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = [
+        'clip', clip.id === state.currentClip ? 'active' : '',
+        clip.enabled ? '' : 'disabled',
+      ].filter(Boolean).join(' ');
+      const order = document.createElement('span');
+      order.className = 'clip-index';
+      order.textContent = String(index + 1).padStart(2, '0');
+      const title = document.createElement('span');
+      title.className = 'clip-title';
+      title.textContent = clip.title;
+      title.title = clip.id;
+      item.append(order, title);
+      if (clip.selected_take) {
+        const take = document.createElement('span');
+        take.className = 'clip-take';
+        take.textContent = 'take';
+        take.title = `${clip.selected_take.generation}/${clip.selected_take.filename}`;
+        item.append(take);
+      }
+      item.addEventListener('click', () => selectClip(clip.id));
+      navigation.append(item);
+    });
+  }
+  const clip = activeClip();
+  const index = state.clips.findIndex(entry => entry.id === state.currentClip);
+  $('#new-clip').disabled = !state.current || state.jobActive;
+  $('#rename-clip').disabled = !clip || state.jobActive;
+  $('#move-clip-up').disabled = !clip || index <= 0 || state.jobActive;
+  $('#move-clip-down').disabled = !clip || index < 0 ||
+    index >= state.clips.length - 1 || state.jobActive;
+  $('#toggle-clip').disabled = !clip || state.jobActive;
+  $('#toggle-clip').textContent = clip?.enabled ? 'Disable' : 'Enable';
+  $('#active-clip-label').textContent = clip ? `${clip.id} · ${clip.title}` : 'No clip';
+  $('#active-clip-label').title = clip?.title || '';
+}
+
+async function selectClip(clipId) {
+  if (clipId === state.currentClip || !state.clips.some(clip => clip.id === clipId)) return;
+  closeGenerationDialog(false);
+  closeGenerationSettings(false);
+  state.currentClip = clipId;
+  resetClipState();
+  renderClips();
+  await refreshProject();
+}
+
+async function runClipAction(action) {
+  if (!state.current || state.jobActive) return;
+  try {
+    $('#status').textContent = 'Updating clip…';
+    await action();
+    $('#status').textContent = '';
+    await refreshProject();
+  } catch (error) {
+    $('#status').textContent = `clip error: ${error.message}`;
+  }
+}
+
+async function createClip() {
+  const title = prompt('Clip title:');
+  if (!title) return;
+  await runClipAction(async () => {
+    const created = await requestJson(
+      `/api/project/${encodeURIComponent(state.current)}/clips`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({title}),
+      });
+    state.currentClip = created.clip.id;
+    resetClipState();
+  });
+}
+
+async function renameClip() {
+  const clip = activeClip();
+  if (!clip) return;
+  const title = prompt('Clip title:', clip.title);
+  if (!title || title === clip.title) return;
+  await runClipAction(() => requestJson(
+    `/api/project/${encodeURIComponent(state.current)}/clips/${encodeURIComponent(clip.id)}`, {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({title}),
+    }));
+}
+
+async function moveClip(offset) {
+  const index = state.clips.findIndex(clip => clip.id === state.currentClip);
+  const destination = index + offset;
+  if (index < 0 || destination < 0 || destination >= state.clips.length) return;
+  const clipIds = state.clips.map(clip => clip.id);
+  [clipIds[index], clipIds[destination]] = [clipIds[destination], clipIds[index]];
+  await runClipAction(() => requestJson(
+    `/api/project/${encodeURIComponent(state.current)}/clips/order`, {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({clip_ids: clipIds}),
+    }));
+}
+
+async function toggleClip() {
+  const clip = activeClip();
+  if (!clip) return;
+  await runClipAction(() => requestJson(
+    `/api/project/${encodeURIComponent(state.current)}/clips/${encodeURIComponent(clip.id)}`, {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({enabled: !clip.enabled}),
+    }));
+}
+
+async function selectProject(projectId) {
+  closeGenerationDialog(false);
+  closeGenerationSettings(false);
+  state.current = projectId;
+  state.currentClip = null;
+  state.clips = [];
+  state.chatCount = 0;
+  state.activityCursor = 0;
+  state.activityByJob = {};
+  resetClipState();
   state.referenceSignature = '';
   $('#chatlog').replaceChildren();
   delete $('#chatlog').dataset.empty;
-  $('#gens').replaceChildren();
   $('#refs').replaceChildren();
   renderActivity([]);
   renderProjects();
+  renderClips();
   await refreshProject();
 }
 
@@ -96,24 +226,57 @@ async function refreshProject() {
     return;
   }
   state.refreshing = true;
-  const selected = state.current;
-  const projectId = encodeURIComponent(selected);
+  const selectedProject = state.current;
+  const projectId = encodeURIComponent(selectedProject);
   try {
-    const [project, chat, generations, references, jobs, activity] = await Promise.all([
+    const [project, chat, references, jobs, activity] = await Promise.all([
       requestJson(`/api/project/${projectId}`),
       requestJson(`/api/project/${projectId}/chat?after=${state.chatCount}`),
-      requestJson(`/api/project/${projectId}/generations`),
       requestJson(`/api/project/${projectId}/references`),
       requestJson(`/api/project/${projectId}/jobs?limit=5`),
       requestJson(`/api/project/${projectId}/events?after=${state.activityCursor}`),
     ]);
-    if (selected !== state.current) {
+    if (selectedProject !== state.current) {
       state.refreshPending = true;
       return;
     }
-    $('#prompt').textContent = project.current_prompt || '—';
-    renderGenerationReadiness(project.generation_settings);
-    document.title = `${project.id} — Hermes Studio`;
+    const previousClip = state.currentClip;
+    state.clips = project.clips || [];
+    if (!state.clips.some(clip => clip.id === state.currentClip)) {
+      state.currentClip = state.clips[0]?.id || null;
+    }
+    if (previousClip !== state.currentClip) {
+      closeGenerationDialog(false);
+      closeGenerationSettings(false);
+      resetClipState();
+    }
+    renderClips();
+
+    const selectedClip = state.currentClip;
+    if (selectedClip) {
+      const clipId = encodeURIComponent(selectedClip);
+      const [clip, generations] = await Promise.all([
+        requestJson(`/api/project/${projectId}/clips/${clipId}`),
+        requestJson(`/api/project/${projectId}/clips/${clipId}/generations`),
+      ]);
+      if (selectedProject !== state.current || selectedClip !== state.currentClip) {
+        state.refreshPending = true;
+        return;
+      }
+      $('#prompt').textContent = clip.current_prompt || '—';
+      renderGenerationReadiness(clip.generation_settings);
+      document.title = `${clip.title} — ${project.id} — Hermes Studio`;
+      const generationSignature = JSON.stringify(generations.generations);
+      if (generationSignature !== state.generationSignature) {
+        state.generationSignature = generationSignature;
+        state.generations = generations.generations;
+        updateGenerationRecipeFilter();
+        renderGenerations();
+      }
+    } else {
+      resetClipState();
+      document.title = `${project.id} — Hermes Studio`;
+    }
     if (chat.total < state.chatCount) {
       state.chatCount = 0;
       $('#chatlog').replaceChildren();
@@ -126,13 +289,6 @@ async function refreshProject() {
     }
     appendActivities(activity.events);
     state.activityCursor = activity.cursor;
-    const generationSignature = JSON.stringify(generations.generations);
-    if (generationSignature !== state.generationSignature) {
-      state.generationSignature = generationSignature;
-      state.generations = generations.generations;
-      updateGenerationRecipeFilter();
-      renderGenerations();
-    }
     const referenceSignature = JSON.stringify(references.references);
     if (referenceSignature !== state.referenceSignature) {
       state.referenceSignature = referenceSignature;
@@ -340,6 +496,7 @@ function renderReferences(references) {
 function renderActivity(jobs) {
   const latest = jobs[0];
   const active = jobs.find(job => job.status === 'queued' || job.status === 'running');
+  state.jobActive = Boolean(active);
   const activityState = active?.status || latest?.status || 'idle';
   $('#activity-dot').className = `activity-dot ${activityState === 'idle' ? '' : activityState}`;
   const labels = {
@@ -354,6 +511,7 @@ function renderActivity(jobs) {
   $('#chatinput').disabled = Boolean(active);
   $('#send-button').disabled = Boolean(active);
   $('#profile-select').disabled = Boolean(active);
+  renderClips();
 }
 
 
@@ -361,18 +519,20 @@ async function sendChat(event) {
   event.preventDefault();
   const input = $('#chatinput');
   const message = input.value.trim();
-  if (!message || !state.current) {
-    alert('Pick a project first');
+  if (!message || !state.current || !state.currentClip) {
+    alert('Pick a project and clip first');
     return;
   }
   input.value = '';
   $('#status').textContent = 'studio is thinking…';
   try {
-    const job = await requestJson(`/api/chat?pid=${encodeURIComponent(state.current)}`, {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({message, profile: $('#profile-select').value || 'studio'}),
-    });
+    const job = await requestJson(
+      `/api/project/${encodeURIComponent(state.current)}/clips/` +
+      `${encodeURIComponent(state.currentClip)}/chat`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({message, profile: $('#profile-select').value || 'studio'}),
+      });
     $('#status').textContent = '';
     renderActivity([job]);
     await refreshProject();
@@ -425,6 +585,11 @@ function uploadReferences(files) {
 const dropzone = $('#dropzone');
 const fileInput = $('#file-input');
 $('#new-project').addEventListener('click', createProject);
+$('#new-clip').addEventListener('click', createClip);
+$('#rename-clip').addEventListener('click', renameClip);
+$('#move-clip-up').addEventListener('click', () => moveClip(-1));
+$('#move-clip-down').addEventListener('click', () => moveClip(1));
+$('#toggle-clip').addEventListener('click', toggleClip);
 $('#chat-form').addEventListener('submit', sendChat);
 initializeGenerationSettings(refreshProject);
 initializeMediaReview(refreshProject);

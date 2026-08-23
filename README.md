@@ -13,7 +13,8 @@ GPU execution, and the project filesystem remains the media source of truth.
 
 ## What works
 
-- Folder-backed projects with briefs, prompts, references, generations, and final media
+- Folder-backed projects with ordered clips; chat/references are shared while
+  prompts, settings, immutable takes, and selected-take provenance are clip-local
 - Persistent per-project Hermes sessions and serialized global job execution
 - Live profile reasoning summaries, tool activity, handoffs, and job status
 - Safe multi-file reference uploads with atomic non-overwriting publication
@@ -33,7 +34,7 @@ Browser (FastAPI + vanilla ES modules + local Tailwind CSS)
   → Hermes profile `studio` and allowlisted specialists
   → pinned comfyui-mcp
   → local ComfyUI
-  → studio-root/projects/<project-id>/ (source of truth)
+  → studio-root/projects/<project-id>/clips/<clip-id>/ (media source of truth)
 ```
 
 `PLAN.md` is the architecture decision record. `AGENTS.md` is the concise repo
@@ -131,6 +132,8 @@ Compile-check Python and JavaScript:
 ```bash
 python -m compileall -q webapp scripts tests
 node --check webapp/static/app.js
+node --check webapp/static/generation-settings.js
+node --check webapp/static/media-review.js
 ```
 
 Rebuild the committed stylesheet after HTML/JS utility-class changes:

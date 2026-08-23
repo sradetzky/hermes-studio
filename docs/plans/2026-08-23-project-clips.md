@@ -42,7 +42,7 @@ projects/<project-id>/
 - Migration is explicit, dry-runnable, resumable, and never silently triggered.
 - Actual ffmpeg stitching is outside this change.
 
-## Task 1: Filesystem clip contract and project manifest
+## Task 1: Filesystem clip contract and project manifest — completed
 
 **Files:**
 - Create: `webapp/clip_store.py`
@@ -58,7 +58,7 @@ projects/<project-id>/
 6. Add CLI commands for list/create/update/reorder/select clips.
 7. Run `python -m unittest tests.test_studio` and commit.
 
-## Task 2: Explicit legacy migration
+## Task 2: Explicit legacy migration — completed
 
 **Files:**
 - Modify: `scripts/design_studio.py`
@@ -72,7 +72,7 @@ projects/<project-id>/
 5. Verify counts, sizes, and hashes before removing the journal.
 6. Run focused tests and commit.
 
-## Task 3: Clip-scoped runtime jobs and agent context
+## Task 3: Clip-scoped runtime jobs and agent context — completed
 
 **Files:**
 - Modify: `webapp/models.py`
@@ -89,7 +89,7 @@ projects/<project-id>/
 5. Preserve one active project job and one global GPU-running job invariants.
 6. Run job/concurrency/lifecycle tests and commit.
 
-## Task 4: Nested clip/take APIs and stores
+## Task 4: Nested clip/take APIs and stores — completed
 
 **Files:**
 - Modify: `webapp/routes.py`
@@ -108,7 +108,7 @@ projects/<project-id>/
 7. Replace project-level prompt/settings/generation endpoints rather than maintaining a long-lived dual layout.
 8. Run API/security/concurrency tests and commit.
 
-## Task 5: Project → clip frontend
+## Task 5: Project → clip frontend — completed
 
 **Files:**
 - Modify: `webapp/static/index.html`
@@ -129,7 +129,7 @@ projects/<project-id>/
 7. Preserve stable media DOM/playback and dialog focus behavior.
 8. Rebuild CSS, run JS syntax checks, and commit.
 
-## Task 6: Migration and documentation
+## Task 6: Migration and documentation — completed
 
 **Files:**
 - Modify: `PLAN.md`, `AGENTS.md`, `README.md`, `CHANGELOG.md`
@@ -146,7 +146,7 @@ projects/<project-id>/
 6. Restart the web app and verify live nested APIs.
 7. Commit.
 
-## Task 7: Final verification
+## Task 7: Final verification — completed
 
 1. Run `python -m unittest tests.test_webapp tests.test_studio`.
 2. Run Python compile checks, JS syntax checks, CSS build, `git diff --check`, and profile drift check.

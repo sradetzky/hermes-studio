@@ -1,6 +1,7 @@
 # PLAN.md — Hermes Studio
 
-**Status**: v0.1 preview candidate; web M1–M4.1 complete, real H3 E2E pending
+**Status**: v0.1 preview candidate; web M1–M4.1 + clip/take hierarchy complete,
+real H3 E2E pending
 **Owner**: Sven (local setup on RTX 5060 Ti 16GB)  
 **Date**: 2026-08-22  
 **Goal**: Fully local, agent-orchestrated creative studio centered on MiniMax H3 + Hermes, with a simple self-hosted web UI.
@@ -55,17 +56,21 @@ Folder structure on disk (source of truth for projects & media)
 ~/design-studio/   (or path of choice, set in Hermes skill)
 ├── projects/
 │   └── YYYY-MM-DD_name/
+│       ├── project.json          # ordered immutable clip ids + selected takes
 │       ├── brief.md
 │       ├── chat.jsonl
-│       ├── current_prompt.txt
-│       ├── current_generation.json # typed run settings + prompt hash
 │       ├── references/          # uploaded assets (image1_..., video1_..., audio1_...)
-│       ├── generations/
-│       │   └── 001/
-│       │       ├── video.mp4
-│       │       ├── preview.jpg
-│       │       ├── prompt.txt
-│       │       └── meta.json
+│       ├── research/
+│       ├── clips/
+│       │   └── clip-001/
+│       │       ├── current_prompt.txt
+│       │       ├── current_generation.json # typed settings + prompt hash
+│       │       └── generations/
+│       │           └── 001/
+│       │               ├── video.mp4
+│       │               ├── prompt.txt
+│       │               ├── settings.json
+│       │               └── meta.json
 │       └── final/
 ├── shared/
 │   ├── characters/
@@ -74,7 +79,9 @@ Folder structure on disk (source of truth for projects & media)
 └── tmp/
 ```
 
-Hermes (via design-studio skill) is responsible for creating projects and writing into the correct locations. UI only reads.
+Project chat, references, research, and final exports are shared. Each clip owns
+its prompt, generation contract, immutable takes, and optional selected take.
+Hermes and the web UI always carry exact project and clip IDs.
 
 ### 2.4 Prompting
 - Use official MiniMax H3 structure strictly.
@@ -101,9 +108,10 @@ Hermes (via design-studio skill) is responsible for creating projects and writin
 - Pre-export clean API-format workflows for T2VA, FL2VA, Ref2VA with injectable parameters (prompt, duration, seed, refs, turbo strength, etc.).
 - Hermes skill must be able to:
   - Create new project folder
-  - Write/update `current_prompt.txt` and append to `chat.jsonl`
+  - Write/update one exact clip's `current_prompt.txt` and append to shared `chat.jsonl`
   - Call ComfyUI workflow
-  - Move finished outputs into `generations/NNN/` and write `meta.json`
+  - Archive finished outputs into `clips/<clip-id>/generations/NNN/`
+    with prompt/settings/metadata snapshots
 
 ---
 
@@ -119,9 +127,9 @@ Hermes (via design-studio skill) is responsible for creating projects and writin
 2. Write solid `SOUL.md` for the studio agent (orchestrator + strict H3 prompt engineer).
 3. Implement `design-studio` skill that understands the folder root and can:
    - `create_project(name, brief)`
-   - `write_prompt(project, structured_prompt)`
+   - `write_prompt(project, clip, structured_prompt)`
    - `append_chat(project, role, content)`
-   - `run_generation(project, workflow_name, params)` → moves outputs correctly
+   - `run_generation(project, clip, workflow_name, params)` → archives outputs correctly
 4. Point the studio profile’s model config at the shared local endpoint.
 5. Test from CLI: create project → write prompt → (manual ComfyUI for now) → verify folder layout.
 
@@ -130,16 +138,18 @@ Hermes (via design-studio skill) is responsible for creating projects and writin
 - [ ] Verify a real H3 API-format workflow submission through MCP; always archive output and call
   `clear_vram` after every terminal success/error/cancel/timeout.
 - [ ] Verify parameter injection against the real workflow.
-- [ ] Verify completed media is archived into `generations/` before release.
+- [ ] Verify completed media is archived into the selected clip's `generations/`
+  before release.
 
 ### Phase 3 – Minimal Web UI
 - FastAPI app that:
   - Serves static index.html
-  - `/api/chat` → asynchronous persisted jobs on Hermes studio profile
-  - Project, generation, reference, settings, job, chat, and activity APIs
-  - Serves only guarded project media from references/generations/final
-- Single page with: project list, chat, video player, prompt viewer, references.
-- Auto-refresh or simple polling for new generations.
+  - nested project/clip chat, settings, take, and media APIs
+  - project-scoped reference, job, chat-history, and activity APIs
+  - guarded media from shared references/final and exact clip take archives
+- Single page with project + clip navigation, chat, take player, prompt viewer,
+  settings, references, and selected-take controls.
+- Stable polling for shared state and the exact active clip.
 - [x] Async per-project job state + visible queued/running/completed/failed status.
 - [x] Multi-file drag/drop reference upload with safe non-overwriting storage.
 - [x] Transactional SQLite runtime coordination, lifecycle-managed Hermes
@@ -147,12 +157,15 @@ Hermes (via design-studio skill) is responsible for creating projects and writin
 - [x] Per-profile live activity timeline with reasoning/tool events, explicit
   specialist targeting, persistent profile sessions and serialized orchestrator
   handoffs.
+- [x] Ordered clip hierarchy with clip-local prompts/settings/takes, exact
+  clip-scoped jobs and APIs, selected-take provenance, migration, and web controls.
 
 ### Phase 4 – Polish
 - [x] Media detail/filter/review actions
 - [x] Typed generation settings manifest + prompt readiness/editor panel
 - “Generate with this prompt” button that appears when Hermes outputs a structured prompt
 - [x] Promote to `final/` and copy selected generation media into references
+- [x] Create/rename/reorder/enable clips and select one video take per enabled clip
 - Basic project metadata
 
 ---
@@ -170,7 +183,8 @@ Hermes (via design-studio skill) is responsible for creating projects and writin
 - Exact path for studio-root (suggest `~/design-studio` or configurable via env).
 - Whether to keep chat history only in `chat.jsonl` or also mirror into Hermes session DB.
 - How aggressively to auto-create generation folders vs let Hermes decide numbering.
-- Later: side-by-side comparison, simple multi-clip timeline, shared character library tooling.
+- Later: side-by-side comparison, selected-take assembly timeline, shared
+  character library tooling.
 
 ---
 

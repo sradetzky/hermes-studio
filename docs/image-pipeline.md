@@ -51,6 +51,7 @@ attention (default 1.0; raise if identity drifts, lower if edits won't take).
 
 ## Project integration
 
-MCP output files are archived with `design_studio.py archive-output`; see
+MCP output files are archived into one exact clip with
+`design_studio.py archive-output <project-id> <clip-id> ...`; see
 docs/comfyui-mcp.md. Legacy `generate-image` still archives automatically and
 now unloads models/frees VRAM at terminal completion.

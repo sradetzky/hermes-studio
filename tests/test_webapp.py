@@ -461,6 +461,11 @@ class AppFactoryTests(WebAppTestCase):
                 json={"title": "Finale", "enabled": False},
             )
             self.assertEqual(updated.status_code, 200)
+            blocked_selection = client.put(
+                f"/api/project/{project}/clips/clip-002/selected-take",
+                json={"generation": "001", "filename": "take.mp4"},
+            )
+            self.assertEqual(blocked_selection.status_code, 400)
             reordered = client.put(
                 f"/api/project/{project}/clips/order",
                 json={"clip_ids": ["clip-002", "clip-001"]},

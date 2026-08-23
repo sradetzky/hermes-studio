@@ -1,6 +1,11 @@
-import {$, requestJson, showEmpty, state} from './shared.js';
+import {$, activeClip, requestJson, showEmpty, state} from './shared.js';
 
 let refreshProject = async () => {};
+
+function isSelectedTake(generationId, filename) {
+  const selected = activeClip()?.selected_take;
+  return selected?.generation === generationId && selected?.filename === filename;
+}
 
 function generationRecipe(generation) {
   const meta = generation.meta || {};
@@ -61,7 +66,7 @@ function renderGenerations() {
     const open = document.createElement('button');
     open.type = 'button';
     open.className = 'generation-preview';
-    open.setAttribute('aria-label', `Review generation ${generation.gen}`);
+    open.setAttribute('aria-label', `Review take ${generation.gen}`);
     const media = document.createElement(
       primary.kind === 'video' ? 'video' : primary.kind === 'image' ? 'img' : 'div');
     media.className = 'thumb';
@@ -96,15 +101,21 @@ function renderGenerations() {
       badge.textContent = 'final';
       label.append(badge);
     }
+    if (mediaItems.some(item => isSelectedTake(generation.gen, item.name))) {
+      const badge = document.createElement('span');
+      badge.className = 'media-state-badge selected';
+      badge.textContent = 'take';
+      label.append(badge);
+    }
     card.append(label);
     container.append(card);
   }
 }
 
 function showGenerationLoading(generationId) {
-  $('#generation-title').textContent = `Generation ${generationId}`;
+  $('#generation-title').textContent = `Take ${generationId}`;
   $('#generation-media').replaceChildren();
-  showEmpty($('#generation-media'), 'Loading generation…');
+  showEmpty($('#generation-media'), 'Loading take…');
   $('#generation-files').replaceChildren();
   $('#generation-filename').textContent = '—';
   $('#generation-file-state').textContent = '';
@@ -112,6 +123,7 @@ function showGenerationLoading(generationId) {
   $('#generation-meta').textContent = '{}';
   $('#generation-actions').replaceChildren();
   $('#media-action-status').textContent = '';
+  $('#select-generation').disabled = true;
   $('#promote-generation').disabled = true;
   $('#reference-generation').disabled = true;
 }
@@ -124,24 +136,27 @@ async function openGeneration(generationId, opener = null) {
   showGenerationLoading(generationId);
   if (!dialog.open) dialog.showModal();
   const selectedProject = state.current;
+  const selectedClip = state.currentClip;
   try {
     const detail = await requestJson(
-      `/api/project/${encodeURIComponent(selectedProject)}/generations/${encodeURIComponent(generationId)}`);
-    if (selectedProject !== state.current || !dialog.open) return;
+      `/api/project/${encodeURIComponent(selectedProject)}/clips/` +
+      `${encodeURIComponent(selectedClip)}/generations/${encodeURIComponent(generationId)}`);
+    if (selectedProject !== state.current || selectedClip !== state.currentClip ||
+        !dialog.open) return;
     state.generationDetail = detail;
     state.selectedGenerationFile = detail.media[0]?.name || null;
     renderGenerationDetail();
   } catch (error) {
     $('#media-action-status').textContent = `Unable to load: ${error.message}`;
     $('#generation-media').replaceChildren();
-    showEmpty($('#generation-media'), 'generation unavailable');
+    showEmpty($('#generation-media'), 'take unavailable');
   }
 }
 
 function renderGenerationDetail() {
   const detail = state.generationDetail;
   if (!detail) return;
-  $('#generation-title').textContent = `Generation ${detail.gen}`;
+  $('#generation-title').textContent = `Take ${detail.gen}`;
   $('#generation-prompt').textContent = detail.prompt || '—';
   $('#generation-meta').textContent = JSON.stringify(detail.meta || {}, null, 2);
   const files = $('#generation-files');
@@ -184,8 +199,9 @@ function renderSelectedGenerationMedia() {
   const stage = $('#generation-media');
   stage.replaceChildren();
   if (!item) {
-    showEmpty(stage, 'No supported media in this generation');
+    showEmpty(stage, 'No supported media in this take');
     $('#generation-filename').textContent = '—';
+    $('#select-generation').disabled = true;
     $('#promote-generation').disabled = true;
     $('#reference-generation').disabled = true;
     return;
@@ -208,13 +224,19 @@ function renderSelectedGenerationMedia() {
   stage.append(media);
   $('#generation-filename').textContent = `${item.name} · ${formatBytes(item.size)}`;
   const states = [];
+  const selectedTake = isSelectedTake(state.generationDetail.gen, item.name);
   if (item.promoted) states.push('Promoted to final');
   if (item.reference) states.push('Reference');
+  if (selectedTake) states.push('Selected take');
   $('#generation-file-state').textContent = states.join(' · ');
+  const select = $('#select-generation');
   const promote = $('#promote-generation');
   const reference = $('#reference-generation');
+  select.textContent = selectedTake ? 'Selected take ✓' : 'Select take';
   promote.textContent = item.promoted ? 'Promoted ✓' : 'Promote to final';
   reference.textContent = item.reference ? 'Reference ✓' : 'Use as reference';
+  select.disabled = state.mediaActioning || item.kind !== 'video' ||
+    selectedTake || !activeClip()?.enabled;
   promote.disabled = state.mediaActioning || item.promoted;
   reference.disabled = state.mediaActioning || item.reference;
 }
@@ -236,9 +258,12 @@ async function performMediaAction(action) {
   status.textContent = action === 'promote' ? 'Promoting…' : 'Copying reference…';
   const endpoint = action === 'promote' ? 'promote' : 'use-as-reference';
   const selectedProject = state.current;
+  const selectedClip = state.currentClip;
   try {
     const response = await requestJson(
-      `/api/project/${encodeURIComponent(selectedProject)}/generations/${encodeURIComponent(detail.gen)}/${endpoint}`,
+      `/api/project/${encodeURIComponent(selectedProject)}/clips/` +
+      `${encodeURIComponent(selectedClip)}/generations/` +
+      `${encodeURIComponent(detail.gen)}/${endpoint}`,
       {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -248,8 +273,9 @@ async function performMediaAction(action) {
       ? `Promoted as ${response.result.target}`
       : `Reference saved as ${response.result.target}`;
     const refreshed = await requestJson(
-      `/api/project/${encodeURIComponent(selectedProject)}/generations/${encodeURIComponent(detail.gen)}`);
-    if (selectedProject === state.current) {
+      `/api/project/${encodeURIComponent(selectedProject)}/clips/` +
+      `${encodeURIComponent(selectedClip)}/generations/${encodeURIComponent(detail.gen)}`);
+    if (selectedProject === state.current && selectedClip === state.currentClip) {
       state.generationDetail = refreshed;
       state.selectedGenerationFile = item.name;
       state.generationSignature = '';
@@ -259,6 +285,42 @@ async function performMediaAction(action) {
     }
   } catch (error) {
     status.textContent = `Action failed: ${error.message}`;
+  } finally {
+    state.mediaActioning = false;
+    renderSelectedGenerationMedia();
+  }
+}
+
+async function selectTake() {
+  const detail = state.generationDetail;
+  const item = selectedGenerationMedia();
+  const clip = activeClip();
+  if (!detail || !item || item.kind !== 'video' || !clip?.enabled ||
+      state.mediaActioning) return;
+  state.mediaActioning = true;
+  renderSelectedGenerationMedia();
+  const status = $('#media-action-status');
+  status.textContent = 'Selecting take…';
+  const selectedProject = state.current;
+  const selectedClip = state.currentClip;
+  try {
+    const response = await requestJson(
+      `/api/project/${encodeURIComponent(selectedProject)}/clips/` +
+      `${encodeURIComponent(selectedClip)}/selected-take`, {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({generation: detail.gen, filename: item.name}),
+      });
+    if (selectedProject !== state.current || selectedClip !== state.currentClip) return;
+    state.clips = state.clips.map(entry =>
+      entry.id === selectedClip ? response.clip : entry);
+    state.generationSignature = '';
+    status.textContent = `Selected ${detail.gen}/${item.name}`;
+    renderGenerationDetail();
+    renderGenerations();
+    await refreshProject();
+  } catch (error) {
+    status.textContent = `Selection failed: ${error.message}`;
   } finally {
     state.mediaActioning = false;
     renderSelectedGenerationMedia();
@@ -306,6 +368,7 @@ export function initializeMediaReview(refresh) {
   $('#generation-close').addEventListener('click', () => closeGenerationDialog());
   $('#generation-previous').addEventListener('click', () => navigateGeneration(1));
   $('#generation-next').addEventListener('click', () => navigateGeneration(-1));
+  $('#select-generation').addEventListener('click', selectTake);
   $('#promote-generation').addEventListener('click', () => performMediaAction('promote'));
   $('#reference-generation').addEventListener('click', () => performMediaAction('reference'));
   dialog.addEventListener('close', () => closeGenerationDialog());

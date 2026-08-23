@@ -2,11 +2,14 @@ export const $ = selector => document.querySelector(selector);
 
 export const state = {
   current: null,
+  currentClip: null,
+  clips: [],
   projects: [],
   profiles: [],
   chatCount: 0,
   activityCursor: 0,
   activityByJob: {},
+  jobActive: false,
   showActivityDetails: true,
   generations: [],
   filteredGenerations: [],
@@ -23,6 +26,10 @@ export const state = {
   refreshPending: false,
   uploading: false,
 };;
+
+export function activeClip() {
+  return state.clips.find(clip => clip.id === state.currentClip) || null;
+}
 
 export async function requestJson(url, options) {
   const response = await fetch(url, options);

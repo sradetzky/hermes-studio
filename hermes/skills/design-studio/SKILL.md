@@ -25,8 +25,9 @@ they are not the normal Studio transport.
 
 ```
 <root>/projects/YYYY-MM-DD_<name>/
-  brief.md  chat.jsonl  current_prompt.txt  current_generation.json
-  references/   generations/NNN/{video.mp4,prompt.txt,meta.json}   final/
+  project.json  brief.md  chat.jsonl  references/  research/  final/
+  clips/clip-001/{current_prompt.txt,current_generation.json}
+  clips/clip-001/generations/NNN/{video.mp4,prompt.txt,settings.json,meta.json}
 <root>/shared/{characters,styles,workflows}/   <root>/tmp/
 ```
 
@@ -35,11 +36,15 @@ they are not the normal Studio transport.
 ```bash
 python3 ~/repos/hermes-studio/scripts/design_studio.py create-project <name> "brief..."
 python3 ~/repos/hermes-studio/scripts/design_studio.py list-projects
-python3 ~/repos/hermes-studio/scripts/design_studio.py write-prompt <project-id> "<structured prompt>"
+python3 ~/repos/hermes-studio/scripts/design_studio.py list-clips <project-id>
+python3 ~/repos/hermes-studio/scripts/design_studio.py create-clip <project-id> "<title>"
+python3 ~/repos/hermes-studio/scripts/design_studio.py write-prompt \
+  <project-id> <clip-id> "<structured prompt>"
 python3 ~/repos/hermes-studio/scripts/design_studio.py append-chat <project-id> user "..."
 # after an MCP job completes:
-python3 ~/repos/hermes-studio/scripts/design_studio.py archive-output <project-id> \
-  <comfy-output-file> --prompt-id <id> --kind image --recipe krea2-edit
+python3 ~/repos/hermes-studio/scripts/design_studio.py archive-output \
+  <project-id> <clip-id> <comfy-output-file> \
+  --prompt-id <id> --kind image --recipe krea2-edit
 ```
 
 After creation, pass the exact project folder id returned by the command
@@ -51,7 +56,8 @@ so output can never land in an ambiguously matched project.
 Only the `studio` orchestrator may execute these steps. Never run two GPU jobs
 concurrently.
 
-1. Write `current_prompt.txt` and build/inspect the API graph with the relevant
+1. Resolve the exact project and clip, write that clip's `current_prompt.txt`,
+   and build/inspect the API graph with the relevant
    runner's `--dry-run` mode. Dry-run must not queue a job.
 2. Upload references through `mcp_comfyui_upload_image`; patch the graph with
    the returned server filenames.
@@ -59,7 +65,8 @@ concurrently.
 4. Submit with `mcp_comfyui_enqueue_workflow`; retain the `prompt_id`.
 5. Wait through `mcp_comfyui_queue` / `mcp_comfyui_get_history` until success,
    error, or timeout. Never start another job while one is running.
-6. On success, archive output with `design_studio.py archive-output`.
+6. On success, archive output with `design_studio.py archive-output` and the
+   same exact project + clip IDs.
 7. **Finally, always call `mcp_comfyui_clear_vram`** with model unload and
    memory free enabled — after success, error, cancellation, or timeout.
 8. On timeout/error, cancel through `mcp_comfyui_queue` first, verify the job
@@ -69,8 +76,9 @@ Do not use raw REST, curl, `/prompt`, `/history`, `/upload`, or `/free` during
 normal Studio work. If MCP is unavailable, stop with a clear error; do not
 silently fall back to REST.
 
-`current_generation.json` is the web UI's compact typed run contract. It records
-mode, canvas/MP, seed, steps, accel, and the SHA-256 of `current_prompt.txt`.
+Each clip's `current_generation.json` is the web UI's compact typed run contract.
+It records mode, canvas/MP, seed, steps, accel, and the SHA-256 of that clip's
+`current_prompt.txt`.
 The prompt itself owns the 4–15 second length and ordered
 `<Picture N> (filename.ext)` mapping. Accel means Sol fused modulation + ChunkFF
 only—never Sage, sparse Sol attention, or EasyCache. Do not silently rewrite the
@@ -101,7 +109,7 @@ If Grok returns an accepted local Imagine cache path, archive it with:
 
 ```bash
 python3 ~/repos/hermes-studio/scripts/design_studio.py archive-grok \
-  <project-id> <absolute-image-path> --meta-json '{"prompt":"..."}'
+  <project-id> <clip-id> <absolute-image-path> --meta-json '{"prompt":"..."}'
 ```
 
 Imagine can consume xAI quota: dispatch image generation only for an explicit
@@ -149,8 +157,11 @@ Always official H3 structure (see `minimax-h3-prompt` skill):
 - T2VA/I2VA/FL2VA/L2VA: `integrated_multimodal_description` +
   `overall_soundscape` + `non_diegetic_music` (+ frame alignment when refs).
 - Ref2VA: six-section format with explicit reference roles.
-- Write the structured prompt to `current_prompt.txt` before generating.
+- Write the structured prompt to the exact active clip's `current_prompt.txt`
+  before generating; never guess a clip from a title or path.
 
-## Future (Phase 3+)
+## Web contract
 
-FastAPI web UI reads this same tree; UI never writes. See PLAN.md Phase 3.
+The FastAPI UI reads/writes only through exact nested clip APIs. Chat and
+references remain project-shared; prompts, settings, takes, and take selection
+remain clip-local. See PLAN.md Phase 3.

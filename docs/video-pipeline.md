@@ -11,7 +11,8 @@ comfyui-mcp.
 - Builds the ComfyUI graph itself; `comfyui/workflows/` here is optional
 
 Studio builds with `run_h3.py --dry-run`, uploads refs and enqueues through
-MCP, archives with `design_studio.py archive-output`, then always clears VRAM.
+MCP, archives with `design_studio.py archive-output` using exact project + clip
+IDs, then always clears VRAM.
 `design_studio.py generate` remains a manual direct diagnostic fallback.
 
 ## Proven knobs (RTX 5060 Ti 16GB)
