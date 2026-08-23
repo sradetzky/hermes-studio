@@ -205,18 +205,24 @@ class ClipStore:
         project = self._project(project)
         manifest = self._read_manifest_unlocked(project)
         for entry in manifest["clips"]:
-            self.resolve_clip(project, entry["id"])
+            self._resolve_clip_directory(project, entry["id"])
         return manifest
 
-    def resolve_clip(self, project: Path, clip_id: str) -> Path:
-        project = self._project(project)
-        clip_id = self._clip_id(clip_id)
+    def _resolve_clip_directory(self, project: Path, clip_id: str) -> Path:
         clips = self._clips_directory(project)
         clip = clips / clip_id
         if (not clip.is_dir() or clip.is_symlink()
                 or clip.resolve().parent != clips.resolve()):
             raise ClipNotFoundError(f"clip not found: {clip_id}")
         return clip
+
+    def resolve_clip(self, project: Path, clip_id: str) -> Path:
+        project = self._project(project)
+        clip_id = self._clip_id(clip_id)
+        manifest = self._read_manifest_unlocked(project)
+        if not any(entry["id"] == clip_id for entry in manifest["clips"]):
+            raise ClipNotFoundError(f"clip not found: {clip_id}")
+        return self._resolve_clip_directory(project, clip_id)
 
     def create_clip(self, project: Path, title: str) -> dict:
         project = self._project(project)

@@ -11,9 +11,10 @@ Root resolution order:
 Usage:
   python3 scripts/design_studio.py create-project my-idea "A brief..."
   python3 scripts/design_studio.py list-projects
-  python3 scripts/design_studio.py write-prompt my-idea - | prompt text...
+  python3 scripts/design_studio.py list-clips 2026-08-23_my-idea
+  python3 scripts/design_studio.py write-prompt 2026-08-23_my-idea clip-001 "..."
   python3 scripts/design_studio.py append-chat my-idea user "hello"
-  python3 scripts/design_studio.py generate my-idea --handoff h3_handoff_x.json
+  python3 scripts/design_studio.py generate my-idea clip-001 --handoff h3_handoff_x.json
 """
 
 from __future__ import annotations
@@ -41,6 +42,8 @@ if __package__ in {None, ""} and str(REPO_ROOT) not in sys.path:
     # root for shared runtime modules. Installed/package imports need no shim.
     sys.path.insert(0, str(REPO_ROOT))
 
+from webapp.clip_store import ClipStore
+
 RUN_H3 = Path.home() / ".hermes/skills/minimax-h3-run/scripts/run_h3.py"
 KREA2 = Path(__file__).resolve().parent / "krea2_image.py"
 COMFY_ROOT = Path.home() / "ComfyUI"
@@ -62,6 +65,7 @@ SPECIALIST_TOOLSETS = {
     "studio-reviewer": "file,terminal,vision,skills",
     "studio-illustrator": "file,terminal,skills",
 }
+CLIP_STORE = ClipStore()
 
 
 def free_comfy_vram() -> dict:
@@ -133,13 +137,18 @@ def create_project(root: Path, name: str, brief: str = "") -> Path:
     pp = project_path(root, name, must_exist=False)
     if os.path.lexists(pp):
         raise FileExistsError(f"project already exists: {pp}")
-    for sub in ("references", "generations", "final", "research"):
-        (pp / sub).mkdir(parents=True)
-    (pp / "brief.md").write_text(
-        f"# {name}\n\n{brief}\n\nCreated {_dt.datetime.now().isoformat(timespec='seconds')}\n",
-        encoding="utf-8")
-    (pp / "chat.jsonl").touch()
-    (pp / "current_prompt.txt").touch()
+    pp.mkdir(parents=True)
+    try:
+        for sub in ("references", "final", "research"):
+            (pp / sub).mkdir()
+        (pp / "brief.md").write_text(
+            f"# {name}\n\n{brief}\n\nCreated {_dt.datetime.now().isoformat(timespec='seconds')}\n",
+            encoding="utf-8")
+        (pp / "chat.jsonl").touch()
+        CLIP_STORE.initialize(pp, name)
+    except Exception:
+        shutil.rmtree(pp, ignore_errors=True)
+        raise
     return pp
 
 
@@ -153,12 +162,18 @@ def list_projects(root: Path) -> list[str]:
 
 # ------------------------------------------------------------- prompt & chat
 
-def write_prompt(root: Path, project: str, prompt: str) -> Path:
+def clip_path(root: Path, project: str, clip_id: str) -> Path:
+    """Resolve one exact manifest-owned clip ID within an exact project."""
     pp = project_path(root, project)
-    out = pp / "current_prompt.txt"
+    return CLIP_STORE.resolve_clip(pp, clip_id)
+
+
+def write_prompt(root: Path, project: str, clip_id: str, prompt: str) -> Path:
+    clip = clip_path(root, project, clip_id)
+    out = clip / "current_prompt.txt"
     if os.path.lexists(out) and (out.is_symlink() or not out.is_file()):
-        raise ValueError("current prompt is not a regular project file")
-    temp = pp / f".{uuid.uuid4().hex}.current-prompt"
+        raise ValueError("current prompt is not a regular clip file")
+    temp = clip / f".{uuid.uuid4().hex}.current-prompt"
     try:
         temp.write_text(prompt.rstrip() + "\n", encoding="utf-8")
         temp.replace(out)
@@ -215,30 +230,45 @@ def append_chat(root: Path, project: str, role: str, content: str) -> None:
 
 # ---------------------------------------------------------------- generation
 
-def next_generation_dir(pp: Path) -> Path:
-    gens = pp / "generations"
-    nums = [int(d.name) for d in gens.iterdir() if d.is_dir() and d.name.isdigit()]
-    return gens / f"{max(nums, default=0) + 1:03d}"
+def next_generation_dir(root: Path, project: str, clip_id: str) -> Path:
+    clip = clip_path(root, project, clip_id)
+    generations = clip / "generations"
+    if (generations.is_symlink() or not generations.is_dir()
+            or generations.resolve().parent != clip):
+        raise ValueError("generations directory is not a regular clip directory")
+    numbers = []
+    for entry in generations.iterdir():
+        if not entry.name.isdigit():
+            continue
+        if entry.is_symlink() or not entry.is_dir():
+            raise ValueError(f"generation entry is unsafe: {entry.name}")
+        numbers.append(int(entry.name))
+    return generations / f"{max(numbers, default=0) + 1:03d}"
 
 
-def read_project_text(project: Path, filename: str, limit: int | None = None) -> str:
-    """Read one regular project metadata file without following symlinks."""
+def read_project_text(project: Path, filename: str, limit: int | None = None,
+                      *, required: bool = False) -> str:
+    """Read one regular metadata file without following symlinks."""
     if Path(filename).name != filename:
         raise ValueError(f"invalid project filename: {filename!r}")
     path = project / filename
-    if not os.path.lexists(path) or path.is_symlink() or not path.is_file():
+    if not os.path.lexists(path):
+        if required:
+            raise ValueError(f"{filename} is missing")
         return ""
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"{filename} is not a regular file")
     value = path.read_text(encoding="utf-8")
     return value[:limit] if limit is not None else value
 
 
-def archive_outputs(root: Path, project: str, outputs: list[str],
-                    metadata: dict | None = None,
+def archive_outputs(root: Path, project: str, clip_id: str,
+                    outputs: list[str], metadata: dict | None = None,
                     source_root: Path | None = None,
                     transport: str = "comfyui-mcp",
                     prompt_text: str | None = None) -> Path:
-    """Archive outputs from one explicit, trusted source root."""
-    pp = project_path(root, project)
+    """Archive outputs beneath one exact clip from one trusted source root."""
+    clip = clip_path(root, project, clip_id)
     output_root = (source_root or COMFY_OUTPUT).resolve()
     sources = []
     for output in outputs:
@@ -252,22 +282,24 @@ def archive_outputs(root: Path, project: str, outputs: list[str],
             raise ValueError(f"output escapes ComfyUI output directory: {output!r}")
         if not source.is_file():
             raise FileNotFoundError(f"ComfyUI output not found: {source}")
+        if source.name in {"prompt.txt", "settings.json", "meta.json"}:
+            raise ValueError(f"output filename is reserved: {source.name}")
         sources.append(source)
     if not sources:
         raise ValueError("at least one output file is required")
 
-    generations = pp / "generations"
+    generations = clip / "generations"
     if (generations.is_symlink() or not generations.is_dir()
-            or generations.resolve().parent != pp):
-        raise ValueError("generations directory is not a regular project directory")
-    lock_path = pp / ".generation-archive.lock"
+            or generations.resolve().parent != clip):
+        raise ValueError("generations directory is not a regular clip directory")
+    lock_path = clip / ".generation-archive.lock"
     if lock_path.is_symlink():
         raise ValueError("generation archive lock may not be a symlink")
     lock_fd = os.open(
         lock_path, os.O_RDWR | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
     with os.fdopen(lock_fd, "a+b") as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-        gen_dir = next_generation_dir(pp)
+        gen_dir = next_generation_dir(root, project, clip_id)
         staging = generations / f".publishing-{uuid.uuid4().hex}"
         staging.mkdir()
         copied = []
@@ -280,12 +312,21 @@ def archive_outputs(root: Path, project: str, outputs: list[str],
                 shutil.copy2(source, target)
                 copied.append(target.name)
             archived_prompt = (
-                read_project_text(pp, "current_prompt.txt")
+                read_project_text(clip, "current_prompt.txt", required=True)
                 if prompt_text is None else prompt_text.rstrip() + "\n"
             )
-            if archived_prompt:
-                (staging / "prompt.txt").write_text(
-                    archived_prompt, encoding="utf-8")
+            (staging / "prompt.txt").write_text(
+                archived_prompt, encoding="utf-8")
+            settings_path = clip / "current_generation.json"
+            if os.path.lexists(settings_path):
+                if settings_path.is_symlink() or not settings_path.is_file():
+                    raise ValueError(
+                        "current generation settings are not a regular clip file")
+                shutil.copy2(settings_path, staging / "settings.json")
+            else:
+                # JSON null is the stable snapshot for an unsaved settings state.
+                (staging / "settings.json").write_text(
+                    "null\n", encoding="utf-8")
             meta = {
                 **(metadata or {}),
                 "generated": _dt.datetime.now().isoformat(timespec="seconds"),
@@ -295,6 +336,8 @@ def archive_outputs(root: Path, project: str, outputs: list[str],
             }
             (staging / "meta.json").write_text(
                 json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+            if os.path.lexists(gen_dir):
+                raise FileExistsError(f"generation already exists: {gen_dir.name}")
             staging.replace(gen_dir)
         except Exception:
             shutil.rmtree(staging, ignore_errors=True)
@@ -469,11 +512,12 @@ def dispatch_grok(root: Path, project: str, task: str,
     return reply
 
 
-def run_generation(root: Path, project: str, handoff: str | None = None,
+def run_generation(root: Path, project: str, clip_id: str,
+                   handoff: str | None = None,
                    extra_args: list[str] | None = None,
                    timeout: int = 7200, dry_run: bool = False) -> dict:
     """Submit an H3 generation via the proven run_h3.py runner, then archive."""
-    project_path(root, project)
+    clip_path(root, project, clip_id)
     cmd = [sys.executable, str(RUN_H3), "--comfy-root", str(COMFY_ROOT),
            "-o", "/dev/stdout"]
     if handoff:
@@ -527,18 +571,19 @@ def run_generation(root: Path, project: str, handoff: str | None = None,
                 "summary": summary, "vram_cleanup": cleanup}
     meta["source"] = str(video)
     gen_dir = archive_outputs(
-        root, project, [str(video)], meta, source_root=COMFY_OUTPUT,
+        root, project, clip_id, [str(video)], meta, source_root=COMFY_OUTPUT,
         transport="legacy-direct")
     # preview.jpg is created by the reviewer/user; do not extract frames automatically.
     return {"ok": cleanup.get("ok", False), "generation": str(gen_dir),
             "meta": meta}
 
 
-def run_image_generation(root: Path, project: str, recipe: str, prompt: str = "",
+def run_image_generation(root: Path, project: str, clip_id: str,
+                         recipe: str, prompt: str = "",
                          image: str | None = None, extra_args: list[str] | None = None,
                          timeout: int = 900) -> dict:
     """Krea 2 still image via scripts/krea2_image.py, archived like generations."""
-    project_path(root, project)
+    clip_path(root, project, clip_id)
     prefix = f"studio_{slugify(project)}"
     cmd = [sys.executable, str(KREA2), "--recipe", recipe, "--prefix", prefix]
     if prompt:
@@ -582,7 +627,7 @@ def run_image_generation(root: Path, project: str, recipe: str, prompt: str = ""
             "input_image": str(image or ""), "seed": seed,
             "prompt_id": prompt_id}
     gen_dir = archive_outputs(
-        root, project, files, meta, source_root=COMFY_OUTPUT,
+        root, project, clip_id, files, meta, source_root=COMFY_OUTPUT,
         transport="legacy-direct", prompt_text=prompt)
     meta = json.loads((gen_dir / "meta.json").read_text(encoding="utf-8"))
     return {"ok": True, "generation": str(gen_dir), "meta": meta}
@@ -600,14 +645,37 @@ def main(argv=None) -> int:
 
     sub.add_parser("list-projects")
 
+    sp = sub.add_parser("list-clips")
+    sp.add_argument("project")
+
+    sp = sub.add_parser("create-clip")
+    sp.add_argument("project"); sp.add_argument("title")
+
+    sp = sub.add_parser("update-clip")
+    sp.add_argument("project"); sp.add_argument("clip")
+    sp.add_argument("--title")
+    enabled = sp.add_mutually_exclusive_group()
+    enabled.add_argument("--enable", dest="enabled", action="store_true")
+    enabled.add_argument("--disable", dest="enabled", action="store_false")
+    sp.set_defaults(enabled=None)
+
+    sp = sub.add_parser("reorder-clips")
+    sp.add_argument("project"); sp.add_argument("clips", nargs="+")
+
+    sp = sub.add_parser("select-take")
+    sp.add_argument("project"); sp.add_argument("clip")
+    sp.add_argument("generation", nargs="?"); sp.add_argument("filename", nargs="?")
+    sp.add_argument("--clear", action="store_true")
+
     sp = sub.add_parser("write-prompt")
-    sp.add_argument("project"); sp.add_argument("prompt", nargs="+")
+    sp.add_argument("project"); sp.add_argument("clip")
+    sp.add_argument("prompt", nargs="+")
 
     sp = sub.add_parser("append-chat")
     sp.add_argument("project"); sp.add_argument("role"); sp.add_argument("content")
 
     sp = sub.add_parser("generate")
-    sp.add_argument("project")
+    sp.add_argument("project"); sp.add_argument("clip")
     sp.add_argument("--handoff")
     sp.add_argument("--arg", action="append", default=[],
                     help="extra run_h3.py arg, repeatable. '--arg --turbo' style: use e.g. --arg=--mp --arg=0.9")
@@ -615,7 +683,7 @@ def main(argv=None) -> int:
     sp.add_argument("--dry-run", action="store_true")
 
     sp = sub.add_parser("generate-image")
-    sp.add_argument("project")
+    sp.add_argument("project"); sp.add_argument("clip")
     sp.add_argument("--recipe", required=True,
                     choices=["t2i", "t2i-nvfp4", "style-ref", "upscale", "edit"])
     sp.add_argument("--prompt", default="")
@@ -626,7 +694,7 @@ def main(argv=None) -> int:
     sp.add_argument("--timeout", type=int, default=900)
 
     sp = sub.add_parser("archive-output")
-    sp.add_argument("project")
+    sp.add_argument("project"); sp.add_argument("clip")
     sp.add_argument("outputs", nargs="+")
     sp.add_argument("--prompt-id", default="")
     sp.add_argument("--kind", default="")
@@ -634,7 +702,7 @@ def main(argv=None) -> int:
     sp.add_argument("--meta-json", default="{}")
 
     sp = sub.add_parser("archive-grok")
-    sp.add_argument("project")
+    sp.add_argument("project"); sp.add_argument("clip")
     sp.add_argument("outputs", nargs="+")
     sp.add_argument("--prompt-id", default="")
     sp.add_argument("--meta-json", default="{}")
@@ -657,8 +725,34 @@ def main(argv=None) -> int:
         print(create_project(root, args.name, " ".join(args.brief)))
     elif args.cmd == "list-projects":
         print("\n".join(list_projects(root)) or "(no projects)")
+    elif args.cmd == "list-clips":
+        pp = project_path(root, args.project)
+        print(json.dumps(CLIP_STORE.describe(pp), indent=2, ensure_ascii=False))
+    elif args.cmd == "create-clip":
+        pp = project_path(root, args.project)
+        print(json.dumps(
+            CLIP_STORE.create_clip(pp, args.title), indent=2, ensure_ascii=False))
+    elif args.cmd == "update-clip":
+        pp = project_path(root, args.project)
+        print(json.dumps(CLIP_STORE.update_clip(
+            pp, args.clip, title=args.title, enabled=args.enabled),
+            indent=2, ensure_ascii=False))
+    elif args.cmd == "reorder-clips":
+        pp = project_path(root, args.project)
+        print(json.dumps(
+            CLIP_STORE.reorder(pp, args.clips), indent=2, ensure_ascii=False))
+    elif args.cmd == "select-take":
+        if args.clear and (args.generation is not None or args.filename is not None):
+            ap.error("--clear cannot be combined with a generation or filename")
+        if not args.clear and (args.generation is None or args.filename is None):
+            ap.error("selection requires both generation and filename, or --clear")
+        pp = project_path(root, args.project)
+        print(json.dumps(CLIP_STORE.select_take(
+            pp, args.clip, None if args.clear else args.generation,
+            None if args.clear else args.filename), indent=2, ensure_ascii=False))
     elif args.cmd == "write-prompt":
-        print(write_prompt(root, args.project, " ".join(args.prompt)))
+        print(write_prompt(
+            root, args.project, args.clip, " ".join(args.prompt)))
     elif args.cmd == "append-chat":
         append_chat(root, args.project, args.role, args.content)
         print("appended")
@@ -666,7 +760,7 @@ def main(argv=None) -> int:
         extra = []
         for a in args.arg:
             extra.extend(shlex.split(a))
-        out = run_generation(root, args.project, args.handoff, extra,
+        out = run_generation(root, args.project, args.clip, args.handoff, extra,
                              timeout=args.timeout, dry_run=args.dry_run)
         print(json.dumps(out, indent=2))
         return 0 if out.get("ok") or out.get("dry_run") else 1
@@ -676,9 +770,9 @@ def main(argv=None) -> int:
             extra.extend(shlex.split(a))
         if args.ref_boost is not None:
             extra += ["--ref-boost", str(args.ref_boost)]
-        out = run_image_generation(root, args.project, args.recipe, args.prompt,
-                                   image=args.image, extra_args=extra,
-                                   timeout=args.timeout)
+        out = run_image_generation(
+            root, args.project, args.clip, args.recipe, args.prompt,
+            image=args.image, extra_args=extra, timeout=args.timeout)
         print(json.dumps(out, indent=2))
         return 0 if out.get("ok") else 1
     elif args.cmd == "archive-output":
@@ -694,7 +788,8 @@ def main(argv=None) -> int:
             meta["kind"] = args.kind
         if args.recipe:
             meta["recipe"] = args.recipe
-        print(archive_outputs(root, args.project, args.outputs, meta))
+        print(archive_outputs(
+            root, args.project, args.clip, args.outputs, meta))
     elif args.cmd == "archive-grok":
         try:
             meta = json.loads(args.meta_json)
@@ -707,7 +802,7 @@ def main(argv=None) -> int:
         meta.setdefault("kind", "image")
         meta.setdefault("recipe", "grok-imagine-image-quality")
         print(archive_outputs(
-            root, args.project, args.outputs, meta,
+            root, args.project, args.clip, args.outputs, meta,
             source_root=GROK_IMAGE_OUTPUT, transport="xai-imagine"))
     elif args.cmd == "dispatch-grok":
         print(dispatch_grok(root, args.project, args.task, args.timeout))

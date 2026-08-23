@@ -134,8 +134,24 @@ class ProjectPathTests(unittest.TestCase):
     def test_requires_exact_project_id(self):
         self.assertEqual(ds.project_path(self.root, self.project.name), self.project)
         self.assertTrue((self.project / "research").is_dir())
+        manifest = json.loads((self.project / "project.json").read_text())
+        self.assertEqual(manifest["schema_version"], 1)
+        self.assertEqual([clip["id"] for clip in manifest["clips"]], ["clip-001"])
+        clip = self.project / "clips" / "clip-001"
+        self.assertTrue((clip / "current_prompt.txt").is_file())
+        self.assertTrue((clip / "generations").is_dir())
+        self.assertFalse((self.project / "current_prompt.txt").exists())
+        self.assertFalse((self.project / "generations").exists())
         with self.assertRaises(FileNotFoundError):
             ds.project_path(self.root, "same-name")
+
+    def test_clip_resolution_requires_exact_manifest_id(self):
+        clip = ds.clip_path(self.root, self.project.name, "clip-001")
+        self.assertEqual(clip, self.project / "clips" / "clip-001")
+        (self.project / "clips" / "clip-999").mkdir()
+        for value in ("Main clip", "clip-999", "../clip-001", "clip-1"):
+            with self.subTest(value=value), self.assertRaises(ClipStoreError):
+                ds.clip_path(self.root, self.project.name, value)
 
     def test_rejects_path_traversal(self):
         for value in ("../outside", "foo/bar", ".", ".."):
@@ -152,12 +168,83 @@ class ProjectPathTests(unittest.TestCase):
 
         target = Path(self.temp.name) / "outside-prompt.txt"
         target.write_text("secret")
-        prompt = self.project / "current_prompt.txt"
+        prompt = self.project / "clips" / "clip-001" / "current_prompt.txt"
         prompt.unlink()
         prompt.symlink_to(target)
-        with self.assertRaisesRegex(ValueError, "regular project file"):
-            ds.write_prompt(self.root, self.project.name, "replacement")
+        with self.assertRaisesRegex(ValueError, "regular clip file"):
+            ds.write_prompt(
+                self.root, self.project.name, "clip-001", "replacement")
         self.assertEqual(target.read_text(), "secret")
+
+    def test_prompt_writes_are_atomic_and_clip_scoped(self):
+        second = ClipStore().create_clip(self.project, "Second")
+        written = ds.write_prompt(
+            self.root, self.project.name, second["id"], "second prompt")
+        self.assertEqual(
+            written, self.project / "clips" / "clip-002" / "current_prompt.txt")
+        self.assertEqual(written.read_text(), "second prompt\n")
+        self.assertEqual(
+            (self.project / "clips" / "clip-001" / "current_prompt.txt").read_text(),
+            "",
+        )
+
+    def test_clip_management_cli_and_exact_clip_requirement(self):
+        def invoke(*arguments):
+            output = StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(
+                    ds.main(["--root", str(self.root), *arguments]), 0)
+            return output.getvalue().strip()
+
+        created = json.loads(invoke(
+            "create-clip", self.project.name, "Second scene"))
+        self.assertEqual(created["id"], "clip-002")
+        updated = json.loads(invoke(
+            "update-clip", self.project.name, "clip-002",
+            "--title", "Reveal", "--disable"))
+        self.assertEqual((updated["title"], updated["enabled"]),
+                         ("Reveal", False))
+        reordered = json.loads(invoke(
+            "reorder-clips", self.project.name, "clip-002", "clip-001"))
+        self.assertEqual(
+            [clip["id"] for clip in reordered["clips"]],
+            ["clip-002", "clip-001"],
+        )
+        listed = json.loads(invoke("list-clips", self.project.name))
+        self.assertEqual(listed, reordered)
+
+        generation = (
+            self.project / "clips" / "clip-001" / "generations" / "001")
+        generation.mkdir()
+        (generation / "take.mp4").write_bytes(b"video")
+        selected = json.loads(invoke(
+            "select-take", self.project.name, "clip-001", "001", "take.mp4"))
+        self.assertEqual(selected["selected_take"], {
+            "generation": "001", "filename": "take.mp4"})
+        cleared = json.loads(invoke(
+            "select-take", self.project.name, "clip-001", "--clear"))
+        self.assertIsNone(cleared["selected_take"])
+
+        grok_cache = Path(self.temp.name) / "grok-cli-cache"
+        grok_cache.mkdir()
+        (grok_cache / "grok.png").write_bytes(b"image")
+        with patch.object(ds, "GROK_IMAGE_OUTPUT", grok_cache):
+            archived = Path(invoke(
+                "archive-grok", self.project.name, "clip-002", "grok.png"))
+        self.assertEqual(
+            archived.parent,
+            self.project / "clips" / "clip-002" / "generations",
+        )
+        self.assertEqual(
+            json.loads((archived / "meta.json").read_text())["transport"],
+            "xai-imagine",
+        )
+
+        with self.assertRaises(SystemExit):
+            ds.main([
+                "--root", str(self.root), "write-prompt",
+                self.project.name, "prompt-without-clip",
+            ])
 
     def test_atomic_concurrent_chat_appends(self):
         count = 100
@@ -242,11 +329,16 @@ class ProjectPathTests(unittest.TestCase):
         comfy_output.mkdir()
         source = comfy_output / "result.png"
         source.write_bytes(b"image")
-        ds.write_prompt(self.root, self.project.name, "the prompt")
+        settings = {"schema_version": 2, "seed": 42, "steps": 20}
+        clip = self.project / "clips" / "clip-001"
+        (clip / "current_generation.json").write_text(
+            json.dumps(settings) + "\n", encoding="utf-8")
+        ds.write_prompt(self.root, self.project.name, "clip-001", "the prompt")
         with patch.object(ds, "COMFY_OUTPUT", comfy_output):
             generation = ds.archive_outputs(
                 self.root,
                 self.project.name,
+                "clip-001",
                 ["result.png"],
                 {"prompt_id": "mcp-123", "transport": "forged"},
             )
@@ -256,6 +348,18 @@ class ProjectPathTests(unittest.TestCase):
         self.assertEqual(meta["files"], ["result.png"])
         self.assertEqual((generation / "result.png").read_bytes(), b"image")
         self.assertEqual((generation / "prompt.txt").read_text(), "the prompt\n")
+        self.assertEqual(
+            json.loads((generation / "settings.json").read_text()), settings)
+
+    def test_archive_without_current_settings_records_exact_null_snapshot(self):
+        comfy_output = Path(self.temp.name) / "comfy-output"
+        comfy_output.mkdir()
+        (comfy_output / "result.png").write_bytes(b"image")
+        generation = ds.archive_outputs(
+            self.root, self.project.name, "clip-001", ["result.png"],
+            source_root=comfy_output)
+        self.assertEqual((generation / "prompt.txt").read_text(), "")
+        self.assertEqual((generation / "settings.json").read_text(), "null\n")
 
     def test_archive_rejects_output_outside_comfy_directory(self):
         comfy_output = Path(self.temp.name) / "comfy-output"
@@ -265,7 +369,7 @@ class ProjectPathTests(unittest.TestCase):
         with patch.object(ds, "COMFY_OUTPUT", comfy_output):
             with self.assertRaises(ValueError):
                 ds.archive_outputs(
-                    self.root, self.project.name, [str(outside)])
+                    self.root, self.project.name, "clip-001", [str(outside)])
 
     def test_archive_rejects_symlinked_output(self):
         comfy_output = Path(self.temp.name) / "comfy-output"
@@ -275,7 +379,7 @@ class ProjectPathTests(unittest.TestCase):
         (comfy_output / "linked.png").symlink_to(outside)
         with self.assertRaisesRegex(ValueError, "symlink"):
             ds.archive_outputs(
-                self.root, self.project.name, ["linked.png"],
+                self.root, self.project.name, "clip-001", ["linked.png"],
                 source_root=comfy_output)
 
     def test_archive_rejects_symlinked_generation_directory(self):
@@ -284,12 +388,13 @@ class ProjectPathTests(unittest.TestCase):
         (comfy_output / "result.png").write_bytes(b"image")
         outside = Path(self.temp.name) / "outside-generations"
         outside.mkdir()
-        (self.project / "generations").rmdir()
-        (self.project / "generations").symlink_to(
+        generations = self.project / "clips" / "clip-001" / "generations"
+        generations.rmdir()
+        generations.symlink_to(
             outside, target_is_directory=True)
         with self.assertRaisesRegex(ValueError, "generations directory"):
             ds.archive_outputs(
-                self.root, self.project.name, ["result.png"],
+                self.root, self.project.name, "clip-001", ["result.png"],
                 source_root=comfy_output)
         self.assertEqual(list(outside.iterdir()), [])
 
@@ -303,14 +408,15 @@ class ProjectPathTests(unittest.TestCase):
 
         def inspect_copy(source_path, target_path):
             visible_during_copy.append([
-                item.name for item in (self.project / "generations").iterdir()
+                item.name for item in (
+                    self.project / "clips" / "clip-001" / "generations").iterdir()
                 if item.name.isdigit()
             ])
             return real_copy(source_path, target_path)
 
         with patch.object(ds.shutil, "copy2", side_effect=inspect_copy):
             generation = ds.archive_outputs(
-                self.root, self.project.name, ["result.png"],
+                self.root, self.project.name, "clip-001", ["result.png"],
                 source_root=comfy_output)
         self.assertEqual(visible_during_copy, [[]])
         self.assertEqual(generation.name, "001")
@@ -322,12 +428,114 @@ class ProjectPathTests(unittest.TestCase):
         image = grok_cache / "imagine.png"
         image.write_bytes(b"image")
         generation = ds.archive_outputs(
-            self.root, self.project.name, [str(image)],
+            self.root, self.project.name, "clip-001", [str(image)],
             {"prompt": "test"}, source_root=grok_cache,
             transport="xai-imagine")
         meta = json.loads((generation / "meta.json").read_text())
         self.assertEqual(meta["transport"], "xai-imagine")
         self.assertTrue((generation / "imagine.png").is_file())
+
+    def test_concurrent_take_allocation_is_unique_and_complete(self):
+        comfy_output = Path(self.temp.name) / "comfy-output"
+        comfy_output.mkdir()
+        (comfy_output / "result.png").write_bytes(b"image")
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            generations = list(pool.map(
+                lambda _: ds.archive_outputs(
+                    self.root, self.project.name, "clip-001", ["result.png"],
+                    source_root=comfy_output),
+                range(8),
+            ))
+        self.assertEqual(
+            {generation.name for generation in generations},
+            {f"{index:03d}" for index in range(1, 9)},
+        )
+        for generation in generations:
+            self.assertEqual(
+                {path.name for path in generation.iterdir()},
+                {"result.png", "prompt.txt", "settings.json", "meta.json"},
+            )
+
+    def test_generation_runners_archive_under_the_requested_clip(self):
+        ClipStore().create_clip(self.project, "Second")
+        comfy_output = Path(self.temp.name) / "runner-output"
+        comfy_output.mkdir()
+        video = comfy_output / "video.mp4"
+        image = comfy_output / "image.png"
+        video.write_bytes(b"video")
+        image.write_bytes(b"image")
+
+        video_result = SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"video": str(video)}),
+            stderr="",
+        )
+        image_result = SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({
+                "seed": 7, "prompt_id": "image-1", "files": ["image.png"]}),
+            stderr="",
+        )
+        with (
+            patch.object(ds, "COMFY_OUTPUT", comfy_output),
+            patch.object(ds, "free_comfy_vram", return_value={"ok": True}),
+            patch.object(ds.subprocess, "run", return_value=video_result),
+        ):
+            generated_video = ds.run_generation(
+                self.root, self.project.name, "clip-002")
+        with (
+            patch.object(ds, "COMFY_OUTPUT", comfy_output),
+            patch.object(ds.subprocess, "run", return_value=image_result),
+        ):
+            generated_image = ds.run_image_generation(
+                self.root, self.project.name, "clip-001", "t2i", "still prompt")
+
+        self.assertEqual(
+            Path(generated_video["generation"]).parent,
+            self.project / "clips" / "clip-002" / "generations",
+        )
+        self.assertEqual(
+            Path(generated_image["generation"]).parent,
+            self.project / "clips" / "clip-001" / "generations",
+        )
+        self.assertEqual(
+            (Path(generated_image["generation"]) / "prompt.txt").read_text(),
+            "still prompt\n",
+        )
+
+    def test_generation_runners_reject_unknown_clip_before_execution(self):
+        with patch.object(ds.subprocess, "run") as run:
+            with self.assertRaisesRegex(ClipStoreError, "clip not found"):
+                ds.run_generation(
+                    self.root, self.project.name, "clip-999", dry_run=True)
+            with self.assertRaisesRegex(ClipStoreError, "clip not found"):
+                ds.run_image_generation(
+                    self.root, self.project.name, "clip-999", "t2i", "prompt")
+        run.assert_not_called()
+
+    def test_archive_rejects_reserved_media_name_and_unsafe_settings(self):
+        comfy_output = Path(self.temp.name) / "unsafe-output"
+        comfy_output.mkdir()
+        (comfy_output / "meta.json").write_text("media")
+        with self.assertRaisesRegex(ValueError, "reserved"):
+            ds.archive_outputs(
+                self.root, self.project.name, "clip-001", ["meta.json"],
+                source_root=comfy_output)
+
+        (comfy_output / "result.png").write_bytes(b"image")
+        outside = Path(self.temp.name) / "settings.json"
+        outside.write_text("{}")
+        settings = (
+            self.project / "clips" / "clip-001" / "current_generation.json")
+        settings.symlink_to(outside)
+        with self.assertRaisesRegex(ValueError, "regular clip file"):
+            ds.archive_outputs(
+                self.root, self.project.name, "clip-001", ["result.png"],
+                source_root=comfy_output)
+        self.assertEqual(
+            list((self.project / "clips" / "clip-001" / "generations").iterdir()),
+            [],
+        )
 
     @patch.object(ds.subprocess, "run")
     def test_grok_dispatch_persists_project_session(self, run):
@@ -437,7 +645,7 @@ class LegacyCleanupTests(unittest.TestCase):
                              return_value={"ok": True}) as free_vram,
                 self.assertRaises(subprocess.TimeoutExpired),
             ):
-                ds.run_generation(root, project.name, timeout=1)
+                ds.run_generation(root, project.name, "clip-001", timeout=1)
             interrupt.assert_called_once()
             free_vram.assert_called_once()
 
