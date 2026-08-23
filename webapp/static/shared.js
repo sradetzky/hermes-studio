@@ -3,6 +3,8 @@ export const $ = selector => document.querySelector(selector);
 export const state = {
   current: null,
   currentClip: null,
+  projectRevision: 0,
+  clipRevision: 0,
   clips: [],
   projects: [],
   profiles: [],
@@ -24,8 +26,9 @@ export const state = {
   referenceSignature: '',
   refreshing: false,
   refreshPending: false,
+  refreshErrors: {},
   uploading: false,
-};;
+};
 
 export function activeClip() {
   return state.clips.find(clip => clip.id === state.currentClip) || null;
@@ -39,7 +42,7 @@ export async function requestJson(url, options) {
     throw new Error(detail);
   }
   return response.json();
-};
+}
 
 export function showEmpty(element, text) {
   const empty = document.createElement('div');
@@ -47,4 +50,4 @@ export function showEmpty(element, text) {
   empty.textContent = text;
   element.dataset.empty = 'true';
   element.append(empty);
-};
+}

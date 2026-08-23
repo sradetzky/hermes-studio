@@ -53,8 +53,10 @@ no state in the UI that isn't already on disk; minimal dependencies.
 - Right: shared reference thumbnails, active-clip take gallery (newest first), HTML5 video
   player for clips, media/recipe/review filters, and a keyboard-accessible detail
   dialog with every archived asset, prompt, metadata and review action
-- Polling every 2s uses incremental chat/activity cursors and only rebuilds media DOM when the
-  generation/reference listing changes, so active video playback is stable
+- Polling every 2s runs project navigation, chat/jobs/activity, references, and
+  clip/generation requests as independently failing planes. Project and clip revision
+  tokens reject stale responses; media DOM rebuilds only when listing signatures change,
+  so active video playback is stable.
 
 ## API surface (v1)
 

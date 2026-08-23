@@ -9,10 +9,22 @@ import {
   renderGenerations,
   updateGenerationRecipeFilter,
 } from './media-review.js';
+import {apiPaths} from './api-paths.mjs';
+import {
+  captureClipContext,
+  captureProjectContext,
+  isClipContextCurrent,
+  isProjectContextCurrent,
+} from './frontend-contracts.mjs';
+import {
+  refreshClipPlane,
+  refreshLivePlane,
+  refreshReferencePlane,
+} from './refresh-planes.mjs';
 import {$, activeClip, requestJson, showEmpty, state} from './shared.js';
 
 async function loadProfiles() {
-  const data = await requestJson('/api/profiles');
+  const data = await requestJson(apiPaths.profiles);
   state.profiles = data.profiles;
   const select = $('#profile-select');
   select.replaceChildren();
@@ -26,7 +38,7 @@ async function loadProfiles() {
 
 
 async function loadProjects() {
-  const data = await requestJson('/api/projects');
+  const data = await requestJson(apiPaths.projects);
   state.projects = data.projects;
   renderProjects();
   if (!state.current && state.projects.length) {
@@ -56,6 +68,7 @@ function resetClipState() {
   state.filteredGenerations = [];
   state.generationDetail = null;
   state.selectedGenerationFile = null;
+  state.mediaActioning = false;
   state.generationSettings = null;
   state.generationSettingsOptions = null;
   state.generationSignature = '';
@@ -115,6 +128,7 @@ async function selectClip(clipId) {
   closeGenerationDialog(false);
   closeGenerationSettings(false);
   state.currentClip = clipId;
+  state.clipRevision += 1;
   resetClipState();
   renderClips();
   await refreshProject();
@@ -137,12 +151,13 @@ async function createClip() {
   if (!title) return;
   await runClipAction(async () => {
     const created = await requestJson(
-      `/api/project/${encodeURIComponent(state.current)}/clips`, {
+      apiPaths.clips(state.current), {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({title}),
       });
     state.currentClip = created.clip.id;
+    state.clipRevision += 1;
     resetClipState();
   });
 }
@@ -153,7 +168,7 @@ async function renameClip() {
   const title = prompt('Clip title:', clip.title);
   if (!title || title === clip.title) return;
   await runClipAction(() => requestJson(
-    `/api/project/${encodeURIComponent(state.current)}/clips/${encodeURIComponent(clip.id)}`, {
+    apiPaths.clip(state.current, clip.id), {
       method: 'PATCH',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({title}),
@@ -167,7 +182,7 @@ async function moveClip(offset) {
   const clipIds = state.clips.map(clip => clip.id);
   [clipIds[index], clipIds[destination]] = [clipIds[destination], clipIds[index]];
   await runClipAction(() => requestJson(
-    `/api/project/${encodeURIComponent(state.current)}/clips/order`, {
+    apiPaths.clipOrder(state.current), {
       method: 'PUT',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({clip_ids: clipIds}),
@@ -178,7 +193,7 @@ async function toggleClip() {
   const clip = activeClip();
   if (!clip) return;
   await runClipAction(() => requestJson(
-    `/api/project/${encodeURIComponent(state.current)}/clips/${encodeURIComponent(clip.id)}`, {
+    apiPaths.clip(state.current, clip.id), {
       method: 'PATCH',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({enabled: !clip.enabled}),
@@ -189,11 +204,14 @@ async function selectProject(projectId) {
   closeGenerationDialog(false);
   closeGenerationSettings(false);
   state.current = projectId;
+  state.projectRevision += 1;
   state.currentClip = null;
+  state.clipRevision += 1;
   state.clips = [];
   state.chatCursor = 0;
   state.activityCursor = 0;
   state.activityByJob = {};
+  state.refreshErrors = {};
   resetClipState();
   state.referenceSignature = '';
   $('#chatlog').replaceChildren();
@@ -209,7 +227,7 @@ async function createProject() {
   const name = prompt('Project name:');
   if (!name) return;
   const brief = prompt('Brief (optional):') || '';
-  const created = await requestJson('/api/projects', {
+  const created = await requestJson(apiPaths.projects, {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({name, brief}),
@@ -219,6 +237,79 @@ async function createProject() {
   await selectProject(created.id);
 }
 
+function reportRefreshPlane(name, error) {
+  if (error) state.refreshErrors[name] = error.message;
+  else delete state.refreshErrors[name];
+  const failures = Object.entries(state.refreshErrors);
+  const status = $('#status');
+  if (failures.length) {
+    status.textContent = `refresh: ${failures.map(
+      ([plane, message]) => `${plane}: ${message}`).join(' · ')}`;
+  } else if (status.textContent.startsWith('refresh:')) {
+    status.textContent = '';
+  }
+}
+
+function applyProjectNavigation(project) {
+  const previousClip = state.currentClip;
+  state.clips = project.clips || [];
+  if (!state.clips.some(clip => clip.id === state.currentClip)) {
+    state.currentClip = state.clips[0]?.id || null;
+  }
+  if (previousClip !== state.currentClip) {
+    state.clipRevision += 1;
+    closeGenerationDialog(false);
+    closeGenerationSettings(false);
+    resetClipState();
+  }
+  renderClips();
+  document.title = `${project.id} — Hermes Studio`;
+}
+
+function applyGenerations(generations) {
+  const generationSignature = JSON.stringify(generations.generations);
+  if (generationSignature === state.generationSignature) return;
+  state.generationSignature = generationSignature;
+  state.generations = generations.generations;
+  updateGenerationRecipeFilter();
+  renderGenerations();
+}
+
+async function refreshNavigationPlane(context) {
+  let project;
+  try {
+    project = await requestJson(apiPaths.project(context.projectId));
+  } catch (error) {
+    if (isProjectContextCurrent(state, context)) {
+      reportRefreshPlane('project', error);
+    }
+    return;
+  }
+  if (!isProjectContextCurrent(state, context)) return;
+  reportRefreshPlane('project', null);
+  applyProjectNavigation(project);
+  if (!state.currentClip) {
+    resetClipState();
+    return;
+  }
+  const clipContext = captureClipContext(state);
+  await refreshClipPlane({
+    requestJson,
+    paths: apiPaths,
+    context: clipContext,
+    isCurrent: () => isClipContextCurrent(state, clipContext),
+    handlers: {
+      clip: clip => {
+        $('#prompt').textContent = clip.current_prompt || '—';
+        renderGenerationReadiness(clip.generation_settings);
+        document.title = `${clip.title} — ${project.id} — Hermes Studio`;
+      },
+      generations: applyGenerations,
+    },
+    report: reportRefreshPlane,
+  });
+}
+
 async function refreshProject() {
   if (!state.current) return;
   if (state.refreshing) {
@@ -226,69 +317,44 @@ async function refreshProject() {
     return;
   }
   state.refreshing = true;
-  const selectedProject = state.current;
-  const projectId = encodeURIComponent(selectedProject);
+  const context = captureProjectContext(state);
+  const isCurrent = () => isProjectContextCurrent(state, context);
   try {
-    const [project, chat, references, jobs, activity] = await Promise.all([
-      requestJson(`/api/project/${projectId}`),
-      requestJson(`/api/project/${projectId}/chat?after=${state.chatCursor}`),
-      requestJson(`/api/project/${projectId}/references`),
-      requestJson(`/api/project/${projectId}/jobs?limit=5`),
-      requestJson(`/api/project/${projectId}/events?after=${state.activityCursor}`),
+    await Promise.all([
+      refreshNavigationPlane(context),
+      refreshLivePlane({
+        requestJson,
+        paths: apiPaths,
+        context,
+        cursors: {chat: state.chatCursor, activity: state.activityCursor},
+        isCurrent,
+        handlers: {
+          chat: chat => {
+            appendMessages(chat.messages);
+            state.chatCursor = chat.cursor;
+          },
+          jobs: jobs => renderActivity(jobs.jobs),
+          activity: activity => {
+            appendActivities(activity.events);
+            state.activityCursor = activity.cursor;
+          },
+        },
+        report: reportRefreshPlane,
+      }),
+      refreshReferencePlane({
+        requestJson,
+        paths: apiPaths,
+        context,
+        isCurrent,
+        apply: references => {
+          const signature = JSON.stringify(references.references);
+          if (signature === state.referenceSignature) return;
+          state.referenceSignature = signature;
+          renderReferences(references.references);
+        },
+        report: reportRefreshPlane,
+      }),
     ]);
-    if (selectedProject !== state.current) {
-      state.refreshPending = true;
-      return;
-    }
-    const previousClip = state.currentClip;
-    state.clips = project.clips || [];
-    if (!state.clips.some(clip => clip.id === state.currentClip)) {
-      state.currentClip = state.clips[0]?.id || null;
-    }
-    if (previousClip !== state.currentClip) {
-      closeGenerationDialog(false);
-      closeGenerationSettings(false);
-      resetClipState();
-    }
-    renderClips();
-
-    const selectedClip = state.currentClip;
-    if (selectedClip) {
-      const clipId = encodeURIComponent(selectedClip);
-      const [clip, generations] = await Promise.all([
-        requestJson(`/api/project/${projectId}/clips/${clipId}`),
-        requestJson(`/api/project/${projectId}/clips/${clipId}/generations`),
-      ]);
-      if (selectedProject !== state.current || selectedClip !== state.currentClip) {
-        state.refreshPending = true;
-        return;
-      }
-      $('#prompt').textContent = clip.current_prompt || '—';
-      renderGenerationReadiness(clip.generation_settings);
-      document.title = `${clip.title} — ${project.id} — Hermes Studio`;
-      const generationSignature = JSON.stringify(generations.generations);
-      if (generationSignature !== state.generationSignature) {
-        state.generationSignature = generationSignature;
-        state.generations = generations.generations;
-        updateGenerationRecipeFilter();
-        renderGenerations();
-      }
-    } else {
-      resetClipState();
-      document.title = `${project.id} — Hermes Studio`;
-    }
-    appendMessages(chat.messages);
-    state.chatCursor = chat.cursor;
-    appendActivities(activity.events);
-    state.activityCursor = activity.cursor;
-    const referenceSignature = JSON.stringify(references.references);
-    if (referenceSignature !== state.referenceSignature) {
-      state.referenceSignature = referenceSignature;
-      renderReferences(references.references);
-    }
-    renderActivity(jobs.jobs);
-  } catch (error) {
-    $('#status').textContent = `refresh error: ${error.message}`;
   } finally {
     state.refreshing = false;
     if (state.refreshPending) {
@@ -519,8 +585,7 @@ async function sendChat(event) {
   $('#status').textContent = 'studio is thinking…';
   try {
     const job = await requestJson(
-      `/api/project/${encodeURIComponent(state.current)}/clips/` +
-      `${encodeURIComponent(state.currentClip)}/chat`, {
+      apiPaths.clipChat(state.current, state.currentClip), {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({message, profile: $('#profile-select').value || 'studio'}),
@@ -544,7 +609,7 @@ function uploadReferences(files) {
   $('#dropzone').classList.add('uploading');
   return new Promise((resolve, reject) => {
     const request = new XMLHttpRequest();
-    request.open('POST', `/api/project/${encodeURIComponent(state.current)}/references`);
+    request.open('POST', apiPaths.references(state.current));
     request.upload.onprogress = event => {
       if (event.lengthComputable) {
         dropText.textContent = `Uploading… ${Math.round(event.loaded / event.total * 100)}%`;

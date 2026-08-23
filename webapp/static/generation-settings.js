@@ -1,5 +1,11 @@
 import {$, requestJson, state} from './shared.js';
-import {isSeedWithinRange, MAX_SAFE_SEED} from './frontend-contracts.mjs';
+import {apiPaths} from './api-paths.mjs';
+import {
+  captureClipContext,
+  isClipContextCurrent,
+  isSeedWithinRange,
+  MAX_SAFE_SEED,
+} from './frontend-contracts.mjs';
 
 let refreshProject = async () => {};
 
@@ -60,20 +66,18 @@ async function openGenerationSettings(opener = null) {
   state.generationSettingsOptions = null;
   $('#generation-settings-status').textContent = 'Loading settings…';
   if (!dialog.open) dialog.showModal();
-  const selectedProject = state.current;
-  const selectedClip = state.currentClip;
+  const context = captureClipContext(state);
   try {
     const contract = await requestJson(
-      `/api/project/${encodeURIComponent(selectedProject)}/clips/` +
-      `${encodeURIComponent(selectedClip)}/generation-settings`);
-    if (selectedProject !== state.current || selectedClip !== state.currentClip ||
-        !dialog.open) return;
+      apiPaths.generationSettings(context.projectId, context.clipId));
+    if (!isClipContextCurrent(state, context) || !dialog.open) return;
     state.generationSettings = contract;
     state.generationSettingsOptions = contract.options;
     populateGenerationSettings(contract);
     save.disabled = false;
     $('#generation-settings-status').textContent = '';
   } catch (error) {
+    if (!isClipContextCurrent(state, context)) return;
     $('#generation-settings-status').textContent = `Unable to load: ${error.message}`;
   }
 }
@@ -159,21 +163,20 @@ async function saveGenerationSettings(event) {
   if (save.disabled || !state.generationSettingsOptions) return;
   save.disabled = true;
   status.textContent = 'Saving settings…';
-  const selectedProject = state.current;
-  const selectedClip = state.currentClip;
+  const context = captureClipContext(state);
   try {
     const contract = await requestJson(
-      `/api/project/${encodeURIComponent(selectedProject)}/clips/` +
-      `${encodeURIComponent(selectedClip)}/generation-settings`, {
+      apiPaths.generationSettings(context.projectId, context.clipId), {
         method: 'PUT',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify(generationSettingsPayload()),
       });
-    if (selectedProject !== state.current || selectedClip !== state.currentClip) return;
+    if (!isClipContextCurrent(state, context)) return;
     renderGenerationReadiness(contract);
     closeGenerationSettings();
     await refreshProject();
   } catch (error) {
+    if (!isClipContextCurrent(state, context)) return;
     save.disabled = false;
     status.textContent = `Save failed: ${error.message}`;
   }

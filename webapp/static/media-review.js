@@ -1,4 +1,9 @@
 import {$, activeClip, requestJson, showEmpty, state} from './shared.js';
+import {apiPaths} from './api-paths.mjs';
+import {
+  captureClipContext,
+  isClipContextCurrent,
+} from './frontend-contracts.mjs';
 
 let refreshProject = async () => {};
 
@@ -135,18 +140,16 @@ async function openGeneration(generationId, opener = null) {
   state.selectedGenerationFile = null;
   showGenerationLoading(generationId);
   if (!dialog.open) dialog.showModal();
-  const selectedProject = state.current;
-  const selectedClip = state.currentClip;
+  const context = captureClipContext(state);
   try {
     const detail = await requestJson(
-      `/api/project/${encodeURIComponent(selectedProject)}/clips/` +
-      `${encodeURIComponent(selectedClip)}/generations/${encodeURIComponent(generationId)}`);
-    if (selectedProject !== state.current || selectedClip !== state.currentClip ||
-        !dialog.open) return;
+      apiPaths.generation(context.projectId, context.clipId, generationId));
+    if (!isClipContextCurrent(state, context) || !dialog.open) return;
     state.generationDetail = detail;
     state.selectedGenerationFile = detail.media[0]?.name || null;
     renderGenerationDetail();
   } catch (error) {
+    if (!isClipContextCurrent(state, context)) return;
     $('#media-action-status').textContent = `Unable to load: ${error.message}`;
     $('#generation-media').replaceChildren();
     showEmpty($('#generation-media'), 'take unavailable');
@@ -257,37 +260,37 @@ async function performMediaAction(action) {
   const status = $('#media-action-status');
   status.textContent = action === 'promote' ? 'Promoting…' : 'Copying reference…';
   const endpoint = action === 'promote' ? 'promote' : 'use-as-reference';
-  const selectedProject = state.current;
-  const selectedClip = state.currentClip;
+  const context = captureClipContext(state);
   try {
     const response = await requestJson(
-      `/api/project/${encodeURIComponent(selectedProject)}/clips/` +
-      `${encodeURIComponent(selectedClip)}/generations/` +
-      `${encodeURIComponent(detail.gen)}/${endpoint}`,
+      apiPaths.generationAction(
+        context.projectId, context.clipId, detail.gen, endpoint),
       {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({filename: item.name}),
       });
+    if (!isClipContextCurrent(state, context)) return;
     status.textContent = action === 'promote'
       ? `Promoted as ${response.result.target}`
       : `Reference saved as ${response.result.target}`;
     const refreshed = await requestJson(
-      `/api/project/${encodeURIComponent(selectedProject)}/clips/` +
-      `${encodeURIComponent(selectedClip)}/generations/${encodeURIComponent(detail.gen)}`);
-    if (selectedProject === state.current && selectedClip === state.currentClip) {
-      state.generationDetail = refreshed;
-      state.selectedGenerationFile = item.name;
-      state.generationSignature = '';
-      if (action === 'reference') state.referenceSignature = '';
-      renderGenerationDetail();
-      await refreshProject();
-    }
+      apiPaths.generation(context.projectId, context.clipId, detail.gen));
+    if (!isClipContextCurrent(state, context)) return;
+    state.generationDetail = refreshed;
+    state.selectedGenerationFile = item.name;
+    state.generationSignature = '';
+    if (action === 'reference') state.referenceSignature = '';
+    renderGenerationDetail();
+    await refreshProject();
   } catch (error) {
+    if (!isClipContextCurrent(state, context)) return;
     status.textContent = `Action failed: ${error.message}`;
   } finally {
-    state.mediaActioning = false;
-    renderSelectedGenerationMedia();
+    if (isClipContextCurrent(state, context)) {
+      state.mediaActioning = false;
+      renderSelectedGenerationMedia();
+    }
   }
 }
 
@@ -301,29 +304,30 @@ async function selectTake() {
   renderSelectedGenerationMedia();
   const status = $('#media-action-status');
   status.textContent = 'Selecting take…';
-  const selectedProject = state.current;
-  const selectedClip = state.currentClip;
+  const context = captureClipContext(state);
   try {
     const response = await requestJson(
-      `/api/project/${encodeURIComponent(selectedProject)}/clips/` +
-      `${encodeURIComponent(selectedClip)}/selected-take`, {
+      apiPaths.selectedTake(context.projectId, context.clipId), {
         method: 'PUT',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({generation: detail.gen, filename: item.name}),
       });
-    if (selectedProject !== state.current || selectedClip !== state.currentClip) return;
+    if (!isClipContextCurrent(state, context)) return;
     state.clips = state.clips.map(entry =>
-      entry.id === selectedClip ? response.clip : entry);
+      entry.id === context.clipId ? response.clip : entry);
     state.generationSignature = '';
     status.textContent = `Selected ${detail.gen}/${item.name}`;
     renderGenerationDetail();
     renderGenerations();
     await refreshProject();
   } catch (error) {
+    if (!isClipContextCurrent(state, context)) return;
     status.textContent = `Selection failed: ${error.message}`;
   } finally {
-    state.mediaActioning = false;
-    renderSelectedGenerationMedia();
+    if (isClipContextCurrent(state, context)) {
+      state.mediaActioning = false;
+      renderSelectedGenerationMedia();
+    }
   }
 }
 
