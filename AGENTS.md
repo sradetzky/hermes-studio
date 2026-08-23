@@ -72,8 +72,20 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
 - Web launcher hardened: single-instance flock/PID ownership plus explicit
   status and graceful stop scripts; duplicate starts are rejected
 
+### 2026-08-23
+- Web profile observability: immediate user turns, persistent per-job activity,
+  live Hermes reasoning/tool projection, manual profile targeting, serialized
+  specialist handoffs, and a 3h Studio timeout that no longer interrupts valid
+  H3 renders at the old 10-minute boundary
+- Web M4 media review: media/recipe/review filters, full generation detail
+  dialog, archived prompt/metadata/action history, and guarded idempotent copies
+  to `final/` or `references/`
+- Web M4.1 generation contract: typed prompt-bound `current_generation.json`,
+  readiness/staleness display, safe MP/explicit-canvas validation, editable
+  steps/accel/turbo/model/upscale knobs, and ordered mode-aware references
+
 ## Next steps
 
 - [ ] Real end-to-end H3 video generation through comfyui-mcp
-- [ ] Web UI media review: detail viewer, filters, promote/use-as-reference
-- [ ] Wire orchestrator → subagent dispatch (design-studio skill)
+- [ ] “Generate with this prompt” action after the real H3 path is verified
+- [ ] Basic project metadata and responsive three-pane navigation

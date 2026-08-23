@@ -17,7 +17,8 @@ specialist.
 
 ```
 brief → studio-storyboarder → storyboard.md
-      → studio-prompt-engineer → current_prompt.txt (+ handoff params)
+      → studio-prompt-engineer → current_prompt.txt (+ proposed handoff params)
+      → web settings editor    → current_generation.json (validated + prompt-bound)
       → studio (orchestrator)  → comfyui-mcp → archive-output → clear_vram
       → studio-grok (optional) → xAI web/X/Imagine → research/ or archive-grok
       → studio-reviewer        → PASS/REVISE/REJECT appended to chat.jsonl

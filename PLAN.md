@@ -57,6 +57,7 @@ Folder structure on disk (source of truth for projects & media)
 │       ├── brief.md
 │       ├── chat.jsonl
 │       ├── current_prompt.txt
+│       ├── current_generation.json # typed run settings + prompt hash
 │       ├── references/          # uploaded assets (image1_..., video1_..., audio1_...)
 │       ├── generations/
 │       │   └── 001/
@@ -142,11 +143,15 @@ Hermes (via design-studio skill) is responsible for creating projects and writin
 - [x] Multi-file drag/drop reference upload with safe non-overwriting storage.
 - [x] Transactional SQLite runtime coordination, lifecycle-managed Hermes
   children, guarded media routes and fully local frontend assets.
+- [x] Per-profile live activity timeline with reasoning/tool events, explicit
+  specialist targeting, persistent profile sessions and serialized orchestrator
+  handoffs.
 
 ### Phase 4 – Polish
-- Media detail/filter/review actions
+- [x] Media detail/filter/review actions
+- [x] Typed generation settings manifest + prompt readiness/editor panel
 - “Generate with this prompt” button that appears when Hermes outputs a structured prompt
-- Promote to `final/`
+- [x] Promote to `final/` and copy selected generation media into references
 - Basic project metadata
 
 ---

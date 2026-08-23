@@ -10,6 +10,7 @@ Project management + generation archiving. Root resolution: `--root` flag →
 ├── brief.md               # created with project
 ├── chat.jsonl             # {role, content, ts} per line
 ├── current_prompt.txt     # latest structured prompt
+├── current_generation.json # UI-validated H3 run settings + prompt SHA-256
 ├── references/            # uploaded assets (identity refs etc.)
 ├── research/              # durable specialist research notes
 ├── generations/NNN/       # video.mp4|*.png + prompt.txt + meta.json
@@ -62,3 +63,6 @@ python3 scripts/design_studio.py generate-image <project-id> \
 - Missing/colliding output files are expected (user deletes broken renders);
   report path + prompt_id and move on
 - Always smoke new parameter combos with `--dry-run` first
+- The web settings editor owns `current_generation.json`; editing
+  `current_prompt.txt` makes its readiness stale until the user reviews and
+  saves the settings again
