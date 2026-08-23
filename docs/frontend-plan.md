@@ -136,8 +136,9 @@ auto-chained, and their result never starts a render without a separate request.
 - Generation settings enforce 0.1–1.1 MP or a ≤1.1MP explicit 32px-grid canvas
   and 1–50 steps. Readiness parses a 4–15 second length and ordered image-only
   `<Picture N> (filename.ext)` references from the prompt, then validates files
-  and mode-specific counts. Large integer seeds round-trip as decimal strings in
-  the API and integers on disk. Any prompt edit invalidates readiness until
+  and mode-specific counts. Seeds are limited to JavaScript's exact integer
+  range (`0..9007199254740991`), round-trip as decimal strings in the API, and
+  remain integers on disk. Any prompt edit invalidates readiness until
   settings are deliberately re-saved against the new hash.
 - No auth v1 (localhost bind only)
 

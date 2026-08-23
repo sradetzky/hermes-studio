@@ -35,6 +35,7 @@ ASPECT_RATIOS = {
 }
 CANVAS_MULTIPLE = 32
 MAX_CANVAS_PIXELS = 1_100_000
+MAX_SAFE_SEED = 9_007_199_254_740_991
 FPS = 24
 IMAGE_REFERENCE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 
@@ -72,9 +73,9 @@ def _seed(value: Any) -> int | None:
             raise GenerationSettingsError("seed must contain decimal digits only")
         value = int(value)
     seed = _integer(value, "seed")
-    if seed < 0 or seed >= 2**63:
+    if seed < 0 or seed > MAX_SAFE_SEED:
         raise GenerationSettingsError(
-            "seed must be between 0 and 9223372036854775807")
+            f"seed must be between 0 and {MAX_SAFE_SEED}")
     return seed
 
 
@@ -374,6 +375,7 @@ class GenerationSettingsStore:
             result["options"] = {
                 "modes": sorted(MODES),
                 "aspects": list(ASPECT_RATIOS),
+                "max_seed": str(MAX_SAFE_SEED),
             }
         return result
 

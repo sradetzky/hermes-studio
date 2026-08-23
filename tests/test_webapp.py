@@ -293,9 +293,10 @@ class AppFactoryTests(WebAppTestCase):
             self.assertEqual(initial["options"]["modes"],
                              ["fl2va", "i2va", "r2v", "t2va"])
             self.assertEqual(
-                sorted(initial["options"]), ["aspects", "modes"])
+                sorted(initial["options"]), ["aspects", "max_seed", "modes"])
+            self.assertEqual(initial["options"]["max_seed"], "9007199254740991")
 
-            large_seed = "4364884737460484600"
+            large_seed = "9007199254740991"
             saved = client.put(
                 f"/api/project/{project}/clips/clip-001/generation-settings",
                 json=_generation_settings_payload(seed=large_seed),
@@ -391,6 +392,7 @@ class AppFactoryTests(WebAppTestCase):
                 _generation_settings_payload(width=1344, height=None),
                 _generation_settings_payload(width=1536, height=768),
                 _generation_settings_payload(steps=0),
+                _generation_settings_payload(seed="9007199254740992"),
             ]
             for payload in cases:
                 with self.subTest(payload=payload):

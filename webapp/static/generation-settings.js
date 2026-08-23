@@ -1,4 +1,5 @@
 import {$, requestJson, state} from './shared.js';
+import {isSeedWithinRange, MAX_SAFE_SEED} from './frontend-contracts.mjs';
 
 let refreshProject = async () => {};
 
@@ -88,6 +89,7 @@ function populateGenerationSettings(contract) {
   $('#setting-seed').value = settings.seed ?? '';
   $('#setting-steps').value = settings.steps;
   $('#setting-accel').checked = settings.accel;
+  updateSeedValidity();
   updateGenerationSettingsForm();
 }
 
@@ -125,6 +127,13 @@ function updateComputedSettings() {
     : 'Enter a valid canvas';
 }
 
+function updateSeedValidity() {
+  const input = $('#setting-seed');
+  const maxSeed = state.generationSettingsOptions?.max_seed || MAX_SAFE_SEED;
+  input.setCustomValidity(isSeedWithinRange(input.value.trim(), maxSeed)
+    ? '' : `Seed must be decimal digits from 0 to ${maxSeed}`);
+}
+
 function generationSettingsPayload() {
   const explicit = $('#setting-size-mode').value === 'explicit';
   const seedValue = $('#setting-seed').value.trim();
@@ -143,6 +152,7 @@ function generationSettingsPayload() {
 async function saveGenerationSettings(event) {
   event.preventDefault();
   const form = $('#generation-settings-form');
+  updateSeedValidity();
   if (!form.reportValidity()) return;
   const status = $('#generation-settings-status');
   const save = $('#generation-settings-save');
@@ -195,6 +205,7 @@ export function initializeGenerationSettings(refresh) {
   $('#edit-generation-settings').addEventListener('click', event =>
     openGenerationSettings(event.currentTarget));
   $('#generation-settings-form').addEventListener('submit', saveGenerationSettings);
+  $('#setting-seed').addEventListener('input', updateSeedValidity);
   $('#generation-settings-close').addEventListener('click', () => closeGenerationSettings());
   $('#generation-settings-cancel').addEventListener('click', () => closeGenerationSettings());
   dialog.addEventListener('close', () => closeGenerationSettings());
