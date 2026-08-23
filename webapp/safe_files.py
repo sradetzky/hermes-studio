@@ -365,6 +365,184 @@ def atomic_move_no_replace_at(
     )
 
 
+def _preserve_quarantined_regular_file(
+        parent_fd: int, quarantine: str, canonical: str,
+        quarantine_identity: tuple[int, int] | None, *, label: str) -> None:
+    """Restore a displaced entry without overwriting a canonical replacement."""
+    assert _renameat2 is not None
+    result = _renameat2(
+        parent_fd,
+        os.fsencode(quarantine),
+        parent_fd,
+        os.fsencode(canonical),
+        _RENAME_NOREPLACE,
+    )
+    if result != 0:
+        error = ctypes.get_errno()
+        if error in {errno.EEXIST, errno.ENOTEMPTY}:
+            _fsync_directory(parent_fd)
+            return
+        if error in {errno.ENOSYS, errno.EINVAL, errno.ENOTSUP}:
+            raise AtomicPublicationUnavailable(
+                "renameat2(RENAME_NOREPLACE) is unavailable")
+        raise SafeFilesystemError(
+            f"{label} could not be preserved from quarantine") from OSError(
+                error, os.strerror(error), quarantine)
+
+    _fsync_directory(parent_fd)
+    if quarantine_identity is None:
+        return
+    descriptor = None
+    try:
+        descriptor = os.open(canonical, _FILE_FLAGS, dir_fd=parent_fd)
+        details = os.fstat(descriptor)
+        if (not stat.S_ISREG(details.st_mode)
+                or (details.st_dev, details.st_ino) != quarantine_identity):
+            raise SafeFilesystemError(
+                f"{label} restored quarantine identity could not be verified")
+    except (SafeFilesystemError, FileNotFoundError):
+        raise
+    except OSError as exc:
+        raise SafeFilesystemError(
+            f"{label} restored quarantine identity could not be verified") from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def atomic_remove_regular_file_at(
+        parent_fd: int, canonical: str, expected_identity: tuple[int, int], *,
+        label: str) -> None:
+    """Quarantine and remove only one expected regular-file identity.
+
+    The no-replace rename is the identity-conditional boundary: it first makes
+    the canonical name absent without deleting the entry that occupied it.
+    Any unexpected occupant is restored when possible, or left under the
+    private quarantine when a new canonical occupant prevents restoration.
+    """
+    if _renameat2 is None:
+        raise AtomicPublicationUnavailable(
+            "renameat2(RENAME_NOREPLACE) is unavailable")
+    canonical = _component(canonical, label)
+    quarantine = f".safe-delete-{uuid.uuid4().hex}.quarantine"
+
+    result = _renameat2(
+        parent_fd,
+        os.fsencode(canonical),
+        parent_fd,
+        os.fsencode(quarantine),
+        _RENAME_NOREPLACE,
+    )
+    if result != 0:
+        error = ctypes.get_errno()
+        if error in {errno.EEXIST, errno.ENOTEMPTY}:
+            raise SafeFilesystemError(
+                f"{label} quarantine name collided")
+        if error in {errno.ENOSYS, errno.EINVAL, errno.ENOTSUP}:
+            raise AtomicPublicationUnavailable(
+                "renameat2(RENAME_NOREPLACE) is unavailable")
+        if error == errno.ENOENT:
+            raise FileNotFoundError(error, os.strerror(error), canonical)
+        raise SafeFilesystemError(
+            f"{label} could not be quarantined") from OSError(
+                error, os.strerror(error), canonical)
+
+    descriptor = None
+    quarantine_identity = None
+    try:
+        try:
+            descriptor = os.open(quarantine, _FILE_FLAGS, dir_fd=parent_fd)
+            details = os.fstat(descriptor)
+            quarantine_identity = (details.st_dev, details.st_ino)
+        except OSError as exc:
+            try:
+                _preserve_quarantined_regular_file(
+                    parent_fd, quarantine, canonical, None, label=label)
+            except BaseException as preserve_exc:
+                raise SafeFilesystemError(
+                    f"{label} quarantine could not be verified or restored"
+                ) from preserve_exc
+            raise SafeFilesystemError(
+                f"{label} quarantine could not be verified") from exc
+
+        try:
+            named = os.stat(
+                quarantine, dir_fd=parent_fd, follow_symlinks=False)
+        except OSError as exc:
+            try:
+                _preserve_quarantined_regular_file(
+                    parent_fd, quarantine, canonical,
+                    quarantine_identity, label=label)
+            except BaseException as preserve_exc:
+                raise SafeFilesystemError(
+                    f"{label} quarantine changed and could not be restored"
+                ) from preserve_exc
+            raise SafeFilesystemError(
+                f"{label} quarantine changed before deletion") from exc
+
+        named_identity = (named.st_dev, named.st_ino)
+        if (not stat.S_ISREG(details.st_mode)
+                or not stat.S_ISREG(named.st_mode)
+                or quarantine_identity != named_identity
+                or quarantine_identity != expected_identity):
+            try:
+                _preserve_quarantined_regular_file(
+                    parent_fd, quarantine, canonical,
+                    quarantine_identity, label=label)
+            except BaseException as preserve_exc:
+                raise SafeFilesystemError(
+                    f"{label} identity changed; displaced entry remains quarantined"
+                ) from preserve_exc
+            raise SafeFilesystemError(
+                f"{label} identity changed before deletion")
+
+        try:
+            os.stat(canonical, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            raise SafeFilesystemError(
+                f"{label} canonical absence could not be verified") from exc
+        else:
+            _fsync_directory(parent_fd)
+            raise SafeFilesystemError(
+                f"{label} canonical name was occupied; expected entry remains quarantined")
+
+        try:
+            os.unlink(quarantine, dir_fd=parent_fd)
+        except OSError as exc:
+            try:
+                current = os.stat(
+                    quarantine, dir_fd=parent_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                raise SafeFilesystemError(
+                    f"{label} quarantine cleanup could not be proven") from exc
+            except OSError as inspect_exc:
+                raise SafeFilesystemError(
+                    f"{label} quarantine cleanup could not be proven") from inspect_exc
+            if (stat.S_ISREG(current.st_mode)
+                    and (current.st_dev, current.st_ino) == expected_identity):
+                _preserve_quarantined_regular_file(
+                    parent_fd, quarantine, canonical,
+                    expected_identity, label=label)
+            raise SafeFilesystemError(
+                f"{label} quarantine cleanup failed; entry was preserved") from exc
+
+        _fsync_directory(parent_fd)
+        try:
+            os.stat(canonical, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            raise SafeFilesystemError(
+                f"{label} canonical absence could not be revalidated") from exc
+        raise SafeFilesystemError(
+            f"{label} canonical name reappeared during deletion")
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
 def atomic_move_no_replace(
         source: Path, destination: Path) -> tuple[int, int]:
     """Rename one regular file or directory without following or replacing."""

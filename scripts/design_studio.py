@@ -51,6 +51,7 @@ from webapp.safe_files import (
     SafeFilesystemError,
     atomic_move_no_replace,
     atomic_move_no_replace_at,
+    atomic_remove_regular_file_at,
     atomic_publish_directory,
     copy_opened_file,
     open_directory,
@@ -1435,8 +1436,9 @@ def _cleanup_migration_restore_artifacts(project: Path) -> None:
                             or (current.st_dev, current.st_ino) != journal_identity):
                         raise SafeFilesystemError(
                             "clip migration restore artifact changed")
-                    os.unlink(name, dir_fd=project_fd)
-                    os.fsync(project_fd)
+                    atomic_remove_regular_file_at(
+                        project_fd, name, journal_identity,
+                        label="clip migration restore artifact")
                     journal_expected = os.fstat(journal_fd)
                 except SafeFilesystemError:
                     raise
@@ -1495,8 +1497,9 @@ def _remove_migration_restore_temp(
         if (not stat.S_ISREG(current.st_mode)
                 or (current.st_dev, current.st_ino) != expected_identity):
             raise SafeFilesystemError("clip migration restore temp changed")
-        os.unlink(temporary, dir_fd=project_fd)
-        os.fsync(project_fd)
+        atomic_remove_regular_file_at(
+            project_fd, temporary, expected_identity,
+            label="clip migration restore temp")
     except (SafeFilesystemError, FileNotFoundError):
         raise
     except OSError as exc:
@@ -1599,11 +1602,13 @@ def _finalize_migration(project: Path, journal: dict) -> None:
             _verify_migration_journal_descriptor(
                 project_fd, journal_fd, journal_details, journal_bytes)
 
-            unlink_attempted = False
+            removal_attempted = False
             try:
-                unlink_attempted = True
-                os.unlink(CLIP_MIGRATION_JOURNAL, dir_fd=project_fd)
-                os.fsync(project_fd)
+                removal_attempted = True
+                atomic_remove_regular_file_at(
+                    project_fd, CLIP_MIGRATION_JOURNAL,
+                    (journal_details.st_dev, journal_details.st_ino),
+                    label="clip migration journal")
                 _require_migration_journal_absent(project_fd)
                 _validate_migration_destination_descriptors(
                     project_fd, clips_fd, clip_fd, journal,
@@ -1614,7 +1619,7 @@ def _finalize_migration(project: Path, journal: dict) -> None:
                 # This canonical no-follow absence check must remain last.
                 _require_migration_journal_absent(project_fd)
             except BaseException:
-                if unlink_attempted:
+                if removal_attempted:
                     try:
                         if _migration_entry_is_absent(
                                 project_fd, CLIP_MIGRATION_JOURNAL,

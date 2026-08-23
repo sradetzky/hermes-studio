@@ -536,6 +536,104 @@ class SafeFilesystemTests(unittest.TestCase):
         self.assertEqual(source.read_bytes(), b"source")
         self.assertFalse((self.parent / "destination.txt").exists())
 
+    def test_atomic_remove_regular_file_deletes_exact_identity_without_quarantine(self):
+        target = self.parent / "target.txt"
+        target.write_bytes(b"target")
+        identity = (target.stat().st_dev, target.stat().st_ino)
+        parent_fd = os.open(
+            self.parent,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            safe_files.atomic_remove_regular_file_at(
+                parent_fd, target.name, identity, label="test target")
+        finally:
+            os.close(parent_fd)
+
+        self.assertFalse(target.exists())
+        self.assertEqual(list(self.parent.iterdir()), [])
+
+    def test_atomic_remove_rejects_quarantine_collision_without_deleting(self):
+        target = self.parent / "target.txt"
+        target.write_bytes(b"target")
+        identity = (target.stat().st_dev, target.stat().st_ino)
+        collision = self.parent / (
+            ".safe-delete-" + "0" * 32 + ".quarantine")
+        collision.write_bytes(b"collision")
+        parent_fd = os.open(
+            self.parent,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            with (
+                patch.object(
+                    safe_files.uuid, "uuid4",
+                    return_value=SimpleNamespace(hex="0" * 32),
+                ),
+                self.assertRaisesRegex(
+                    safe_files.SafeFilesystemError, "quarantine name collided"),
+            ):
+                safe_files.atomic_remove_regular_file_at(
+                    parent_fd, target.name, identity, label="test target")
+        finally:
+            os.close(parent_fd)
+
+        self.assertEqual(target.read_bytes(), b"target")
+        self.assertEqual(collision.read_bytes(), b"collision")
+
+    def test_atomic_remove_mismatch_with_occupied_canonical_preserves_both(self):
+        expected = self.parent / "expected.txt"
+        target = self.parent / "target.txt"
+        expected.write_bytes(b"expected")
+        target.write_bytes(b"displaced replacement")
+        expected_identity = (expected.stat().st_dev, expected.stat().st_ino)
+        real_renameat2 = safe_files._renameat2
+        assert real_renameat2 is not None
+        rename_calls = 0
+
+        def occupy_canonical_before_restore(
+                source_fd, source_name, destination_fd, destination_name, flags):
+            nonlocal rename_calls
+            rename_calls += 1
+            if rename_calls == 2:
+                occupied_fd = os.open(
+                    "target.txt",
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                    0o600,
+                    dir_fd=destination_fd,
+                )
+                try:
+                    os.write(occupied_fd, b"canonical occupant")
+                finally:
+                    os.close(occupied_fd)
+            return real_renameat2(
+                source_fd, source_name, destination_fd, destination_name, flags)
+
+        parent_fd = os.open(
+            self.parent,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            with (
+                patch.object(
+                    safe_files, "_renameat2",
+                    side_effect=occupy_canonical_before_restore,
+                ),
+                self.assertRaisesRegex(
+                    safe_files.SafeFilesystemError, "identity changed"),
+            ):
+                safe_files.atomic_remove_regular_file_at(
+                    parent_fd, target.name, expected_identity,
+                    label="test target")
+        finally:
+            os.close(parent_fd)
+
+        self.assertEqual(target.read_bytes(), b"canonical occupant")
+        quarantines = [
+            entry for entry in self.parent.iterdir()
+            if entry.name not in {expected.name, target.name}
+        ]
+        self.assertEqual(len(quarantines), 1)
+        self.assertEqual(quarantines[0].read_bytes(), b"displaced replacement")
+        self.assertEqual(expected.read_bytes(), b"expected")
+
     def test_rollback_quarantine_preserves_moved_original_and_replacement(self):
         source = self.parent / "source"
         source.mkdir()
@@ -1839,20 +1937,29 @@ class LegacyClipMigrationTests(unittest.TestCase):
         outside.write_bytes(b"outside must remain untouched")
         unexpected = project / "clips" / "clip-001" / "unexpected"
         journal_path = project / ds.CLIP_MIGRATION_JOURNAL
-        real_unlink = os.unlink
+        real_renameat2 = safe_files._renameat2
+        assert real_renameat2 is not None
         boundary_journal = None
         injected = False
 
-        def inject_before_journal_unlink(path, *args, dir_fd=None):
+        def inject_before_journal_quarantine(
+                source_fd, source_name, destination_fd, destination_name, flags):
             nonlocal boundary_journal, injected
-            if not injected and os.fsdecode(path) == ds.CLIP_MIGRATION_JOURNAL:
+            source = os.fsdecode(source_name)
+            destination = os.fsdecode(destination_name)
+            if (not injected and source == ds.CLIP_MIGRATION_JOURNAL
+                    and "safe-delete" in destination):
                 injected = True
                 unexpected.symlink_to(outside)
                 boundary_journal = journal_path.read_bytes()
-            return real_unlink(path, *args, dir_fd=dir_fd)
+            return real_renameat2(
+                source_fd, source_name, destination_fd, destination_name, flags)
 
         with (
-            patch.object(ds.os, "unlink", side_effect=inject_before_journal_unlink),
+            patch.object(
+                safe_files, "_renameat2",
+                side_effect=inject_before_journal_quarantine,
+            ),
             self.assertRaises((ValueError, safe_files.SafeFilesystemError)),
         ):
             self.migrate(project.name, apply=True)
@@ -1885,6 +1992,57 @@ class LegacyClipMigrationTests(unittest.TestCase):
             [path.name for path in project.glob(".*clip-migration*")], [])
         self.assertEqual(outside.read_bytes(), b"outside must remain untouched")
 
+    def test_journal_replacement_at_removal_boundary_is_preserved_and_fails(self):
+        project = self.legacy_project()
+        journal_path = project / ds.CLIP_MIGRATION_JOURNAL
+        preserved = project / ".preserved-expected-journal"
+        replacement = b'{"replacement":true}\n'
+        real_renameat2 = safe_files._renameat2
+        assert real_renameat2 is not None
+        injected = False
+
+        def replace_before_quarantine(
+                source_fd, source_name, destination_fd, destination_name, flags):
+            nonlocal injected
+            source = os.fsdecode(source_name)
+            destination = os.fsdecode(destination_name)
+            if (not injected and source == ds.CLIP_MIGRATION_JOURNAL
+                    and destination != ds.CLIP_MIGRATION_JOURNAL):
+                injected = True
+                os.rename(
+                    source, preserved.name,
+                    src_dir_fd=source_fd, dst_dir_fd=source_fd)
+                descriptor = os.open(
+                    source,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                    0o600,
+                    dir_fd=source_fd,
+                )
+                try:
+                    os.write(descriptor, replacement)
+                finally:
+                    os.close(descriptor)
+            return real_renameat2(
+                source_fd, source_name, destination_fd, destination_name, flags)
+
+        with (
+            patch.object(
+                safe_files, "_renameat2", side_effect=replace_before_quarantine),
+            self.assertRaisesRegex(
+                safe_files.SafeFilesystemError, "journal identity changed"),
+        ):
+            result = self.migrate(project.name, apply=True)
+            self.fail(f"migration unexpectedly reported: {result}")
+
+        self.assertTrue(injected)
+        self.assertEqual(journal_path.read_bytes(), replacement)
+        self.assertEqual(json.loads(preserved.read_bytes())["phase"], "finalizing")
+        self.assertEqual(
+            [entry.name for entry in project.iterdir()
+             if "safe-delete" in entry.name],
+            [],
+        )
+
     def test_atomic_restore_consumes_private_temp_and_resumes_cleanly(self):
         project = self.legacy_project()
         outside = Path(self.temp.name) / "outside-restore-interruption.txt"
@@ -1892,25 +2050,40 @@ class LegacyClipMigrationTests(unittest.TestCase):
         unexpected = project / "clips" / "clip-001" / "unexpected"
         journal_path = project / ds.CLIP_MIGRATION_JOURNAL
         real_unlink = os.unlink
+        real_renameat2 = safe_files._renameat2
+        assert real_renameat2 is not None
         boundary_journal = None
         injected = False
         restore_unlink_attempts = 0
 
         def interrupt_old_post_link_unlink(path, *args, dir_fd=None):
-            nonlocal boundary_journal, injected, restore_unlink_attempts
+            nonlocal restore_unlink_attempts
             name = os.fsdecode(path)
-            if not injected and name == ds.CLIP_MIGRATION_JOURNAL:
-                injected = True
-                unexpected.symlink_to(outside)
-                boundary_journal = journal_path.read_bytes()
             if name.endswith(".clip-migration.restore"):
                 restore_unlink_attempts += 1
                 raise OSError("injected old post-link temp unlink failure")
             return real_unlink(path, *args, dir_fd=dir_fd)
 
+        def inject_before_journal_quarantine(
+                source_fd, source_name, destination_fd, destination_name, flags):
+            nonlocal boundary_journal, injected
+            source = os.fsdecode(source_name)
+            destination = os.fsdecode(destination_name)
+            if (not injected and source == ds.CLIP_MIGRATION_JOURNAL
+                    and "safe-delete" in destination):
+                injected = True
+                unexpected.symlink_to(outside)
+                boundary_journal = journal_path.read_bytes()
+            return real_renameat2(
+                source_fd, source_name, destination_fd, destination_name, flags)
+
         with (
             patch.object(
                 ds.os, "unlink", side_effect=interrupt_old_post_link_unlink),
+            patch.object(
+                safe_files, "_renameat2",
+                side_effect=inject_before_journal_quarantine,
+            ),
             self.assertRaises((ValueError, safe_files.SafeFilesystemError)),
         ):
             self.migrate(project.name, apply=True)
@@ -1963,6 +2136,138 @@ class LegacyClipMigrationTests(unittest.TestCase):
         self.assertTrue(all(not stale.exists() for stale in stale_artifacts))
         self.assertEqual(
             [path.name for path in project.glob(".*clip-migration.restore")], [])
+
+    def test_restore_artifact_replacement_at_removal_boundary_is_preserved(self):
+        project = self.legacy_project()
+        journal_path = project / ds.CLIP_MIGRATION_JOURNAL
+
+        def interrupt(checkpoint):
+            if checkpoint == "journal-finalizing":
+                raise RuntimeError("injected interruption")
+
+        with (
+            patch.object(ds, "_migration_checkpoint", side_effect=interrupt),
+            self.assertRaisesRegex(RuntimeError, "interruption"),
+        ):
+            self.migrate(project.name, apply=True)
+
+        artifact = project / ("." + "a" * 32 + ".clip-migration.restore")
+        preserved = project / ".preserved-expected-artifact"
+        replacement = b"replacement artifact"
+        os.link(journal_path, artifact)
+        real_renameat2 = safe_files._renameat2
+        assert real_renameat2 is not None
+        injected = False
+
+        def replace_before_quarantine(
+                source_fd, source_name, destination_fd, destination_name, flags):
+            nonlocal injected
+            source = os.fsdecode(source_name)
+            destination = os.fsdecode(destination_name)
+            if (not injected and source == artifact.name
+                    and destination != artifact.name):
+                injected = True
+                os.rename(
+                    source, preserved.name,
+                    src_dir_fd=source_fd, dst_dir_fd=source_fd)
+                descriptor = os.open(
+                    source,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                    0o600,
+                    dir_fd=source_fd,
+                )
+                try:
+                    os.write(descriptor, replacement)
+                finally:
+                    os.close(descriptor)
+            return real_renameat2(
+                source_fd, source_name, destination_fd, destination_name, flags)
+
+        with (
+            patch.object(
+                safe_files, "_renameat2", side_effect=replace_before_quarantine),
+            self.assertRaisesRegex(
+                safe_files.SafeFilesystemError, "artifact identity changed"),
+        ):
+            result = self.migrate(project.name, apply=True)
+            self.fail(f"migration unexpectedly reported: {result}")
+
+        self.assertTrue(injected)
+        self.assertEqual(artifact.read_bytes(), replacement)
+        self.assertEqual(
+            (preserved.stat().st_dev, preserved.stat().st_ino),
+            (journal_path.stat().st_dev, journal_path.stat().st_ino),
+        )
+        self.assertEqual(
+            [entry.name for entry in project.iterdir()
+             if "safe-delete" in entry.name],
+            [],
+        )
+
+    def test_restore_temp_replacement_at_cleanup_boundary_is_preserved(self):
+        project = self.legacy_project()
+        journal_path = project / ds.CLIP_MIGRATION_JOURNAL
+        journal_path.write_bytes(b"canonical replacement")
+        preserved = project / ".preserved-expected-restore-temp"
+        replacement = b"replacement restore temp"
+        real_renameat2 = safe_files._renameat2
+        assert real_renameat2 is not None
+        injected = False
+        created_temporary = None
+
+        def replace_before_cleanup_quarantine(
+                source_fd, source_name, destination_fd, destination_name, flags):
+            nonlocal injected, created_temporary
+            source = os.fsdecode(source_name)
+            destination = os.fsdecode(destination_name)
+            if source.endswith(".clip-migration.restore"):
+                created_temporary = source
+                if (not injected
+                        and destination != ds.CLIP_MIGRATION_JOURNAL):
+                    injected = True
+                    os.rename(
+                        source, preserved.name,
+                        src_dir_fd=source_fd, dst_dir_fd=source_fd)
+                    descriptor = os.open(
+                        source,
+                        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                        0o600,
+                        dir_fd=source_fd,
+                    )
+                    try:
+                        os.write(descriptor, replacement)
+                    finally:
+                        os.close(descriptor)
+            return real_renameat2(
+                source_fd, source_name, destination_fd, destination_name, flags)
+
+        project_fd = os.open(
+            project,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            with (
+                patch.object(
+                    safe_files, "_renameat2",
+                    side_effect=replace_before_cleanup_quarantine,
+                ),
+                self.assertRaisesRegex(
+                    safe_files.SafeFilesystemError, "restore temp identity changed"),
+            ):
+                ds._restore_migration_journal(project_fd, b"expected restore temp")
+        finally:
+            os.close(project_fd)
+
+        self.assertTrue(injected)
+        self.assertIsNotNone(created_temporary)
+        assert created_temporary is not None
+        self.assertEqual(journal_path.read_bytes(), b"canonical replacement")
+        self.assertEqual((project / created_temporary).read_bytes(), replacement)
+        self.assertEqual(preserved.read_bytes(), b"expected restore temp")
+        self.assertEqual(
+            [entry.name for entry in project.iterdir()
+             if "safe-delete" in entry.name],
+            [],
+        )
 
     def test_rerun_preserves_same_content_separate_restore_named_file(self):
         project = self.legacy_project()
@@ -2091,30 +2396,40 @@ class LegacyClipMigrationTests(unittest.TestCase):
         project = self.legacy_project()
         journal_path = project / ds.CLIP_MIGRATION_JOURNAL
         replacement = b'{"replacement":true}\n'
-        real_unlink = os.unlink
+        real_renameat2 = safe_files._renameat2
+        assert real_renameat2 is not None
         replaced = False
 
-        def replace_after_journal_unlink(path, *args, dir_fd=None):
+        def replace_after_journal_quarantine(
+                source_fd, source_name, destination_fd, destination_name, flags):
             nonlocal replaced
-            result = real_unlink(path, *args, dir_fd=dir_fd)
-            if not replaced and os.fsdecode(path) == ds.CLIP_MIGRATION_JOURNAL:
+            result = real_renameat2(
+                source_fd, source_name, destination_fd, destination_name, flags)
+            source = os.fsdecode(source_name)
+            destination = os.fsdecode(destination_name)
+            if (not replaced and source == ds.CLIP_MIGRATION_JOURNAL
+                    and "safe-delete" in destination):
                 replaced = True
                 journal_path.write_bytes(replacement)
             return result
 
         with (
-            patch.object(ds.os, "unlink", side_effect=replace_after_journal_unlink),
+            patch.object(
+                safe_files, "_renameat2",
+                side_effect=replace_after_journal_quarantine,
+            ),
             self.assertRaises((ValueError, safe_files.SafeFilesystemError)),
         ):
             self.migrate(project.name, apply=True)
 
         self.assertTrue(replaced)
         self.assertEqual(journal_path.read_bytes(), replacement)
-        self.assertEqual(
-            [path.name for path in project.glob(".*clip-migration*")
-             if path.name != ds.CLIP_MIGRATION_JOURNAL],
-            [],
-        )
+        quarantines = [
+            path for path in project.iterdir() if "safe-delete" in path.name
+        ]
+        self.assertEqual(len(quarantines), 1)
+        self.assertEqual(json.loads(quarantines[0].read_bytes())["phase"],
+                         "finalizing")
 
     def test_replacement_journal_after_destination_validation_blocks_success(self):
         project = self.legacy_project()
@@ -2165,16 +2480,24 @@ class LegacyClipMigrationTests(unittest.TestCase):
 
         def unlink_then_interrupt(path, *args, dir_fd=None):
             nonlocal retained_journal, interrupted
-            if not interrupted and os.fsdecode(path) == ds.CLIP_MIGRATION_JOURNAL:
+            name = os.fsdecode(path)
+            if not interrupted and "safe-delete" in name:
                 interrupted = True
-                retained_journal = journal_path.read_bytes()
+                descriptor = os.open(
+                    name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=dir_fd)
+                try:
+                    retained_journal = os.read(descriptor, 1024 * 1024)
+                finally:
+                    os.close(descriptor)
                 real_unlink(path, *args, dir_fd=dir_fd)
                 raise OSError("interrupted after actual journal unlink")
             return real_unlink(path, *args, dir_fd=dir_fd)
 
         with (
             patch.object(ds.os, "unlink", side_effect=unlink_then_interrupt),
-            self.assertRaisesRegex(OSError, "interrupted after actual"),
+            self.assertRaisesRegex(
+                safe_files.SafeFilesystemError,
+                "quarantine cleanup could not be proven"),
         ):
             self.migrate(project.name, apply=True)
 
