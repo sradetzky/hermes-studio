@@ -463,6 +463,79 @@ class SafeFilesystemTests(unittest.TestCase):
         self.assertFalse(source.exists())
         self.assertEqual(destination.read_bytes(), b"source")
 
+    def test_atomic_move_at_uses_retained_parent_after_path_swap(self):
+        source = self.parent / "source.txt"
+        source.write_bytes(b"source")
+        source_identity = (source.stat().st_dev, source.stat().st_ino)
+        retained_identity = (self.parent.stat().st_dev, self.parent.stat().st_ino)
+        displaced = Path(self.temp.name) / "displaced-publication"
+        parent_fd = os.open(
+            self.parent,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        fsynced = []
+        try:
+            self.parent.rename(displaced)
+            self.parent.mkdir()
+            (self.parent / "replacement.txt").write_bytes(b"replacement")
+
+            def record_fsync(descriptor):
+                details = os.fstat(descriptor)
+                fsynced.append((details.st_dev, details.st_ino))
+
+            with patch.object(
+                    safe_files, "_fsync_directory", side_effect=record_fsync):
+                moved_identity = safe_files.atomic_move_no_replace_at(
+                    parent_fd, "source.txt", "destination.txt",
+                    expected_source_identity=source_identity)
+        finally:
+            os.close(parent_fd)
+
+        self.assertEqual(moved_identity, source_identity)
+        self.assertEqual(fsynced, [retained_identity])
+        self.assertFalse((displaced / "source.txt").exists())
+        self.assertEqual(
+            (displaced / "destination.txt").read_bytes(), b"source")
+        self.assertEqual(
+            (self.parent / "replacement.txt").read_bytes(), b"replacement")
+        self.assertFalse((self.parent / "destination.txt").exists())
+
+    def test_atomic_move_at_refuses_existing_target(self):
+        source = self.parent / "source.txt"
+        destination = self.parent / "destination.txt"
+        source.write_bytes(b"source")
+        destination.write_bytes(b"destination")
+        parent_fd = os.open(
+            self.parent,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            with self.assertRaises(FileExistsError):
+                safe_files.atomic_move_no_replace_at(
+                    parent_fd, source.name, destination.name)
+        finally:
+            os.close(parent_fd)
+
+        self.assertEqual(source.read_bytes(), b"source")
+        self.assertEqual(destination.read_bytes(), b"destination")
+
+    def test_atomic_move_at_fails_closed_without_renameat2(self):
+        source = self.parent / "source.txt"
+        source.write_bytes(b"source")
+        parent_fd = os.open(
+            self.parent,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            with (
+                patch.object(safe_files, "_renameat2", None),
+                self.assertRaises(safe_files.AtomicPublicationUnavailable),
+            ):
+                safe_files.atomic_move_no_replace_at(
+                    parent_fd, "source.txt", "destination.txt")
+        finally:
+            os.close(parent_fd)
+
+        self.assertEqual(source.read_bytes(), b"source")
+        self.assertFalse((self.parent / "destination.txt").exists())
+
     def test_rollback_quarantine_preserves_moved_original_and_replacement(self):
         source = self.parent / "source"
         source.mkdir()
@@ -1811,6 +1884,208 @@ class LegacyClipMigrationTests(unittest.TestCase):
         self.assertEqual(
             [path.name for path in project.glob(".*clip-migration*")], [])
         self.assertEqual(outside.read_bytes(), b"outside must remain untouched")
+
+    def test_atomic_restore_consumes_private_temp_and_resumes_cleanly(self):
+        project = self.legacy_project()
+        outside = Path(self.temp.name) / "outside-restore-interruption.txt"
+        outside.write_bytes(b"outside must remain untouched")
+        unexpected = project / "clips" / "clip-001" / "unexpected"
+        journal_path = project / ds.CLIP_MIGRATION_JOURNAL
+        real_unlink = os.unlink
+        boundary_journal = None
+        injected = False
+        restore_unlink_attempts = 0
+
+        def interrupt_old_post_link_unlink(path, *args, dir_fd=None):
+            nonlocal boundary_journal, injected, restore_unlink_attempts
+            name = os.fsdecode(path)
+            if not injected and name == ds.CLIP_MIGRATION_JOURNAL:
+                injected = True
+                unexpected.symlink_to(outside)
+                boundary_journal = journal_path.read_bytes()
+            if name.endswith(".clip-migration.restore"):
+                restore_unlink_attempts += 1
+                raise OSError("injected old post-link temp unlink failure")
+            return real_unlink(path, *args, dir_fd=dir_fd)
+
+        with (
+            patch.object(
+                ds.os, "unlink", side_effect=interrupt_old_post_link_unlink),
+            self.assertRaises((ValueError, safe_files.SafeFilesystemError)),
+        ):
+            self.migrate(project.name, apply=True)
+
+        self.assertTrue(injected)
+        self.assertIsNotNone(boundary_journal)
+        assert boundary_journal is not None
+        self.assertEqual(journal_path.read_bytes(), boundary_journal)
+        self.assertEqual(restore_unlink_attempts, 0)
+        self.assertEqual(
+            [path.name for path in project.glob(".*clip-migration.restore")], [])
+        self.assertEqual(outside.read_bytes(), b"outside must remain untouched")
+
+        unexpected.unlink()
+        report = self.migrate(project.name, apply=True)
+        self.assertEqual(report["projects"][0]["status"], "migrated")
+        self.assertFalse(journal_path.exists())
+        self.assertEqual(
+            [path.name for path in project.glob(".*clip-migration.restore")], [])
+        self.assertEqual(outside.read_bytes(), b"outside must remain untouched")
+
+    def test_rerun_removes_only_restore_hardlink_to_canonical_journal(self):
+        project = self.legacy_project()
+        journal_path = project / ds.CLIP_MIGRATION_JOURNAL
+
+        def interrupt(checkpoint):
+            if checkpoint == "journal-finalizing":
+                raise RuntimeError("injected interruption before finalization")
+
+        with (
+            patch.object(ds, "_migration_checkpoint", side_effect=interrupt),
+            self.assertRaisesRegex(RuntimeError, "before finalization"),
+        ):
+            self.migrate(project.name, apply=True)
+
+        stale_artifacts = [
+            project / ("." + character * 32 + ".clip-migration.restore")
+            for character in ("a", "e")
+        ]
+        for stale in stale_artifacts:
+            os.link(journal_path, stale)
+            self.assertEqual(
+                (journal_path.stat().st_dev, journal_path.stat().st_ino),
+                (stale.stat().st_dev, stale.stat().st_ino),
+            )
+
+        report = self.migrate(project.name, apply=True)
+        self.assertEqual(report["projects"][0]["status"], "migrated")
+        self.assertFalse(journal_path.exists())
+        self.assertTrue(all(not stale.exists() for stale in stale_artifacts))
+        self.assertEqual(
+            [path.name for path in project.glob(".*clip-migration.restore")], [])
+
+    def test_rerun_preserves_same_content_separate_restore_named_file(self):
+        project = self.legacy_project()
+        journal_path = project / ds.CLIP_MIGRATION_JOURNAL
+
+        def interrupt(checkpoint):
+            if checkpoint == "journal-finalizing":
+                raise RuntimeError("injected interruption before finalization")
+
+        with (
+            patch.object(ds, "_migration_checkpoint", side_effect=interrupt),
+            self.assertRaisesRegex(RuntimeError, "before finalization"),
+        ):
+            self.migrate(project.name, apply=True)
+
+        journal_bytes = journal_path.read_bytes()
+        user_file = project / ("." + "b" * 32 + ".clip-migration.restore")
+        user_bytes = journal_bytes
+        user_file.write_bytes(user_bytes)
+
+        with self.assertRaisesRegex(
+                safe_files.SafeFilesystemError, "unrecognized"):
+            self.migrate(project.name, apply=True)
+
+        self.assertEqual(journal_path.read_bytes(), journal_bytes)
+        self.assertEqual(user_file.read_bytes(), user_bytes)
+
+    def test_rerun_preserves_symlink_fifo_and_unrecognized_restore_names(self):
+        cases = ("symlink", "fifo", "unrecognized")
+        for index, case in enumerate(cases):
+            with self.subTest(case=case):
+                project = self.legacy_project(
+                    f"2026-08-23_restore-artifact-{index}")
+                journal_path = project / ds.CLIP_MIGRATION_JOURNAL
+
+                def interrupt(checkpoint):
+                    if checkpoint == "journal-finalizing":
+                        raise RuntimeError("injected interruption")
+
+                with (
+                    patch.object(
+                        ds, "_migration_checkpoint", side_effect=interrupt),
+                    self.assertRaisesRegex(RuntimeError, "interruption"),
+                ):
+                    self.migrate(project.name, apply=True)
+
+                if case == "unrecognized":
+                    artifact = project / (
+                        "." + "A" * 32 + ".clip-migration.restore")
+                    os.link(journal_path, artifact)
+                    report = self.migrate(project.name, apply=True)
+                    self.assertEqual(
+                        report["projects"][0]["status"], "migrated")
+                    self.assertTrue(artifact.is_file())
+                    continue
+
+                artifact = project / (
+                    "." + str(index) * 32 + ".clip-migration.restore")
+                if case == "symlink":
+                    artifact.symlink_to(journal_path)
+                else:
+                    os.mkfifo(artifact)
+                before = artifact.lstat()
+                with self.assertRaisesRegex(
+                        safe_files.SafeFilesystemError, "unrecognized"):
+                    self.migrate(project.name, apply=True)
+                after = artifact.lstat()
+                self.assertEqual(
+                    (after.st_mode, after.st_dev, after.st_ino),
+                    (before.st_mode, before.st_dev, before.st_ino),
+                )
+                self.assertTrue(journal_path.is_file())
+
+    def test_rerun_preserves_artifact_when_canonical_journal_was_replaced(self):
+        project = self.legacy_project()
+        journal_path = project / ds.CLIP_MIGRATION_JOURNAL
+
+        def interrupt(checkpoint):
+            if checkpoint == "journal-finalizing":
+                raise RuntimeError("injected interruption")
+
+        with (
+            patch.object(ds, "_migration_checkpoint", side_effect=interrupt),
+            self.assertRaisesRegex(RuntimeError, "interruption"),
+        ):
+            self.migrate(project.name, apply=True)
+
+        journal_bytes = journal_path.read_bytes()
+        stale = project / ("." + "c" * 32 + ".clip-migration.restore")
+        os.link(journal_path, stale)
+        original_identity = (stale.stat().st_dev, stale.stat().st_ino)
+        replacement = project / ".replacement-journal"
+        replacement.write_bytes(journal_bytes)
+        os.replace(replacement, journal_path)
+
+        with self.assertRaisesRegex(
+                safe_files.SafeFilesystemError, "unrecognized"):
+            self.migrate(project.name, apply=True)
+
+        self.assertEqual(stale.read_bytes(), journal_bytes)
+        self.assertEqual(journal_path.read_bytes(), journal_bytes)
+        self.assertEqual(
+            (stale.stat().st_dev, stale.stat().st_ino), original_identity)
+        self.assertNotEqual(
+            (journal_path.stat().st_dev, journal_path.stat().st_ino),
+            original_identity,
+        )
+
+    def test_completed_project_restore_artifact_fails_without_writes(self):
+        project = self.legacy_project()
+        self.migrate(project.name, apply=True)
+        (project / ".project.lock").unlink()
+        artifact = project / ("." + "d" * 32 + ".clip-migration.restore")
+        artifact.write_bytes(b"must remain untouched")
+        before = self.metadata_snapshot(project)
+
+        with self.assertRaisesRegex(
+                safe_files.SafeFilesystemError, "restore artifact remains"):
+            self.migrate(project.name, apply=True)
+
+        self.assertEqual(self.metadata_snapshot(project), before)
+        self.assertEqual(artifact.read_bytes(), b"must remain untouched")
+        self.assertFalse((project / ".project.lock").exists())
 
     def test_unlink_boundary_replacement_journal_is_never_overwritten(self):
         project = self.legacy_project()

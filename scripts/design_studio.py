@@ -50,6 +50,7 @@ from webapp.clip_store import ClipStore
 from webapp.safe_files import (
     SafeFilesystemError,
     atomic_move_no_replace,
+    atomic_move_no_replace_at,
     atomic_publish_directory,
     copy_opened_file,
     open_directory,
@@ -82,6 +83,8 @@ SPECIALIST_TOOLSETS = {
 }
 CLIP_STORE = ClipStore()
 CLIP_MIGRATION_JOURNAL = ".clip-migration.json"
+CLIP_MIGRATION_RESTORE_RE = re.compile(
+    r"\.[0-9a-f]{32}\.clip-migration\.restore")
 CLIP_MIGRATION_SCHEMA_VERSION = 1
 CLIP_MIGRATION_MAPPINGS = (
     ("current_prompt.txt", "clips/clip-001/current_prompt.txt", False, "file"),
@@ -485,6 +488,8 @@ def _assess_migration_project(project: Path) -> tuple[dict, dict | None]:
     journal_kind = _entry_kind(project / CLIP_MIGRATION_JOURNAL)
     if journal_kind not in {"missing", "file"}:
         raise ValueError("clip migration journal is unsafe")
+    if journal_kind == "missing":
+        _require_no_migration_restore_artifacts_for_project(project)
     manifest_kind = _entry_kind(project / "project.json")
     if manifest_kind not in {"missing", "file"}:
         raise ValueError("project manifest is unsafe")
@@ -1337,11 +1342,177 @@ def _validate_completed_migration(project: Path) -> None:
                     os.close(descriptor)
 
 
+def _migration_restore_names(project_fd: int) -> list[str]:
+    return sorted(
+        name for name in _migration_directory_names(
+            project_fd, label="migration project")
+        if CLIP_MIGRATION_RESTORE_RE.fullmatch(name))
+
+
+def _require_no_migration_restore_artifacts(project_fd: int) -> None:
+    if _migration_restore_names(project_fd):
+        raise SafeFilesystemError(
+            "clip migration restore artifact remains")
+
+
+def _require_no_migration_restore_artifacts_for_project(project: Path) -> None:
+    """Reject recognized restore artifacts through a retained project fd."""
+    with open_directory(project.parent) as parent_fd:
+        project_fd = None
+        try:
+            project_fd = _open_migration_directory(
+                parent_fd, project.name, label="migration project")
+            _require_no_migration_restore_artifacts(project_fd)
+            verify_absolute_directory_identity(
+                project.parent, parent_fd, label="projects parent")
+            _verify_migration_directory_identity(
+                parent_fd, project.name, project_fd,
+                label="migration project")
+        finally:
+            if project_fd is not None:
+                os.close(project_fd)
+
+
+def _cleanup_migration_restore_artifacts(project: Path) -> None:
+    """Remove only old restore hardlinks to the retained canonical journal."""
+    with open_directory(project.parent) as parent_fd:
+        project_fd = journal_fd = None
+        try:
+            project_fd = _open_migration_directory(
+                parent_fd, project.name, label="migration project")
+            names = _migration_restore_names(project_fd)
+            if not names:
+                return
+
+            try:
+                journal_named = os.stat(
+                    CLIP_MIGRATION_JOURNAL, dir_fd=project_fd,
+                    follow_symlinks=False)
+            except OSError as exc:
+                raise SafeFilesystemError(
+                    "restore artifacts exist without a safe migration journal") from exc
+            if not stat.S_ISREG(journal_named.st_mode):
+                raise SafeFilesystemError(
+                    "restore artifacts exist without a safe migration journal")
+            journal_fd, journal_opened = _open_migration_regular_file(
+                project_fd, CLIP_MIGRATION_JOURNAL,
+                label="clip migration journal")
+            journal_identity = (journal_opened.st_dev, journal_opened.st_ino)
+            if journal_identity != (journal_named.st_dev, journal_named.st_ino):
+                raise SafeFilesystemError(
+                    "clip migration journal changed while inspecting restore artifacts")
+            journal_bytes = _read_migration_descriptor_bytes(journal_fd)
+            journal_expected = journal_opened
+
+            for name in names:
+                artifact_fd = None
+                try:
+                    named = os.stat(
+                        name, dir_fd=project_fd, follow_symlinks=False)
+                    if (not stat.S_ISREG(named.st_mode)
+                            or (named.st_dev, named.st_ino) != journal_identity):
+                        raise SafeFilesystemError(
+                            "unrecognized clip migration restore artifact")
+                    artifact_fd, opened = _open_migration_regular_file(
+                        project_fd, name,
+                        label="clip migration restore artifact")
+                    retained = os.fstat(artifact_fd)
+                    if ((opened.st_dev, opened.st_ino) != journal_identity
+                            or (retained.st_dev,
+                                retained.st_ino) != journal_identity):
+                        raise SafeFilesystemError(
+                            "clip migration restore artifact changed")
+                    if (_read_migration_descriptor_bytes(artifact_fd)
+                            != journal_bytes):
+                        raise SafeFilesystemError(
+                            "clip migration restore artifact changed")
+                    _verify_migration_journal_descriptor(
+                        project_fd, journal_fd, journal_expected,
+                        journal_bytes)
+                    current = os.stat(
+                        name, dir_fd=project_fd, follow_symlinks=False)
+                    if (not stat.S_ISREG(current.st_mode)
+                            or (current.st_dev, current.st_ino) != journal_identity):
+                        raise SafeFilesystemError(
+                            "clip migration restore artifact changed")
+                    os.unlink(name, dir_fd=project_fd)
+                    os.fsync(project_fd)
+                    journal_expected = os.fstat(journal_fd)
+                except SafeFilesystemError:
+                    raise
+                except OSError as exc:
+                    raise SafeFilesystemError(
+                        "could not remove clip migration restore artifact") from exc
+                finally:
+                    if artifact_fd is not None:
+                        os.close(artifact_fd)
+
+            journal_after = os.fstat(journal_fd)
+            if (not stat.S_ISREG(journal_after.st_mode)
+                    or (journal_after.st_dev,
+                        journal_after.st_ino) != journal_identity):
+                raise SafeFilesystemError(
+                    "clip migration journal changed while removing restore artifacts")
+            _verify_migration_journal_descriptor(
+                project_fd, journal_fd, journal_after, journal_bytes)
+            _require_no_migration_restore_artifacts(project_fd)
+            verify_absolute_directory_identity(
+                project.parent, parent_fd, label="projects parent")
+            _verify_migration_directory_identity(
+                parent_fd, project.name, project_fd,
+                label="migration project")
+        finally:
+            for descriptor in (journal_fd, project_fd):
+                if descriptor is not None:
+                    os.close(descriptor)
+
+
+def _remove_migration_restore_temp(
+        project_fd: int, temporary: str,
+        expected_identity: tuple[int, int]) -> None:
+    """Remove only the exact private regular file created for restoration."""
+    try:
+        named = os.stat(temporary, dir_fd=project_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        raise SafeFilesystemError(
+            "could not inspect clip migration restore temp") from exc
+    if (not stat.S_ISREG(named.st_mode)
+            or (named.st_dev, named.st_ino) != expected_identity):
+        raise SafeFilesystemError("clip migration restore temp changed")
+
+    descriptor = None
+    try:
+        descriptor, opened = _open_migration_regular_file(
+            project_fd, temporary, label="clip migration restore temp")
+        retained = os.fstat(descriptor)
+        if ((opened.st_dev, opened.st_ino) != expected_identity
+                or (retained.st_dev, retained.st_ino) != expected_identity):
+            raise SafeFilesystemError("clip migration restore temp changed")
+        current = os.stat(
+            temporary, dir_fd=project_fd, follow_symlinks=False)
+        if (not stat.S_ISREG(current.st_mode)
+                or (current.st_dev, current.st_ino) != expected_identity):
+            raise SafeFilesystemError("clip migration restore temp changed")
+        os.unlink(temporary, dir_fd=project_fd)
+        os.fsync(project_fd)
+    except (SafeFilesystemError, FileNotFoundError):
+        raise
+    except OSError as exc:
+        raise SafeFilesystemError(
+            "could not remove clip migration restore temp") from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
 def _restore_migration_journal(project_fd: int, content: bytes) -> None:
     """Atomically restore journal bytes without replacing a new journal."""
     temporary = f".{uuid.uuid4().hex}.clip-migration.restore"
     descriptor = None
-    linked = False
+    temporary_identity = None
+    published = False
     try:
         descriptor = os.open(
             temporary,
@@ -1349,35 +1520,37 @@ def _restore_migration_journal(project_fd: int, content: bytes) -> None:
             0o600,
             dir_fd=project_fd,
         )
+        details = os.fstat(descriptor)
+        if not stat.S_ISREG(details.st_mode):
+            raise SafeFilesystemError("clip migration restore temp is unsafe")
+        temporary_identity = (details.st_dev, details.st_ino)
         view = memoryview(content)
         while view:
             written = os.write(descriptor, view)
             view = view[written:]
         os.fsync(descriptor)
-        os.close(descriptor)
-        descriptor = None
         try:
-            os.link(
-                temporary, CLIP_MIGRATION_JOURNAL,
-                src_dir_fd=project_fd, dst_dir_fd=project_fd,
-                follow_symlinks=False)
+            restored_identity = atomic_move_no_replace_at(
+                project_fd, temporary, CLIP_MIGRATION_JOURNAL,
+                expected_source_identity=temporary_identity)
         except FileExistsError as exc:
             raise SafeFilesystemError(
                 "replacement clip migration journal was preserved") from exc
-        linked = True
-        os.unlink(temporary, dir_fd=project_fd)
-        os.fsync(project_fd)
+        if restored_identity != temporary_identity:
+            raise SafeFilesystemError(
+                "restored clip migration journal identity changed")
+        published = True
+    except SafeFilesystemError:
+        raise
     except OSError as exc:
         raise SafeFilesystemError(
             "could not restore clip migration journal") from exc
     finally:
         if descriptor is not None:
             os.close(descriptor)
-        if not linked:
-            try:
-                os.unlink(temporary, dir_fd=project_fd)
-            except FileNotFoundError:
-                pass
+        if not published and temporary_identity is not None:
+            _remove_migration_restore_temp(
+                project_fd, temporary, temporary_identity)
 
 
 def _finalize_migration(project: Path, journal: dict) -> None:
@@ -1437,6 +1610,7 @@ def _finalize_migration(project: Path, journal: dict) -> None:
                     require_all_targets=True)
                 _verify_migration_descriptor_chain(
                     project, parent_fd, project_fd, clips_fd, clip_fd)
+                _require_no_migration_restore_artifacts(project_fd)
                 # This canonical no-follow absence check must remain last.
                 _require_migration_journal_absent(project_fd)
             except BaseException:
@@ -1504,6 +1678,8 @@ def _apply_migration_project(project: Path) -> dict:
         if report["status"] == "already-migrated":
             return report
         assert journal is not None
+        if report["status"] == "resumable":
+            _cleanup_migration_restore_artifacts(project)
         journal_exists = _entry_kind(
             project / CLIP_MIGRATION_JOURNAL) == "file"
         if not journal_exists:

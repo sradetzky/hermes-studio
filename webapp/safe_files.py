@@ -256,99 +256,129 @@ def copy_opened_file(opened: OpenedRegularFile, target: Path) -> None:
     )
 
 
+def _atomic_move_no_replace_at(
+        source_parent_fd: int, source_name: str,
+        destination_parent_fd: int, destination_name: str, *,
+        source_label: Path | str, destination_label: Path | str,
+        expected_source_identity: tuple[int, int] | None = None,
+) -> tuple[int, int]:
+    """Rename a retained-parent entry without following or replacing names."""
+    if _renameat2 is None:
+        raise AtomicPublicationUnavailable(
+            "renameat2(RENAME_NOREPLACE) is unavailable")
+
+    source_name = _component(source_name, "source entry")
+    destination_name = _component(destination_name, "destination entry")
+    try:
+        details = os.stat(
+            source_name, dir_fd=source_parent_fd, follow_symlinks=False)
+        source_fd = None
+        destination_fd = None
+        try:
+            if stat.S_ISDIR(details.st_mode):
+                source_fd = _open_directory(
+                    source_name, dir_fd=source_parent_fd)
+
+                def open_destination() -> int:
+                    return _open_directory(
+                        destination_name, dir_fd=destination_parent_fd)
+            elif stat.S_ISREG(details.st_mode):
+                source_fd = os.open(
+                    source_name, _FILE_FLAGS, dir_fd=source_parent_fd)
+                if not stat.S_ISREG(os.fstat(source_fd).st_mode):
+                    raise SafeFilesystemError(
+                        f"move source is not regular: {source_label}")
+
+                def open_destination() -> int:
+                    descriptor = os.open(
+                        destination_name, _FILE_FLAGS,
+                        dir_fd=destination_parent_fd)
+                    if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                        os.close(descriptor)
+                        raise SafeFilesystemError(
+                            f"move target is not regular: {destination_label}")
+                    return descriptor
+            else:
+                raise SafeFilesystemError(
+                    f"move source is not regular: {source_label}")
+
+            source_identity = _identity(source_fd)
+            if source_identity != (details.st_dev, details.st_ino):
+                raise SafeFilesystemError("move source changed while opening")
+            if (expected_source_identity is not None
+                    and source_identity != expected_source_identity):
+                raise SafeFilesystemError(
+                    "move source identity does not match the expected entry")
+            if os.fstat(destination_parent_fd).st_dev != details.st_dev:
+                raise SafeFilesystemError(
+                    "move source and destination must share a filesystem")
+
+            result = _renameat2(
+                source_parent_fd,
+                os.fsencode(source_name),
+                destination_parent_fd,
+                os.fsencode(destination_name),
+                _RENAME_NOREPLACE,
+            )
+            if result != 0:
+                error = ctypes.get_errno()
+                if error in {errno.EEXIST, errno.ENOTEMPTY}:
+                    raise FileExistsError(
+                        error, os.strerror(error), destination_label)
+                if error in {errno.ENOSYS, errno.EINVAL, errno.ENOTSUP}:
+                    raise AtomicPublicationUnavailable(
+                        "renameat2(RENAME_NOREPLACE) is unavailable")
+                raise OSError(error, os.strerror(error), destination_label)
+
+            destination_fd = open_destination()
+            if _identity(destination_fd) != source_identity:
+                raise SafeFilesystemError(
+                    "move target identity does not match the source")
+            source_parent_identity = _identity(source_parent_fd)
+            destination_parent_identity = _identity(destination_parent_fd)
+            _fsync_directory(source_parent_fd)
+            if destination_parent_identity != source_parent_identity:
+                _fsync_directory(destination_parent_fd)
+            return source_identity
+        finally:
+            if destination_fd is not None:
+                os.close(destination_fd)
+            if source_fd is not None:
+                os.close(source_fd)
+    except (FileNotFoundError, FileExistsError, SafeFilesystemError,
+            AtomicPublicationUnavailable):
+        raise
+    except OSError as exc:
+        raise SafeFilesystemError(
+            f"move entry is unsafe: {source_label} -> {destination_label}") from exc
+
+
+def atomic_move_no_replace_at(
+        parent_fd: int, source_name: str, destination_name: str, *,
+        expected_source_identity: tuple[int, int] | None = None,
+) -> tuple[int, int]:
+    """Atomically move safe components beneath one retained parent descriptor."""
+    return _atomic_move_no_replace_at(
+        parent_fd, source_name, parent_fd, destination_name,
+        source_label=source_name, destination_label=destination_name,
+        expected_source_identity=expected_source_identity,
+    )
+
+
 def atomic_move_no_replace(
         source: Path, destination: Path) -> tuple[int, int]:
     """Rename one regular file or directory without following or replacing."""
     source = Path(source)
     destination = Path(destination)
-    if _renameat2 is None:
-        raise AtomicPublicationUnavailable(
-            "renameat2(RENAME_NOREPLACE) is unavailable")
-
     source_parent_fd = _open_absolute_directory(source.parent)
     try:
         destination_parent_fd = _open_absolute_directory(destination.parent)
         try:
-            source_name = _component(source.name, "source entry")
-            destination_name = _component(destination.name, "destination entry")
-            details = os.stat(
-                source_name, dir_fd=source_parent_fd, follow_symlinks=False)
-            source_fd = None
-            destination_fd = None
-            try:
-                if stat.S_ISDIR(details.st_mode):
-                    source_fd = _open_directory(
-                        source_name, dir_fd=source_parent_fd)
-
-                    def open_destination() -> int:
-                        return _open_directory(
-                            destination_name, dir_fd=destination_parent_fd)
-                elif stat.S_ISREG(details.st_mode):
-                    source_fd = os.open(
-                        source_name, _FILE_FLAGS, dir_fd=source_parent_fd)
-                    if not stat.S_ISREG(os.fstat(source_fd).st_mode):
-                        raise SafeFilesystemError(
-                            f"move source is not regular: {source}")
-
-                    def open_destination() -> int:
-                        descriptor = os.open(
-                            destination_name, _FILE_FLAGS,
-                            dir_fd=destination_parent_fd)
-                        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
-                            os.close(descriptor)
-                            raise SafeFilesystemError(
-                                f"move target is not regular: {destination}")
-                        return descriptor
-                else:
-                    raise SafeFilesystemError(
-                        f"move source is not regular: {source}")
-
-                source_identity = _identity(source_fd)
-                if source_identity != (details.st_dev, details.st_ino):
-                    raise SafeFilesystemError("move source changed while opening")
-                if os.fstat(destination_parent_fd).st_dev != details.st_dev:
-                    raise SafeFilesystemError(
-                        "move source and destination must share a filesystem")
-
-                result = _renameat2(
-                    source_parent_fd,
-                    os.fsencode(source_name),
-                    destination_parent_fd,
-                    os.fsencode(destination_name),
-                    _RENAME_NOREPLACE,
-                )
-                if result != 0:
-                    error = ctypes.get_errno()
-                    if error in {errno.EEXIST, errno.ENOTEMPTY}:
-                        raise FileExistsError(
-                            error, os.strerror(error), destination)
-                    if error in {
-                            errno.ENOSYS, errno.EINVAL, errno.ENOTSUP}:
-                        raise AtomicPublicationUnavailable(
-                            "renameat2(RENAME_NOREPLACE) is unavailable")
-                    raise OSError(error, os.strerror(error), destination)
-
-                destination_fd = open_destination()
-                if _identity(destination_fd) != source_identity:
-                    raise SafeFilesystemError(
-                        "move target identity does not match the source")
-                source_parent_identity = _identity(source_parent_fd)
-                destination_parent_identity = _identity(destination_parent_fd)
-                _fsync_directory(source_parent_fd)
-                if destination_parent_identity != source_parent_identity:
-                    _fsync_directory(destination_parent_fd)
-                return source_identity
-            finally:
-                if destination_fd is not None:
-                    os.close(destination_fd)
-                if source_fd is not None:
-                    os.close(source_fd)
-        except (FileNotFoundError, FileExistsError, SafeFilesystemError,
-                AtomicPublicationUnavailable):
-            raise
-        except OSError as exc:
-            raise SafeFilesystemError(
-                f"move entry is unsafe: {source} -> {destination}") from exc
+            return _atomic_move_no_replace_at(
+                source_parent_fd, source.name,
+                destination_parent_fd, destination.name,
+                source_label=source, destination_label=destination,
+            )
         finally:
             os.close(destination_parent_fd)
     finally:
