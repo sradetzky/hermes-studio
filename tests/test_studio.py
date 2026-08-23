@@ -1710,6 +1710,87 @@ class LegacyClipMigrationTests(unittest.TestCase):
         self.assertEqual(report["projects"][0]["status"], "migrated")
         self.assertFalse((project / ds.CLIP_MIGRATION_JOURNAL).exists())
 
+    def test_unlink_boundary_injection_restores_exact_journal_and_resumes(self):
+        project = self.legacy_project()
+        outside = Path(self.temp.name) / "outside-injected-at-unlink.txt"
+        outside.write_bytes(b"outside must remain untouched")
+        unexpected = project / "clips" / "clip-001" / "unexpected"
+        journal_path = project / ds.CLIP_MIGRATION_JOURNAL
+        real_unlink = os.unlink
+        boundary_journal = None
+        injected = False
+
+        def inject_before_journal_unlink(path, *args, dir_fd=None):
+            nonlocal boundary_journal, injected
+            if not injected and os.fsdecode(path) == ds.CLIP_MIGRATION_JOURNAL:
+                injected = True
+                unexpected.symlink_to(outside)
+                boundary_journal = journal_path.read_bytes()
+            return real_unlink(path, *args, dir_fd=dir_fd)
+
+        with (
+            patch.object(ds.os, "unlink", side_effect=inject_before_journal_unlink),
+            self.assertRaises((ValueError, safe_files.SafeFilesystemError)),
+        ):
+            self.migrate(project.name, apply=True)
+
+        self.assertTrue(injected)
+        self.assertIsNotNone(boundary_journal)
+        assert boundary_journal is not None
+        self.assertTrue(unexpected.is_symlink())
+        self.assertEqual(outside.read_bytes(), b"outside must remain untouched")
+        self.assertEqual(journal_path.read_bytes(), boundary_journal)
+        restored = json.loads(boundary_journal)
+        self.assertEqual(restored["phase"], "manifest_published")
+        self.assertEqual(
+            restored["completed"],
+            [mapping["source"] for mapping in restored["mappings"]],
+        )
+        self.assertEqual(json.loads((project / "project.json").read_bytes()),
+                         restored["manifest"])
+        self.assertEqual(
+            [path.name for path in project.glob(".*clip-migration*")
+             if path.name != ds.CLIP_MIGRATION_JOURNAL],
+            [],
+        )
+
+        unexpected.unlink()
+        report = self.migrate(project.name, apply=True)
+        self.assertEqual(report["projects"][0]["status"], "migrated")
+        self.assertFalse(journal_path.exists())
+        self.assertEqual(
+            [path.name for path in project.glob(".*clip-migration*")], [])
+        self.assertEqual(outside.read_bytes(), b"outside must remain untouched")
+
+    def test_unlink_boundary_replacement_journal_is_never_overwritten(self):
+        project = self.legacy_project()
+        journal_path = project / ds.CLIP_MIGRATION_JOURNAL
+        replacement = b'{"replacement":true}\n'
+        real_unlink = os.unlink
+        replaced = False
+
+        def replace_after_journal_unlink(path, *args, dir_fd=None):
+            nonlocal replaced
+            result = real_unlink(path, *args, dir_fd=dir_fd)
+            if not replaced and os.fsdecode(path) == ds.CLIP_MIGRATION_JOURNAL:
+                replaced = True
+                journal_path.write_bytes(replacement)
+            return result
+
+        with (
+            patch.object(ds.os, "unlink", side_effect=replace_after_journal_unlink),
+            self.assertRaises((ValueError, safe_files.SafeFilesystemError)),
+        ):
+            self.migrate(project.name, apply=True)
+
+        self.assertTrue(replaced)
+        self.assertEqual(journal_path.read_bytes(), replacement)
+        self.assertEqual(
+            [path.name for path in project.glob(".*clip-migration*")
+             if path.name != ds.CLIP_MIGRATION_JOURNAL],
+            [],
+        )
+
     def test_destination_parent_swap_during_inventory_fails_closed_and_resumes(self):
         project = self.legacy_project()
         outside = Path(self.temp.name) / "outside-swapped-clips"

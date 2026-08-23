@@ -601,22 +601,6 @@ def _atomic_json_file(project: Path, filename: str, value: dict, *,
         os.close(project_fd)
 
 
-def _remove_regular_file(project: Path, filename: str) -> None:
-    with open_regular_file(project / filename) as opened:
-        expected = opened.identity
-    project_fd = os.open(
-        project, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
-    try:
-        current = os.stat(filename, dir_fd=project_fd, follow_symlinks=False)
-        if ((current.st_dev, current.st_ino) != expected
-                or not stat.S_ISREG(current.st_mode)):
-            raise SafeFilesystemError(f"file changed before removal: {filename}")
-        os.unlink(filename, dir_fd=project_fd)
-        os.fsync(project_fd)
-    finally:
-        os.close(project_fd)
-
-
 _MIGRATION_DIRECTORY_FLAGS = (
     os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
 
@@ -845,150 +829,301 @@ def _validate_migration_inventory_directory(
         raise SafeFilesystemError(f"{label} changed during validation")
 
 
-def _validate_migration_destination_tree(
-        project: Path, journal: dict, *, require_all_targets: bool = False) -> None:
-    """Validate the exact destination tree through retained no-follow fds."""
-    with open_directory(project) as project_fd:
-        project_details = os.fstat(project_fd)
-        project_identity = (project_details.st_dev, project_details.st_ino)
-        clips_fd = _open_migration_directory(
-            project_fd, "clips", label="clips migration destination")
-        clip_fd = None
-        try:
-            clip_fd = _open_migration_directory(
-                clips_fd, "clip-001",
-                label="default clip migration destination")
-            clips_before = os.fstat(clips_fd)
-            clip_before = os.fstat(clip_fd)
-            _verify_migration_directory_identity(
-                project_fd, "clips", clips_fd,
-                label="clips migration destination")
-            _verify_migration_directory_identity(
-                clips_fd, "clip-001", clip_fd,
-                label="default clip migration destination")
-            if _migration_directory_names(
-                    clips_fd, label="clips migration destination") != {"clip-001"}:
-                raise SafeFilesystemError(
-                    "clips migration destination contains unexpected entries")
+def _validate_migration_destination_descriptors(
+        project_fd: int, clips_fd: int, clip_fd: int, journal: dict, *,
+        require_all_targets: bool = False) -> None:
+    """Validate the exact destination through retained no-follow descriptors."""
+    project_before = os.fstat(project_fd)
+    clips_before = os.fstat(clips_fd)
+    clip_before = os.fstat(clip_fd)
+    try:
+        _verify_migration_directory_identity(
+            project_fd, "clips", clips_fd,
+            label="clips migration destination")
+        _verify_migration_directory_identity(
+            clips_fd, "clip-001", clip_fd,
+            label="default clip migration destination")
+        if _migration_directory_names(
+                clips_fd, label="clips migration destination") != {"clip-001"}:
+            raise SafeFilesystemError(
+                "clips migration destination contains unexpected entries")
 
-            allowed = {
-                Path(mapping["target"]).name: mapping
-                for mapping in journal["mappings"] if mapping["present"]
-            }
-            actual = _migration_directory_names(
-                clip_fd, label="default clip migration destination")
-            unexpected = actual - set(allowed)
-            if unexpected:
-                raise SafeFilesystemError(
-                    "default clip migration destination contains unexpected entries")
-            required = {
-                Path(mapping["target"]).name
-                for mapping in journal["mappings"]
-                if mapping["present"] and (
-                    require_all_targets
-                    or mapping["source"] in journal["completed"]
-                    or journal["phase"] in {"targets_verified", "manifest_published"})
-            }
-            if not required <= actual:
-                raise SafeFilesystemError(
-                    "default clip migration destination is missing verified entries")
+        allowed = {
+            Path(mapping["target"]).name: mapping
+            for mapping in journal["mappings"] if mapping["present"]
+        }
+        actual = _migration_directory_names(
+            clip_fd, label="default clip migration destination")
+        if actual - set(allowed):
+            raise SafeFilesystemError(
+                "default clip migration destination contains unexpected entries")
+        required = {
+            Path(mapping["target"]).name
+            for mapping in journal["mappings"]
+            if mapping["present"] and (
+                require_all_targets
+                or mapping["source"] in journal["completed"]
+                or journal["phase"] in {"targets_verified", "manifest_published"})
+        }
+        if not required <= actual:
+            raise SafeFilesystemError(
+                "default clip migration destination is missing verified entries")
 
-            retained_targets = {}
-            for name in sorted(actual):
-                mapping = allowed[name]
-                inventory = mapping["inventory"]
-                if mapping["kind"] == "file":
-                    if (inventory["directories"]
-                            or len(inventory["files"]) != 1
-                            or inventory["files"][0]["relative_path"] != "."):
-                        raise SafeFilesystemError(
-                            "migration file inventory is invalid")
-                    retained_targets[name] = (
-                        "file",
-                        _validate_migration_file_descriptor(
-                            clip_fd, name, inventory["files"][0],
-                            label=f"default clip migration destination/{name}"),
-                    )
-                else:
-                    try:
-                        before_name = os.stat(
-                            name, dir_fd=clip_fd, follow_symlinks=False)
-                    except OSError as exc:
-                        raise SafeFilesystemError(
-                            f"migration target is unsafe: {name}") from exc
-                    if not stat.S_ISDIR(before_name.st_mode):
-                        raise SafeFilesystemError(
-                            f"migration target is unsafe: {name}")
-                    target_fd = _open_migration_directory(
-                        clip_fd, name, label=f"migration target {name}")
-                    try:
-                        identity = (before_name.st_dev, before_name.st_ino)
-                        retained = os.fstat(target_fd)
-                        if (retained.st_dev, retained.st_ino) != identity:
-                            raise SafeFilesystemError(
-                                f"migration target changed while opening: {name}")
-                        tree = _migration_inventory_tree(inventory)
-                        _validate_migration_inventory_directory(
-                            target_fd, tree, label=f"migration target {name}")
-                        _verify_migration_directory_identity(
-                            clip_fd, name, target_fd,
-                            label=f"migration target {name}")
-                        after = os.fstat(target_fd)
-                        if (_migration_stat_signature(after)
-                                != _migration_stat_signature(retained)):
-                            raise SafeFilesystemError(
-                                f"migration target changed during validation: {name}")
-                        retained_targets[name] = (
-                            "directory", _migration_stat_signature(after))
-                    finally:
-                        os.close(target_fd)
+        retained_targets = {}
+        for name in sorted(actual):
+            mapping = allowed[name]
+            inventory = mapping["inventory"]
+            if mapping["kind"] == "file":
+                if (inventory["directories"]
+                        or len(inventory["files"]) != 1
+                        or inventory["files"][0]["relative_path"] != "."):
+                    raise SafeFilesystemError("migration file inventory is invalid")
+                retained_targets[name] = (
+                    "file",
+                    _validate_migration_file_descriptor(
+                        clip_fd, name, inventory["files"][0],
+                        label=f"default clip migration destination/{name}"),
+                )
+                continue
 
-            if _migration_directory_names(
-                    clip_fd, label="default clip migration destination") != actual:
-                raise SafeFilesystemError(
-                    "default clip migration destination changed during validation")
-            for name, (kind, signature) in retained_targets.items():
-                current = os.stat(name, dir_fd=clip_fd, follow_symlinks=False)
-                expected_type = stat.S_ISREG if kind == "file" else stat.S_ISDIR
-                if (not expected_type(current.st_mode)
-                        or _migration_stat_signature(current) != signature):
+            before_name = os.stat(name, dir_fd=clip_fd, follow_symlinks=False)
+            if not stat.S_ISDIR(before_name.st_mode):
+                raise SafeFilesystemError(f"migration target is unsafe: {name}")
+            target_fd = _open_migration_directory(
+                clip_fd, name, label=f"migration target {name}")
+            try:
+                retained = os.fstat(target_fd)
+                if ((retained.st_dev, retained.st_ino)
+                        != (before_name.st_dev, before_name.st_ino)):
+                    raise SafeFilesystemError(
+                        f"migration target changed while opening: {name}")
+                _validate_migration_inventory_directory(
+                    target_fd, _migration_inventory_tree(inventory),
+                    label=f"migration target {name}")
+                _verify_migration_directory_identity(
+                    clip_fd, name, target_fd, label=f"migration target {name}")
+                after = os.fstat(target_fd)
+                if (_migration_stat_signature(after)
+                        != _migration_stat_signature(retained)):
                     raise SafeFilesystemError(
                         f"migration target changed during validation: {name}")
+                retained_targets[name] = (
+                    "directory", _migration_stat_signature(after))
+            finally:
+                os.close(target_fd)
 
-            _verify_migration_directory_identity(
-                clips_fd, "clip-001", clip_fd,
-                label="default clip migration destination")
-            _verify_migration_directory_identity(
-                project_fd, "clips", clips_fd,
-                label="clips migration destination")
-            if (_migration_stat_signature(os.fstat(clip_fd))
-                    != _migration_stat_signature(clip_before)):
-                raise SafeFilesystemError(
-                    "default clip migration destination changed during validation")
-            if (_migration_stat_signature(os.fstat(clips_fd))
-                    != _migration_stat_signature(clips_before)):
-                raise SafeFilesystemError(
-                    "clips migration destination changed during validation")
-            with open_directory(project) as current_project_fd:
-                current_identity = (
-                    os.fstat(current_project_fd).st_dev,
-                    os.fstat(current_project_fd).st_ino,
-                )
-            if current_identity != project_identity:
-                raise SafeFilesystemError("migration project changed during validation")
-            _verify_migration_directory_identity(
-                project_fd, "clips", clips_fd,
-                label="clips migration destination")
-            _verify_migration_directory_identity(
-                clips_fd, "clip-001", clip_fd,
-                label="default clip migration destination")
-        except OSError as exc:
+        if _migration_directory_names(
+                clip_fd, label="default clip migration destination") != actual:
             raise SafeFilesystemError(
-                "migration destination changed during validation") from exc
-        finally:
-            if clip_fd is not None:
-                os.close(clip_fd)
-            os.close(clips_fd)
+                "default clip migration destination changed during validation")
+        for name, (kind, signature) in retained_targets.items():
+            current = os.stat(name, dir_fd=clip_fd, follow_symlinks=False)
+            expected_type = stat.S_ISREG if kind == "file" else stat.S_ISDIR
+            if (not expected_type(current.st_mode)
+                    or _migration_stat_signature(current) != signature):
+                raise SafeFilesystemError(
+                    f"migration target changed during validation: {name}")
+
+        _verify_migration_directory_identity(
+            clips_fd, "clip-001", clip_fd,
+            label="default clip migration destination")
+        _verify_migration_directory_identity(
+            project_fd, "clips", clips_fd,
+            label="clips migration destination")
+        for descriptor, before, label in (
+                (clip_fd, clip_before, "default clip migration destination"),
+                (clips_fd, clips_before, "clips migration destination"),
+                (project_fd, project_before, "migration project")):
+            if (_migration_stat_signature(os.fstat(descriptor))
+                    != _migration_stat_signature(before)):
+                raise SafeFilesystemError(f"{label} changed during validation")
+    except OSError as exc:
+        raise SafeFilesystemError(
+            "migration destination changed during validation") from exc
+
+
+def _validate_migration_destination_tree(
+        project: Path, journal: dict, *, require_all_targets: bool = False) -> None:
+    """Open the destination chain once and validate it descriptor-relatively."""
+    parent_fd = os.open(project.parent, _MIGRATION_DIRECTORY_FLAGS)
+    project_fd = clips_fd = clip_fd = None
+    try:
+        project_fd = _open_migration_directory(
+            parent_fd, project.name, label="migration project")
+        clips_fd = _open_migration_directory(
+            project_fd, "clips", label="clips migration destination")
+        clip_fd = _open_migration_directory(
+            clips_fd, "clip-001", label="default clip migration destination")
+        _validate_migration_destination_descriptors(
+            project_fd, clips_fd, clip_fd, journal,
+            require_all_targets=require_all_targets)
+        _verify_migration_directory_identity(
+            parent_fd, project.name, project_fd, label="migration project")
+    finally:
+        for descriptor in (clip_fd, clips_fd, project_fd, parent_fd):
+            if descriptor is not None:
+                os.close(descriptor)
+
+
+def _read_migration_descriptor_bytes(descriptor: int) -> bytes:
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    chunks = []
+    while True:
+        chunk = os.read(descriptor, 1024 * 1024)
+        if not chunk:
+            return b"".join(chunks)
+        chunks.append(chunk)
+
+
+def _verify_migration_journal_descriptor(
+        project_fd: int, journal_fd: int, expected: os.stat_result,
+        expected_bytes: bytes) -> None:
+    try:
+        current = os.stat(
+            CLIP_MIGRATION_JOURNAL, dir_fd=project_fd,
+            follow_symlinks=False)
+        retained = os.fstat(journal_fd)
+        content = _read_migration_descriptor_bytes(journal_fd)
+    except OSError as exc:
+        raise SafeFilesystemError(
+            "clip migration journal changed during finalization") from exc
+    signature = _migration_stat_signature(expected)
+    if (not stat.S_ISREG(current.st_mode)
+            or not stat.S_ISREG(retained.st_mode)
+            or _migration_stat_signature(current) != signature
+            or _migration_stat_signature(retained) != signature
+            or content != expected_bytes):
+        raise SafeFilesystemError(
+            "clip migration journal changed during finalization")
+
+
+def _restore_migration_journal(project_fd: int, content: bytes) -> None:
+    """Atomically restore journal bytes without replacing a new journal."""
+    temporary = f".{uuid.uuid4().hex}.clip-migration.restore"
+    descriptor = None
+    linked = False
+    try:
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+            0o600,
+            dir_fd=project_fd,
+        )
+        view = memoryview(content)
+        while view:
+            written = os.write(descriptor, view)
+            view = view[written:]
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = None
+        try:
+            os.link(
+                temporary, CLIP_MIGRATION_JOURNAL,
+                src_dir_fd=project_fd, dst_dir_fd=project_fd,
+                follow_symlinks=False)
+        except FileExistsError as exc:
+            raise SafeFilesystemError(
+                "replacement clip migration journal was preserved") from exc
+        linked = True
+        os.unlink(temporary, dir_fd=project_fd)
+        os.fsync(project_fd)
+    except OSError as exc:
+        raise SafeFilesystemError(
+            "could not restore clip migration journal") from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if not linked:
+            try:
+                os.unlink(temporary, dir_fd=project_fd)
+            except FileNotFoundError:
+                pass
+
+
+def _finalize_migration(project: Path, journal: dict) -> None:
+    """Validate and remove the journal through one retained descriptor chain."""
+    parent_fd = os.open(project.parent, _MIGRATION_DIRECTORY_FLAGS)
+    project_fd = clips_fd = clip_fd = journal_fd = None
+    try:
+        project_fd = _open_migration_directory(
+            parent_fd, project.name, label="migration project")
+        clips_fd = _open_migration_directory(
+            project_fd, "clips", label="clips migration destination")
+        clip_fd = _open_migration_directory(
+            clips_fd, "clip-001", label="default clip migration destination")
+
+        journal_name = os.stat(
+            CLIP_MIGRATION_JOURNAL, dir_fd=project_fd,
+            follow_symlinks=False)
+        if not stat.S_ISREG(journal_name.st_mode):
+            raise SafeFilesystemError("clip migration journal is unsafe")
+        journal_fd, journal_details = _open_migration_regular_file(
+            project_fd, CLIP_MIGRATION_JOURNAL,
+            label="clip migration journal")
+        if ((journal_name.st_dev, journal_name.st_ino)
+                != (journal_details.st_dev, journal_details.st_ino)):
+            raise SafeFilesystemError(
+                "clip migration journal changed while opening")
+        journal_bytes = _read_migration_descriptor_bytes(journal_fd)
+        _verify_migration_journal_descriptor(
+            project_fd, journal_fd, journal_details, journal_bytes)
+        try:
+            retained_journal = _validate_migration_journal(
+                project, json.loads(journal_bytes))
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise SafeFilesystemError(
+                "clip migration journal is invalid during finalization") from exc
+        if retained_journal != journal:
+            raise SafeFilesystemError(
+                "clip migration journal changed before finalization")
+
+        _validate_migration_destination_descriptors(
+            project_fd, clips_fd, clip_fd, journal,
+            require_all_targets=True)
+        _verify_migration_directory_identity(
+            parent_fd, project.name, project_fd, label="migration project")
+        _verify_migration_directory_identity(
+            project_fd, "clips", clips_fd,
+            label="clips migration destination")
+        _verify_migration_directory_identity(
+            clips_fd, "clip-001", clip_fd,
+            label="default clip migration destination")
+        _verify_migration_journal_descriptor(
+            project_fd, journal_fd, journal_details, journal_bytes)
+
+        journal_unlinked = False
+        try:
+            os.unlink(CLIP_MIGRATION_JOURNAL, dir_fd=project_fd)
+            journal_unlinked = True
+            os.fsync(project_fd)
+            try:
+                os.stat(
+                    CLIP_MIGRATION_JOURNAL, dir_fd=project_fd,
+                    follow_symlinks=False)
+            except FileNotFoundError:
+                pass
+            else:
+                raise SafeFilesystemError(
+                    "clip migration journal was replaced during finalization")
+            _validate_migration_destination_descriptors(
+                project_fd, clips_fd, clip_fd, journal,
+                require_all_targets=True)
+            _verify_migration_directory_identity(
+                parent_fd, project.name, project_fd, label="migration project")
+        except Exception:
+            if journal_unlinked:
+                try:
+                    _restore_migration_journal(project_fd, journal_bytes)
+                except Exception as restore_exc:
+                    raise SafeFilesystemError(
+                        "migration finalization failed and journal recovery failed"
+                    ) from restore_exc
+            raise
+    finally:
+        for descriptor in (
+                journal_fd, clip_fd, clips_fd, project_fd, parent_fd):
+            if descriptor is not None:
+                os.close(descriptor)
 
 
 def _create_migration_directories(project: Path) -> None:
@@ -1102,9 +1237,7 @@ def _apply_migration_project(project: Path) -> dict:
             if _mapping_state(project, mapping) not in {
                     "target", "missing-optional"}:
                 raise ValueError("migration target verification failed")
-        _validate_migration_destination_tree(
-            project, journal, require_all_targets=True)
-        _remove_regular_file(project, CLIP_MIGRATION_JOURNAL)
+        _finalize_migration(project, journal)
         report = _report_from_journal(project, journal, "migrated")
         report["phase"] = "complete"
         return report
