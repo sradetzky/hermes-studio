@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict
 
 from scripts import design_studio as ds
+from webapp.clip_store import ClipNotFoundError, ClipStore, ClipStoreError
 from webapp.config import Settings
 from webapp.generation_settings_store import (
     GenerationSettingsError,
@@ -84,6 +85,10 @@ def _generation_settings(request: Request) -> GenerationSettingsStore:
     return request.app.state.generation_settings_store
 
 
+def _clips(request: Request) -> ClipStore:
+    return request.app.state.clip_store
+
+
 def _raise_media_review_error(exc: MediaReviewError) -> NoReturn:
     if isinstance(exc, MediaNotFoundError):
         raise HTTPException(404, str(exc))
@@ -98,6 +103,15 @@ def resolve_project(request: Request, project_id: str) -> Path:
     except FileNotFoundError:
         raise HTTPException(404, f"project not found: {project_id}")
     except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+def resolve_clip(request: Request, project: Path, clip_id: str) -> Path:
+    try:
+        return _clips(request).resolve_clip(project, clip_id)
+    except ClipNotFoundError as exc:
+        raise HTTPException(404, str(exc))
+    except ClipStoreError as exc:
         raise HTTPException(400, str(exc))
 
 
@@ -266,10 +280,11 @@ def upload_references(request: Request, project_id: str,
     return {"references": [item.to_dict() for item in saved]}
 
 
-@router.post("/api/chat", status_code=202)
-def chat(request: Request, body: ChatIn,
-         project_id: str = Query(alias="pid")):
+@router.post(
+    "/api/project/{project_id}/clips/{clip_id}/chat", status_code=202)
+def chat(request: Request, project_id: str, clip_id: str, body: ChatIn):
     project = resolve_project(request, project_id)
+    resolve_clip(request, project, clip_id)
     message = body.message.strip()
     if not message:
         raise HTTPException(400, "empty message")
@@ -278,7 +293,7 @@ def chat(request: Request, body: ChatIn,
         raise HTTPException(400, f"unknown Studio profile: {profile}")
     try:
         job = _manager(request).submit_chat(
-            project.name, message, profile)
+            project.name, clip_id, message, profile)
     except ActiveJobError as exc:
         raise HTTPException(409, str(exc))
     return job.to_dict()

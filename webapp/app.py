@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from scripts import design_studio as ds
+from webapp.clip_store import ClipStore
 from webapp.config import Settings
 from webapp.generation_settings_store import GenerationSettingsStore
 from webapp.job_store import JobStore
@@ -29,7 +30,7 @@ from webapp.studio_manager import StudioJobManager
 class JobManager(Protocol):
     def start(self) -> None: ...
     def stop(self) -> None: ...
-    def submit_chat(self, project: str, message: str,
+    def submit_chat(self, project: str, clip_id: str, message: str,
                     profile: str | None = None) -> Job: ...
 
 
@@ -47,11 +48,13 @@ def create_app(settings: Settings | None = None,
         references = ReferenceStore(settings)
         media_reviews = MediaReviewStore()
         generation_settings = GenerationSettingsStore(settings)
+        clips = ClipStore()
         manager = manager_factory(settings, store)
         application.state.job_store = store
         application.state.reference_store = references
         application.state.media_review_store = media_reviews
         application.state.generation_settings_store = generation_settings
+        application.state.clip_store = clips
         application.state.job_manager = manager
         manager.start()
         try:

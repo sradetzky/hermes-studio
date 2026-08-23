@@ -19,6 +19,7 @@ ChatRole = Literal["user", "assistant", "system"]
 class Job:
     id: str
     project: str
+    clip_id: str
     kind: str
     profile: str
     status: JobStatus

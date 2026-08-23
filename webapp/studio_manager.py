@@ -90,12 +90,13 @@ class StudioJobManager:
             self._heartbeat.join(timeout=5)
         self.store.unregister_worker(self.owner_id)
 
-    def submit_chat(self, project: str, message: str,
+    def submit_chat(self, project: str, clip_id: str, message: str,
                     profile: str | None = None) -> Job:
         chat_path = self._chat_path(project)
         self.store.import_chat_if_empty(project, chat_path)
         job = self.store.create_chat_job(
-            project, message, profile or self.settings.studio_profile)
+            project, message, profile or self.settings.studio_profile,
+            clip_id=clip_id)
         self._export_chat(project)
         self._wake.set()
         return job
@@ -246,9 +247,23 @@ class StudioJobManager:
         toolsets = PROFILE_TOOLSETS.get(job.profile, "all")
         command += [
             "chat", "-Q", "-t", toolsets, "--source", "studio-web",
-            "-q", job.message,
+            "-q", self._agent_query(job),
         ]
         return command
+
+    def _agent_query(self, job: Job) -> str:
+        project_path = self.settings.studio_root / "projects" / job.project
+        clip_path = project_path / "clips" / job.clip_id
+        return (
+            "Exact Studio context (do not guess or fuzzy-match paths):\n"
+            f"Project ID: {job.project}\n"
+            f"Project path: {project_path}\n"
+            f"Active clip ID: {job.clip_id}\n"
+            f"Active clip path: {clip_path}\n"
+            "Project chat and references are shared. Read or write prompt, settings, "
+            "and generation files only under the active clip path.\n\n"
+            f"User request:\n{job.message}"
+        )
 
     def _job_environment(self, job: Job) -> dict[str, str]:
         environment = os.environ.copy()
@@ -257,6 +272,10 @@ class StudioJobManager:
             "HERMES_STUDIO_RUNTIME_ROOT": str(self.settings.runtime_root),
             "HERMES_STUDIO_JOB_ID": job.id,
             "HERMES_STUDIO_PROJECT": job.project,
+            "HERMES_STUDIO_CLIP": job.clip_id,
+            "HERMES_STUDIO_CLIP_PATH": str(
+                self.settings.studio_root / "projects" / job.project /
+                "clips" / job.clip_id),
             "HERMES_STUDIO_PROFILE": job.profile,
         })
         return environment

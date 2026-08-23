@@ -81,7 +81,9 @@ class JobStore:
                 CREATE TABLE IF NOT EXISTS jobs (
                     id TEXT PRIMARY KEY,
                     project TEXT NOT NULL,
+                    clip_id TEXT NOT NULL DEFAULT '',
                     kind TEXT NOT NULL,
+                    profile TEXT NOT NULL DEFAULT 'studio',
                     status TEXT NOT NULL CHECK (
                         status IN ('queued', 'running', 'completed', 'failed')
                     ),
@@ -165,6 +167,9 @@ class JobStore:
                 connection.execute(
                     "ALTER TABLE jobs ADD COLUMN profile TEXT NOT NULL "
                     "DEFAULT 'studio'")
+            if "clip_id" not in job_columns:
+                connection.execute(
+                    "ALTER TABLE jobs ADD COLUMN clip_id TEXT NOT NULL DEFAULT ''")
             connection.execute(
                 "INSERT INTO job_events "
                 "(project, job_id, profile, event_type, status, summary, detail, "
@@ -227,6 +232,7 @@ class JobStore:
         return Job(
             id=row["id"],
             project=row["project"],
+            clip_id=row["clip_id"],
             kind=row["kind"],
             profile=row["profile"],
             status=JobStatus(row["status"]),
@@ -266,11 +272,12 @@ class JobStore:
         )
 
     def create_chat_job(self, project: str, message: str,
-                        profile: str = "studio") -> Job:
+                        profile: str = "studio", *, clip_id: str = "") -> Job:
         now = utc_now()
         job = Job(
             id=uuid.uuid4().hex,
             project=project,
+            clip_id=clip_id,
             kind="chat",
             profile=profile,
             status=JobStatus.QUEUED,
@@ -286,11 +293,11 @@ class JobStore:
             with self._transaction() as connection:
                 connection.execute(
                     "INSERT INTO jobs "
-                    "(id, project, kind, profile, status, message, error, created_at, "
-                    "started_at, finished_at, owner_id, pid) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "(id, project, clip_id, kind, profile, status, message, error, "
+                    "created_at, started_at, finished_at, owner_id, pid) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
-                        job.id, job.project, job.kind, job.profile,
+                        job.id, job.project, job.clip_id, job.kind, job.profile,
                         job.status.value,
                         job.message, job.error, job.created_at, job.started_at,
                         job.finished_at, job.owner_id, job.pid,

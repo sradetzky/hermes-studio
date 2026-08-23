@@ -60,8 +60,9 @@ class PassiveManager:
     def stop(self):
         pass
 
-    def submit_chat(self, project, message, profile=None):
-        return self.store.create_chat_job(project, message, profile or "studio")
+    def submit_chat(self, project, clip_id, message, profile=None):
+        return self.store.create_chat_job(
+            project, message, profile or "studio", clip_id=clip_id)
 
 
 class WebAppTestCase(unittest.TestCase):
@@ -205,12 +206,15 @@ class AppFactoryTests(WebAppTestCase):
         with TestClient(self.app()) as client:
             project = self.create_project(client)
             first = client.post(
-                f"/api/chat?pid={project}", json={"message": "hello"})
+                f"/api/project/{project}/clips/clip-001/chat",
+                json={"message": "hello"})
             second = client.post(
-                f"/api/chat?pid={project}", json={"message": "again"})
+                f"/api/project/{project}/clips/clip-001/chat",
+                json={"message": "again"})
             self.assertEqual(first.status_code, 202)
             self.assertEqual(first.json()["status"], "queued")
             self.assertEqual(first.json()["profile"], "studio")
+            self.assertEqual(first.json()["clip_id"], "clip-001")
             self.assertEqual(second.status_code, 409)
             chat = client.get(f"/api/project/{project}/chat").json()
             self.assertEqual(
@@ -225,6 +229,17 @@ class AppFactoryTests(WebAppTestCase):
             self.assertEqual([job["id"] for job in listing["jobs"]],
                              [first.json()["id"]])
 
+    def test_chat_route_requires_an_exact_clip(self):
+        with TestClient(self.app()) as client:
+            project = self.create_project(client, "missing-chat-clip")
+            response = client.post(
+                f"/api/project/{project}/clips/clip-999/chat",
+                json={"message": "hello"},
+            )
+            self.assertEqual(response.status_code, 404)
+            self.assertEqual(
+                client.get(f"/api/project/{project}/jobs").json()["jobs"], [])
+
     def test_profile_listing_and_specialist_dispatch_validation(self):
         with TestClient(self.app()) as client:
             project = self.create_project(client, "profiles")
@@ -232,7 +247,7 @@ class AppFactoryTests(WebAppTestCase):
             self.assertIn(
                 "studio-storyboarder", [profile["id"] for profile in profiles])
             accepted = client.post(
-                f"/api/chat?pid={project}",
+                f"/api/project/{project}/clips/clip-001/chat",
                 json={"message": "Plan the shots", "profile": "studio-storyboarder"},
             )
             self.assertEqual(accepted.status_code, 202)
@@ -240,7 +255,7 @@ class AppFactoryTests(WebAppTestCase):
 
             other = self.create_project(client, "unknown-profile")
             rejected = client.post(
-                f"/api/chat?pid={other}",
+                f"/api/project/{other}/clips/clip-001/chat",
                 json={"message": "hello", "profile": "not-a-profile"},
             )
             self.assertEqual(rejected.status_code, 400)
@@ -250,7 +265,8 @@ class AppFactoryTests(WebAppTestCase):
         with TestClient(create_app(settings, PassiveManager)) as client:
             project = self.create_project(client, "custom-profile")
             accepted = client.post(
-                f"/api/chat?pid={project}", json={"message": "hello"})
+                f"/api/project/{project}/clips/clip-001/chat",
+                json={"message": "hello"})
             self.assertEqual(accepted.status_code, 202)
             self.assertEqual(accepted.json()["profile"], "custom-studio")
 
@@ -641,6 +657,22 @@ class JobStoreTests(WebAppTestCase):
         self.assertEqual(
             self.settings.database_path.stat().st_mode & 0o777, 0o600)
 
+    def test_historical_job_schema_adds_non_null_clip_column(self):
+        store = self.store()
+        historical = store.create_chat_job("project", "message")
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            connection.execute("ALTER TABLE jobs DROP COLUMN clip_id")
+            connection.commit()
+
+        store.initialize()
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            columns = {
+                row[1] for row in connection.execute(
+                    "PRAGMA table_info(jobs)").fetchall()
+            }
+        self.assertIn("clip_id", columns)
+        self.assertEqual(store.get_job(historical.id).clip_id, "")
+
     def test_runtime_database_rejects_symlinked_paths(self):
         outside = Path(self.temp.name) / "outside"
         outside.mkdir()
@@ -883,7 +915,7 @@ class StudioManagerTests(WebAppTestCase):
         )
         manager.start()
         try:
-            job = manager.submit_chat(project.name, "question")
+            job = manager.submit_chat(project.name, "clip-001", "question")
             completed = self.wait_for_terminal(store, job.id)
         finally:
             manager.stop()
@@ -900,11 +932,20 @@ class StudioManagerTests(WebAppTestCase):
         store.initialize()
         manager = StudioJobManager(self.settings, store)
         job = store.create_chat_job(
-            "project", "plan", profile="studio-storyboarder")
+            "project", "plan", profile="studio-storyboarder",
+            clip_id="clip-002")
         command = manager._default_command(job, None)
         self.assertEqual(
             command[command.index("-t") + 1], "file,terminal,skills")
         self.assertNotIn("all", command)
+        query = command[command.index("-q") + 1]
+        self.assertIn("Project ID: project", query)
+        self.assertIn("Active clip ID: clip-002", query)
+        self.assertIn("/projects/project/clips/clip-002", query)
+        environment = manager._job_environment(job)
+        self.assertEqual(environment["HERMES_STUDIO_CLIP"], "clip-002")
+        self.assertTrue(environment["HERMES_STUDIO_CLIP_PATH"].endswith(
+            "/projects/project/clips/clip-002"))
 
     def test_shutdown_terminates_tracked_child(self):
         ds.studio_root(str(self.settings.studio_root))
@@ -919,7 +960,7 @@ class StudioManagerTests(WebAppTestCase):
             cleanup_callback=lambda: None,
         )
         manager.start()
-        job = manager.submit_chat(project.name, "question")
+        job = manager.submit_chat(project.name, "clip-001", "question")
         deadline = time.monotonic() + 5
         running = None
         while time.monotonic() < deadline:
@@ -957,7 +998,7 @@ class StudioManagerTests(WebAppTestCase):
             cleanup_callback=lambda: None,
         )
         first.start()
-        job = first.submit_chat(project.name, "question")
+        job = first.submit_chat(project.name, "clip-001", "question")
         deadline = time.monotonic() + 5
         running = first_store.get_job(job.id)
         while time.monotonic() < deadline:
@@ -991,7 +1032,7 @@ class StudioManagerTests(WebAppTestCase):
         )
         manager.start()
         try:
-            job = manager.submit_chat(project.name, "question")
+            job = manager.submit_chat(project.name, "clip-001", "question")
             with self.assertLogs("webapp.studio_manager", level="ERROR"):
                 failed = self.wait_for_terminal(store, job.id)
         finally:
@@ -1014,7 +1055,7 @@ class StudioManagerTests(WebAppTestCase):
         )
         store.initialize()
         store.register_worker(manager.owner_id)
-        job = manager.submit_chat(project.name, "question")
+        job = manager.submit_chat(project.name, "clip-001", "question")
         real_heartbeat = store.heartbeat_worker
         calls = 0
 
@@ -1055,7 +1096,7 @@ class StudioManagerTests(WebAppTestCase):
         manager.start()
         try:
             job = manager.submit_chat(
-                project.name, "plan", "studio-storyboarder")
+                project.name, "clip-001", "plan", "studio-storyboarder")
             with self.assertLogs("webapp.studio_manager", level="ERROR"):
                 failed = self.wait_for_terminal(store, job.id)
         finally:
@@ -1138,14 +1179,16 @@ class StudioManagerTests(WebAppTestCase):
             cleanup_callback=lambda: None,
         )
         first.start()
-        first_job = first.submit_chat(first_project.name, "fail")
+        first_job = first.submit_chat(
+            first_project.name, "clip-001", "fail")
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
             if first_store.get_job(first_job.id).status is JobStatus.RUNNING:
                 break
             time.sleep(0.05)
         second.start()
-        second_job = second.submit_chat(second_project.name, "wait")
+        second_job = second.submit_chat(
+            second_project.name, "clip-001", "wait")
         self.assertTrue(cleanup_started.wait(timeout=5))
         self.assertEqual(
             first_store.get_job(first_job.id).status, JobStatus.RUNNING)
@@ -1186,7 +1229,8 @@ class StudioManagerTests(WebAppTestCase):
             command_builder=command, cleanup_callback=lambda: None,
         )
         survivor.start()
-        second_job = survivor.submit_chat(second_project.name, "continue")
+        second_job = survivor.submit_chat(
+            second_project.name, "clip-001", "continue")
         connection = sqlite3.connect(settings.database_path)
         with connection:
             connection.execute(
