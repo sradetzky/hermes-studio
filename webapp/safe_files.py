@@ -116,11 +116,12 @@ def _fsync_directory(descriptor: int) -> None:
     os.fsync(descriptor)
 
 
-def _verify_absolute_directory_identity(
-        path: Path, descriptor: int, *, label: str) -> None:
+def verify_absolute_directory_identity(
+        path: Path | str, descriptor: int, *, label: str) -> None:
     """Verify that a retained directory is still named by an absolute path."""
+    absolute = _absolute_path(path)
     try:
-        current_fd = _open_absolute_directory(path)
+        current_fd = _open_absolute_directory(absolute)
     except (FileNotFoundError, SafeFilesystemError, OSError) as exc:
         raise SafeFilesystemError(f"{label} changed while opening") from exc
     try:
@@ -150,7 +151,7 @@ def open_regular_file(path: Path) -> Iterator[OpenedRegularFile]:
             if not stat.S_ISREG(details.st_mode):
                 raise SafeFilesystemError(
                     f"not a safe regular file: {absolute}")
-            _verify_absolute_directory_identity(
+            verify_absolute_directory_identity(
                 absolute.parent, directory_fd, label="file parent directory")
             yield OpenedRegularFile(descriptor, absolute, details)
         finally:
@@ -203,7 +204,7 @@ def open_regular_beneath(
             if not stat.S_ISREG(details.st_mode):
                 raise SafeFilesystemError(
                     f"not a safe regular file beneath {root}: {relative}")
-            _verify_absolute_directory_identity(
+            verify_absolute_directory_identity(
                 root.joinpath(*relative.parts[:-1]), directory_fd,
                 label="trusted file parent directory")
             yield OpenedRegularFile(descriptor, root / relative, details)

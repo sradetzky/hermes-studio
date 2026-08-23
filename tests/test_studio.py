@@ -1,6 +1,7 @@
 import json
 import hashlib
 import os
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -1497,6 +1498,54 @@ class LegacyClipMigrationTests(unittest.TestCase):
         self.assertFalse((first / "clips" / "clip-001" /
                           "current_generation.json").exists())
 
+    def test_already_migrated_accepts_any_complete_manifest_layout_read_only(self):
+        project = self.root / "projects" / "2026-08-23_current-custom"
+        project.mkdir()
+        store = ClipStore()
+        store.initialize(project, "Custom current project")
+        store.create_clip(project, "Closing scene")
+        store.update_clip(
+            project, "clip-001", title="Disabled opening", enabled=False)
+        generation = project / "clips" / "clip-002" / "generations" / "007"
+        generation.mkdir()
+        (generation / "take.mp4").write_bytes(b"canonical video")
+        store.select_take(project, "clip-002", "007", "take.mp4")
+        expected_manifest = store.reorder(project, ["clip-002", "clip-001"])
+        (project / "clips" / "clip-001" /
+         ".generation-archive.lock").write_bytes(b"")
+        (project / "clips" / "clip-002" /
+         "current_generation.json").write_bytes(b'{"seed":7}\n')
+        (project / ".project.lock").unlink()
+
+        orphan = project / "clips" / "clip-999"
+        orphan.mkdir()
+        (orphan / "current_prompt.txt").touch()
+        (orphan / "generations").mkdir()
+        before = self.metadata_snapshot(project)
+        with self.assertRaises((ValueError, safe_files.SafeFilesystemError)):
+            self.migrate(project.name, apply=True)
+        self.assertEqual(self.metadata_snapshot(project), before)
+        shutil.rmtree(orphan)
+
+        outside = Path(self.temp.name) / "outside-canonical.txt"
+        outside.write_bytes(b"outside must remain untouched")
+        nested_link = (
+            project / "clips" / "clip-001" / "generations" / "unexpected")
+        nested_link.symlink_to(outside)
+        before = self.metadata_snapshot(project)
+        with self.assertRaises((ValueError, safe_files.SafeFilesystemError)):
+            self.migrate(project.name, apply=True)
+        self.assertEqual(self.metadata_snapshot(project), before)
+        self.assertEqual(outside.read_bytes(), b"outside must remain untouched")
+        nested_link.unlink()
+
+        before = self.metadata_snapshot(project)
+        report = self.migrate(project.name, apply=True)
+        self.assertEqual(report["projects"][0]["status"], "already-migrated")
+        self.assertEqual(ClipStore().describe(project), expected_manifest)
+        self.assertEqual(self.metadata_snapshot(project), before)
+        self.assertFalse((project / ".project.lock").exists())
+
     def test_apply_is_idempotent_and_second_run_performs_no_writes(self):
         project = self.legacy_project()
         self.migrate(project.name, apply=True)
@@ -1517,6 +1566,7 @@ class LegacyClipMigrationTests(unittest.TestCase):
             "targets-verified",
             "manifest-published",
             "journal-manifest-published",
+            "journal-finalizing",
         ]
         for index, checkpoint in enumerate(checkpoints):
             with self.subTest(checkpoint=checkpoint):
@@ -1741,7 +1791,7 @@ class LegacyClipMigrationTests(unittest.TestCase):
         self.assertEqual(outside.read_bytes(), b"outside must remain untouched")
         self.assertEqual(journal_path.read_bytes(), boundary_journal)
         restored = json.loads(boundary_journal)
-        self.assertEqual(restored["phase"], "manifest_published")
+        self.assertEqual(restored["phase"], "finalizing")
         self.assertEqual(
             restored["completed"],
             [mapping["source"] for mapping in restored["mappings"]],
@@ -1790,6 +1840,159 @@ class LegacyClipMigrationTests(unittest.TestCase):
              if path.name != ds.CLIP_MIGRATION_JOURNAL],
             [],
         )
+
+    def test_replacement_journal_after_destination_validation_blocks_success(self):
+        project = self.legacy_project()
+        journal_path = project / ds.CLIP_MIGRATION_JOURNAL
+        replacement = b'{"late-replacement":true}\n'
+        retained_journal = None
+        finalizing_validations = 0
+        real_validate = ds._validate_migration_destination_descriptors
+
+        def replace_after_validation(*args, **kwargs):
+            nonlocal retained_journal, finalizing_validations
+            real_validate(*args, **kwargs)
+            journal = args[3]
+            if journal["phase"] == "finalizing":
+                finalizing_validations += 1
+                if finalizing_validations == 2:
+                    retained_journal = journal_path.read_bytes() if journal_path.exists() else (
+                        json.dumps(journal, indent=2, ensure_ascii=False,
+                                   sort_keys=True) + "\n").encode("utf-8")
+                    journal_path.write_bytes(replacement)
+
+        with (
+            patch.object(
+                ds, "_validate_migration_destination_descriptors",
+                side_effect=replace_after_validation,
+            ),
+            self.assertRaises((ValueError, safe_files.SafeFilesystemError)),
+        ):
+            self.migrate(project.name, apply=True)
+
+        self.assertEqual(finalizing_validations, 2)
+        self.assertEqual(journal_path.read_bytes(), replacement)
+        self.assertIsNotNone(retained_journal)
+
+        journal_path.unlink()
+        assert retained_journal is not None
+        journal_path.write_bytes(retained_journal)
+        report = self.migrate(project.name, apply=True)
+        self.assertEqual(report["projects"][0]["status"], "migrated")
+        self.assertFalse(journal_path.exists())
+
+    def test_exception_after_actual_unlink_restores_finalizing_journal(self):
+        project = self.legacy_project()
+        journal_path = project / ds.CLIP_MIGRATION_JOURNAL
+        retained_journal = None
+        real_unlink = os.unlink
+        interrupted = False
+
+        def unlink_then_interrupt(path, *args, dir_fd=None):
+            nonlocal retained_journal, interrupted
+            if not interrupted and os.fsdecode(path) == ds.CLIP_MIGRATION_JOURNAL:
+                interrupted = True
+                retained_journal = journal_path.read_bytes()
+                real_unlink(path, *args, dir_fd=dir_fd)
+                raise OSError("interrupted after actual journal unlink")
+            return real_unlink(path, *args, dir_fd=dir_fd)
+
+        with (
+            patch.object(ds.os, "unlink", side_effect=unlink_then_interrupt),
+            self.assertRaisesRegex(OSError, "interrupted after actual"),
+        ):
+            self.migrate(project.name, apply=True)
+
+        self.assertTrue(interrupted)
+        self.assertIsNotNone(retained_journal)
+        assert retained_journal is not None
+        self.assertEqual(journal_path.read_bytes(), retained_journal)
+        self.assertEqual(json.loads(retained_journal)["phase"], "finalizing")
+
+        report = self.migrate(project.name, apply=True)
+        self.assertEqual(report["projects"][0]["status"], "migrated")
+        self.assertFalse(journal_path.exists())
+
+    def test_no_journal_manifest_rejects_unsafe_extra_then_is_read_only(self):
+        project = self.legacy_project()
+        self.migrate(project.name, apply=True)
+        (project / ".project.lock").unlink()
+        outside = Path(self.temp.name) / "outside-already-migrated.txt"
+        outside.write_bytes(b"must remain untouched")
+        unexpected = project / "clips" / "clip-001" / "unexpected"
+        unexpected.symlink_to(outside)
+        before = self.metadata_snapshot(project)
+
+        with self.assertRaises((ValueError, safe_files.SafeFilesystemError)):
+            self.migrate(project.name, apply=True)
+
+        self.assertEqual(self.metadata_snapshot(project), before)
+        self.assertEqual(outside.read_bytes(), b"must remain untouched")
+
+        unexpected.unlink()
+        before = self.metadata_snapshot(project)
+        report = self.migrate(project.name, apply=True)
+        self.assertEqual(report["projects"][0]["status"], "already-migrated")
+        self.assertEqual(self.metadata_snapshot(project), before)
+        self.assertFalse((project / ".project.lock").exists())
+
+    def test_projects_parent_swap_during_finalization_fails_and_recovers(self):
+        project = self.legacy_project()
+        expected = {
+            relative: value for relative, value in self.file_inventory(project).items()
+            if (relative in {"current_prompt.txt", "current_generation.json"}
+                or relative.startswith("generations/"))
+        }
+        projects = self.root / "projects"
+        replacement = Path(self.temp.name) / "replacement-projects"
+        displaced = Path(self.temp.name) / "displaced-projects"
+        returned_replacement = Path(self.temp.name) / "returned-replacement-projects"
+        shutil.copytree(projects, replacement)
+        marker = replacement / project.name / "replacement-marker"
+        marker.write_bytes(b"replacement bytes")
+        replacement_before = self.snapshot(replacement)
+        finalizing_validations = 0
+        swapped = False
+        real_validate = ds._validate_migration_destination_descriptors
+
+        def swap_projects_parent_after_validation(*args, **kwargs):
+            nonlocal finalizing_validations, swapped
+            real_validate(*args, **kwargs)
+            journal = args[3]
+            if journal["phase"] == "finalizing":
+                finalizing_validations += 1
+                if finalizing_validations == 2:
+                    projects.rename(displaced)
+                    replacement.rename(projects)
+                    swapped = True
+
+        with (
+            patch.object(
+                ds, "_validate_migration_destination_descriptors",
+                side_effect=swap_projects_parent_after_validation,
+            ),
+            self.assertRaises((ValueError, safe_files.SafeFilesystemError)),
+        ):
+            self.migrate(project.name, apply=True)
+
+        self.assertTrue(swapped)
+        self.assertEqual(self.snapshot(projects), replacement_before)
+        original = displaced / project.name
+        journal_path = original / ds.CLIP_MIGRATION_JOURNAL
+        self.assertTrue(journal_path.is_file())
+        self.assertEqual(json.loads(journal_path.read_bytes())["phase"], "finalizing")
+        self.assertEqual(
+            self.file_inventory(original / "clips" / "clip-001"), expected)
+        self.assertEqual((projects / project.name /
+                          "replacement-marker").read_bytes(), b"replacement bytes")
+
+        projects.rename(returned_replacement)
+        displaced.rename(projects)
+        self.assertEqual(self.snapshot(returned_replacement), replacement_before)
+        self.assertTrue((project / ds.CLIP_MIGRATION_JOURNAL).is_file())
+        report = self.migrate(project.name, apply=True)
+        self.assertEqual(report["projects"][0]["status"], "migrated")
+        self.assertFalse((project / ds.CLIP_MIGRATION_JOURNAL).exists())
 
     def test_destination_parent_swap_during_inventory_fails_closed_and_resumes(self):
         project = self.legacy_project()
