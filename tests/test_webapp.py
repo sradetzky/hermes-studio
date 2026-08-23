@@ -274,11 +274,13 @@ class AppFactoryTests(WebAppTestCase):
         with TestClient(self.app()) as client:
             project = self.create_project(client, "generation-settings")
             root = self.settings.studio_root / "projects" / project
-            (root / "current_prompt.txt").write_text(
+            clip = root / "clips" / "clip-001"
+            (clip / "current_prompt.txt").write_text(
                 "A 5-second compiled H3 prompt\n")
 
             initial = client.get(
-                f"/api/project/{project}/generation-settings").json()
+                f"/api/project/{project}/clips/clip-001/generation-settings"
+            ).json()
             self.assertFalse(initial["exists"])
             self.assertEqual(initial["readiness"]["status"], "not-configured")
             self.assertEqual(initial["options"]["modes"],
@@ -288,7 +290,7 @@ class AppFactoryTests(WebAppTestCase):
 
             large_seed = "4364884737460484600"
             saved = client.put(
-                f"/api/project/{project}/generation-settings",
+                f"/api/project/{project}/clips/clip-001/generation-settings",
                 json=_generation_settings_payload(seed=large_seed),
             )
             self.assertEqual(saved.status_code, 200)
@@ -303,7 +305,7 @@ class AppFactoryTests(WebAppTestCase):
                 })
             self.assertEqual(body["readiness"]["timing"]["frames"], 124)
             manifest = json.loads(
-                (root / "current_generation.json").read_text())
+                (clip / "current_generation.json").read_text())
             self.assertEqual(manifest["schema_version"], 2)
             self.assertEqual(manifest["steps"], 20)
             self.assertEqual(manifest["seed"], int(large_seed))
@@ -311,8 +313,9 @@ class AppFactoryTests(WebAppTestCase):
             self.assertNotIn("references", manifest)
             self.assertNotIn("upscale", manifest)
 
-            (root / "current_prompt.txt").write_text("changed prompt\n")
-            stale = client.get(f"/api/project/{project}").json()
+            (clip / "current_prompt.txt").write_text("changed prompt\n")
+            stale = client.get(
+                f"/api/project/{project}/clips/clip-001").json()
             self.assertFalse(
                 stale["generation_settings"]["readiness"]["ready"])
             self.assertEqual(
@@ -322,24 +325,25 @@ class AppFactoryTests(WebAppTestCase):
         with TestClient(self.app()) as client:
             project = self.create_project(client, "generation-references")
             root = self.settings.studio_root / "projects" / project
-            (root / "current_prompt.txt").write_text(
+            clip = root / "clips" / "clip-001"
+            (clip / "current_prompt.txt").write_text(
                 "A 10-second reference prompt\n")
             (root / "references" / "character.png").write_bytes(b"image")
 
             blocked = client.put(
-                f"/api/project/{project}/generation-settings",
+                f"/api/project/{project}/clips/clip-001/generation-settings",
                 json=_generation_settings_payload(mode="r2v"),
             ).json()
             self.assertFalse(blocked["readiness"]["ready"])
             self.assertIn(
                 "R2V prompt requires", blocked["readiness"]["reasons"][0])
 
-            (root / "current_prompt.txt").write_text(
+            (clip / "current_prompt.txt").write_text(
                 "A 10-second reference prompt using "
                 "<Picture 1> (character.png)\n")
 
             ready = client.put(
-                f"/api/project/{project}/generation-settings",
+                f"/api/project/{project}/clips/clip-001/generation-settings",
                 json=_generation_settings_payload(
                     mode="r2v", mp=0.9, steps=8, accel=True,
                 ),
@@ -351,15 +355,16 @@ class AppFactoryTests(WebAppTestCase):
 
             (root / "references" / "character.png").unlink()
             missing = client.get(
-                f"/api/project/{project}/generation-settings").json()
+                f"/api/project/{project}/clips/clip-001/generation-settings"
+            ).json()
             self.assertIn(
                 "Missing reference", missing["readiness"]["reasons"][0])
 
-            (root / "current_prompt.txt").write_text(
+            (clip / "current_prompt.txt").write_text(
                 "A 10-second reference prompt using "
                 "<Picture 1> (../character.png)\n")
             unsafe = client.put(
-                f"/api/project/{project}/generation-settings",
+                f"/api/project/{project}/clips/clip-001/generation-settings",
                 json=_generation_settings_payload(mode="r2v"),
             ).json()
             self.assertFalse(unsafe["readiness"]["ready"])
@@ -372,7 +377,8 @@ class AppFactoryTests(WebAppTestCase):
         with TestClient(self.app()) as client:
             project = self.create_project(client, "generation-validation")
             root = self.settings.studio_root / "projects" / project
-            (root / "current_prompt.txt").write_text("prompt\n")
+            clip = root / "clips" / "clip-001"
+            (clip / "current_prompt.txt").write_text("prompt\n")
             cases = [
                 _generation_settings_payload(mp=1.2),
                 _generation_settings_payload(width=1344, height=None),
@@ -382,18 +388,97 @@ class AppFactoryTests(WebAppTestCase):
             for payload in cases:
                 with self.subTest(payload=payload):
                     response = client.put(
-                        f"/api/project/{project}/generation-settings",
+                        f"/api/project/{project}/clips/clip-001/generation-settings",
                         json=payload,
                     )
                     self.assertEqual(response.status_code, 400)
             nan_payload = _generation_settings_payload(mp=float("nan"))
             response = client.put(
-                f"/api/project/{project}/generation-settings",
+                f"/api/project/{project}/clips/clip-001/generation-settings",
                 content=json.dumps(nan_payload),
                 headers={"Content-Type": "application/json"},
             )
             self.assertEqual(response.status_code, 400)
-            self.assertFalse((root / "current_generation.json").exists())
+            self.assertFalse((clip / "current_generation.json").exists())
+
+    def test_clip_api_isolates_prompt_settings_takes_and_selection(self):
+        with TestClient(self.app()) as client:
+            project = self.create_project(client, "clip-api")
+            root = self.settings.studio_root / "projects" / project
+            created = client.post(
+                f"/api/project/{project}/clips", json={"title": "Closing"})
+            self.assertEqual(created.status_code, 201)
+            self.assertEqual(created.json()["clip"]["id"], "clip-002")
+
+            first = root / "clips" / "clip-001"
+            second = root / "clips" / "clip-002"
+            (first / "current_prompt.txt").write_text("First 5-second prompt\n")
+            (second / "current_prompt.txt").write_text("Second 6-second prompt\n")
+            for clip_id, seed in (("clip-001", "11"), ("clip-002", "22")):
+                response = client.put(
+                    f"/api/project/{project}/clips/{clip_id}/generation-settings",
+                    json=_generation_settings_payload(seed=seed),
+                )
+                self.assertEqual(response.status_code, 200)
+
+            for clip, content in ((first, b"first"), (second, b"second")):
+                generation = clip / "generations" / "001"
+                generation.mkdir()
+                (generation / "take.mp4").write_bytes(content)
+
+            first_detail = client.get(
+                f"/api/project/{project}/clips/clip-001").json()
+            second_detail = client.get(
+                f"/api/project/{project}/clips/clip-002").json()
+            self.assertEqual(first_detail["current_prompt"], "First 5-second prompt\n")
+            self.assertEqual(second_detail["current_prompt"], "Second 6-second prompt\n")
+            self.assertEqual(first_detail["generation_settings"]["settings"]["seed"],
+                             "11")
+            self.assertEqual(second_detail["generation_settings"]["settings"]["seed"],
+                             "22")
+
+            first_take = client.get(
+                f"/api/project/{project}/clips/clip-001/generations"
+            ).json()["generations"][0]
+            second_take = client.get(
+                f"/api/project/{project}/clips/clip-002/generations"
+            ).json()["generations"][0]
+            self.assertIn("/clips/clip-001/", first_take["media"][0]["url"])
+            self.assertIn("/clips/clip-002/", second_take["media"][0]["url"])
+            self.assertEqual(client.get(first_take["media"][0]["url"]).content, b"first")
+            self.assertEqual(client.get(second_take["media"][0]["url"]).content, b"second")
+
+            selected = client.put(
+                f"/api/project/{project}/clips/clip-002/selected-take",
+                json={"generation": "001", "filename": "take.mp4"},
+            )
+            self.assertEqual(selected.status_code, 200)
+            self.assertEqual(selected.json()["clip"]["selected_take"], {
+                "generation": "001", "filename": "take.mp4"})
+
+            updated = client.patch(
+                f"/api/project/{project}/clips/clip-002",
+                json={"title": "Finale", "enabled": False},
+            )
+            self.assertEqual(updated.status_code, 200)
+            reordered = client.put(
+                f"/api/project/{project}/clips/order",
+                json={"clip_ids": ["clip-002", "clip-001"]},
+            )
+            self.assertEqual(
+                [entry["id"] for entry in reordered.json()["clips"]],
+                ["clip-002", "clip-001"],
+            )
+            project_state = client.get(f"/api/project/{project}").json()
+            self.assertEqual(project_state["clips"][0]["title"], "Finale")
+            self.assertFalse(project_state["clips"][0]["enabled"])
+            self.assertIsNone(project_state["clips"][1]["selected_take"])
+            self.assertEqual(
+                client.get(f"/api/project/{project}/generation-settings").status_code,
+                404,
+            )
+            self.assertEqual(
+                client.get(f"/api/project/{project}/generations").status_code, 404)
 
     def test_project_metadata_symlinks_are_not_read(self):
         with TestClient(self.app()) as client:
@@ -454,7 +539,7 @@ class AppFactoryTests(WebAppTestCase):
         with TestClient(self.app()) as client:
             project = self.create_project(client, "review")
             root = self.settings.studio_root / "projects" / project
-            generation = root / "generations" / "001"
+            generation = root / "clips" / "clip-001" / "generations" / "001"
             generation.mkdir()
             (generation / "video.mp4").write_bytes(b"video")
             (generation / "still.png").write_bytes(b"image")
@@ -463,19 +548,21 @@ class AppFactoryTests(WebAppTestCase):
                 json.dumps({"seed": 42, "recipe": "r2v"}))
 
             listing = client.get(
-                f"/api/project/{project}/generations").json()["generations"]
+                f"/api/project/{project}/clips/clip-001/generations"
+            ).json()["generations"]
             self.assertEqual(listing[0]["files"], ["still.png", "video.mp4"])
             self.assertEqual(
                 {item["kind"] for item in listing[0]["media"]},
                 {"image", "video"},
             )
             detail = client.get(
-                f"/api/project/{project}/generations/001").json()
+                f"/api/project/{project}/clips/clip-001/generations/001"
+            ).json()
             self.assertEqual(detail["prompt"], "structured prompt\n")
             self.assertEqual(detail["meta"]["seed"], 42)
 
             promoted = client.post(
-                f"/api/project/{project}/generations/001/promote",
+                f"/api/project/{project}/clips/clip-001/generations/001/promote",
                 json={"filename": "video.mp4"},
             )
             self.assertEqual(promoted.status_code, 200)
@@ -485,14 +572,14 @@ class AppFactoryTests(WebAppTestCase):
             self.assertEqual((generation / "video.mp4").read_bytes(), b"video")
 
             repeated = client.post(
-                f"/api/project/{project}/generations/001/promote",
+                f"/api/project/{project}/clips/clip-001/generations/001/promote",
                 json={"filename": "video.mp4"},
             )
             self.assertEqual(
                 repeated.json()["result"]["target"], promoted_name)
 
             referenced = client.post(
-                f"/api/project/{project}/generations/001/use-as-reference",
+                f"/api/project/{project}/clips/clip-001/generations/001/use-as-reference",
                 json={"filename": "still.png"},
             )
             self.assertEqual(referenced.status_code, 200)
@@ -500,7 +587,8 @@ class AppFactoryTests(WebAppTestCase):
             self.assertEqual(
                 (root / "references" / reference_name).read_bytes(), b"image")
             refreshed = client.get(
-                f"/api/project/{project}/generations/001").json()
+                f"/api/project/{project}/clips/clip-001/generations/001"
+            ).json()
             media = {item["name"]: item for item in refreshed["media"]}
             self.assertTrue(media["video.mp4"]["promoted"])
             self.assertTrue(media["still.png"]["reference"])
@@ -509,34 +597,37 @@ class AppFactoryTests(WebAppTestCase):
         with TestClient(self.app()) as client:
             project = self.create_project(client, "review-safety")
             root = self.settings.studio_root / "projects" / project
-            generation = root / "generations" / "001"
+            generation = root / "clips" / "clip-001" / "generations" / "001"
             generation.mkdir()
             (generation / "video.mp4").write_bytes(b"new")
             (generation / "prompt.txt").write_text("not media")
-            (root / "final" / "001_video.mp4").write_bytes(b"existing")
+            (root / "final" / "clip-001_001_video.mp4").write_bytes(b"existing")
 
             promoted = client.post(
-                f"/api/project/{project}/generations/001/promote",
+                f"/api/project/{project}/clips/clip-001/generations/001/promote",
                 json={"filename": "video.mp4"},
             )
             self.assertEqual(promoted.status_code, 200)
             self.assertEqual(
-                promoted.json()["result"]["target"], "001_video_2.mp4")
+                promoted.json()["result"]["target"],
+                "clip-001_001_video_2.mp4")
             self.assertEqual(
-                (root / "final" / "001_video.mp4").read_bytes(), b"existing")
+                (root / "final" / "clip-001_001_video.mp4").read_bytes(),
+                b"existing")
             self.assertEqual(
-                (root / "final" / "001_video_2.mp4").read_bytes(), b"new")
+                (root / "final" / "clip-001_001_video_2.mp4").read_bytes(),
+                b"new")
 
             traversal = client.post(
-                f"/api/project/{project}/generations/001/promote",
+                f"/api/project/{project}/clips/clip-001/generations/001/promote",
                 json={"filename": "../video.mp4"},
             )
             unsupported = client.post(
-                f"/api/project/{project}/generations/001/promote",
+                f"/api/project/{project}/clips/clip-001/generations/001/promote",
                 json={"filename": "prompt.txt"},
             )
             missing = client.get(
-                f"/api/project/{project}/generations/999")
+                f"/api/project/{project}/clips/clip-001/generations/999")
             self.assertEqual(traversal.status_code, 400)
             self.assertEqual(unsupported.status_code, 415)
             self.assertEqual(missing.status_code, 404)
@@ -545,13 +636,13 @@ class AppFactoryTests(WebAppTestCase):
         with TestClient(self.app()) as client:
             project = self.create_project(client, "review-concurrent")
             root = self.settings.studio_root / "projects" / project
-            generation = root / "generations" / "001"
+            generation = root / "clips" / "clip-001" / "generations" / "001"
             generation.mkdir()
             (generation / "video.mp4").write_bytes(b"video")
 
             def promote():
                 return client.post(
-                    f"/api/project/{project}/generations/001/promote",
+                    f"/api/project/{project}/clips/clip-001/generations/001/promote",
                     json={"filename": "video.mp4"},
                 )
 
@@ -561,12 +652,12 @@ class AppFactoryTests(WebAppTestCase):
                                 for response in responses))
             self.assertEqual(
                 {response.json()["result"]["target"] for response in responses},
-                {"001_video.mp4"},
+                {"clip-001_001_video.mp4"},
             )
             self.assertEqual([
                 item.name for item in (root / "final").iterdir()
                 if not item.name.startswith(".")
-            ], ["001_video.mp4"])
+            ], ["clip-001_001_video.mp4"])
 
     def test_media_and_upload_reject_symlinked_reference_directory(self):
         with TestClient(self.app()) as client:
@@ -586,15 +677,16 @@ class AppFactoryTests(WebAppTestCase):
             )
             self.assertEqual(response.status_code, 400)
             self.assertFalse((outside / "image.png").exists())
-            generation = root / "generations" / "001"
+            generation = root / "clips" / "clip-001" / "generations" / "001"
             generation.mkdir()
             (generation / "still.png").write_bytes(b"image")
             reviewed = client.post(
-                f"/api/project/{project}/generations/001/use-as-reference",
+                f"/api/project/{project}/clips/clip-001/generations/001/use-as-reference",
                 json={"filename": "still.png"},
             )
             self.assertEqual(reviewed.status_code, 400)
-            self.assertFalse((outside / "001_still.png").exists())
+            self.assertFalse(
+                (outside / "clip-001_001_still.png").exists())
 
     def test_concurrent_same_name_uploads_never_overwrite(self):
         with TestClient(self.app()) as client:

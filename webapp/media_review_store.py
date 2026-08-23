@@ -80,25 +80,26 @@ class MediaReviewStore:
             return "audio"
         raise UnsupportedMediaError(f"unsupported generation media type: {suffix}")
 
-    def resolve_generation(self, project: Path, generation_id: str) -> Path:
+    def resolve_generation(self, project: Path, clip: Path,
+                           generation_id: str) -> Path:
         generation_id = self._component(generation_id, "generation id")
-        directory = project / "generations"
+        directory = clip / "generations"
         if directory.is_symlink():
             raise MediaNotFoundError("generations directory may not be a symlink")
         base = directory.resolve()
-        if base.parent != project.resolve():
-            raise MediaNotFoundError("generations directory escapes project")
+        if base.parent != clip.resolve():
+            raise MediaNotFoundError("generations directory escapes clip")
         generation = directory / generation_id
         if (not generation.is_dir() or generation.is_symlink()
                 or generation.resolve().parent != base):
             raise MediaNotFoundError(f"generation not found: {generation_id}")
         return generation
 
-    def resolve_media(self, project: Path, generation_id: str,
+    def resolve_media(self, project: Path, clip: Path, generation_id: str,
                       filename: str) -> tuple[Path, Path]:
         filename = self._component(filename, "generation filename")
         self.media_kind(filename)
-        generation = self.resolve_generation(project, generation_id)
+        generation = self.resolve_generation(project, clip, generation_id)
         source = generation / filename
         if (not source.is_file() or source.is_symlink()
                 or source.resolve().parent != generation.resolve()):
@@ -132,9 +133,9 @@ class MediaReviewStore:
             if action.get("action") == action_name and action.get("source")
         }
 
-    def describe_generation(self, project: Path, generation_id: str,
+    def describe_generation(self, project: Path, clip: Path, generation_id: str,
                             include_prompt: bool = True) -> dict:
-        generation = self.resolve_generation(project, generation_id)
+        generation = self.resolve_generation(project, clip, generation_id)
         review = self._review(generation)
         promoted = self._action_sources(review, "promote")
         references = self._action_sources(review, "reference")
@@ -151,7 +152,8 @@ class MediaReviewStore:
                 kind=kind,
                 size=item.stat().st_size,
                 url=(
-                    f"/media/projects/{quote(project.name)}/generations/"
+                    f"/media/projects/{quote(project.name)}/clips/{quote(clip.name)}/"
+                    "generations/"
                     f"{quote(generation.name)}/{quote(item.name)}"
                 ),
                 promoted=item.name in promoted,
@@ -224,10 +226,10 @@ class MediaReviewStore:
         finally:
             temp.unlink(missing_ok=True)
 
-    def publish(self, project: Path, generation_id: str, filename: str,
-                action: str) -> SavedMediaAction:
+    def publish(self, project: Path, clip: Path, generation_id: str,
+                filename: str, action: str) -> SavedMediaAction:
         generation, source = self.resolve_media(
-            project, generation_id, filename)
+            project, clip, generation_id, filename)
         area, directory = self._target_directory(project, action)
         lock_path = project / ".media-review.lock"
         with lock_path.open("a+b") as lock:
@@ -255,7 +257,7 @@ class MediaReviewStore:
                                 created_at=str(existing.get("created_at") or ""),
                             )
 
-                requested_name = f"{generation.name}_{source.name}"
+                requested_name = f"{clip.name}_{generation.name}_{source.name}"
                 temp = directory / f".{uuid.uuid4().hex}.review"
                 try:
                     with source.open("rb") as input_handle, temp.open("xb") as output:

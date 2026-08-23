@@ -120,8 +120,8 @@ class GenerationSettingsStore:
         }
 
     @staticmethod
-    def _prompt(project: Path) -> str:
-        path = project / "current_prompt.txt"
+    def _prompt(clip: Path) -> str:
+        path = clip / "current_prompt.txt"
         if not path.is_file() or path.is_symlink():
             return ""
         return path.read_text(encoding="utf-8")
@@ -231,11 +231,11 @@ class GenerationSettingsStore:
         }
 
     @staticmethod
-    def _manifest_path(project: Path) -> Path:
-        return project / MANIFEST_NAME
+    def _manifest_path(clip: Path) -> Path:
+        return clip / MANIFEST_NAME
 
-    def _read_manifest(self, project: Path) -> tuple[dict | None, str | None]:
-        path = self._manifest_path(project)
+    def _read_manifest(self, clip: Path) -> tuple[dict | None, str | None]:
+        path = self._manifest_path(clip)
         if not path.exists():
             return None, None
         if not path.is_file() or path.is_symlink():
@@ -271,9 +271,9 @@ class GenerationSettingsStore:
             and item.suffix.lower() in IMAGE_REFERENCE_EXTENSIONS
         )
 
-    def readiness(self, project: Path, manifest: dict | None,
+    def readiness(self, project: Path, clip: Path, manifest: dict | None,
                   manifest_error: str | None = None) -> dict:
-        prompt = self._prompt(project)
+        prompt = self._prompt(clip)
         duration, references, prompt_errors = self._prompt_inputs(prompt)
         reasons = []
         warnings = []
@@ -340,8 +340,9 @@ class GenerationSettingsStore:
             "references": references,
         }
 
-    def describe(self, project: Path, include_options: bool = False) -> dict:
-        manifest, error = self._read_manifest(project)
+    def describe(self, project: Path, clip: Path,
+                 include_options: bool = False) -> dict:
+        manifest, error = self._read_manifest(clip)
         settings = {
             key: manifest[key] for key in self.defaults()
         } if manifest else self.defaults()
@@ -353,7 +354,7 @@ class GenerationSettingsStore:
                 "prompt_sha256": manifest.get("prompt_sha256"),
                 "updated_at": manifest.get("updated_at"),
             } if manifest else None),
-            "readiness": self.readiness(project, manifest, error),
+            "readiness": self.readiness(project, clip, manifest, error),
         }
         if result["settings"]["seed"] is not None:
             result["settings"]["seed"] = str(result["settings"]["seed"])
@@ -364,20 +365,20 @@ class GenerationSettingsStore:
             }
         return result
 
-    def save(self, project: Path, payload: dict) -> dict:
+    def save(self, project: Path, clip: Path, payload: dict) -> dict:
         normalized = self.normalize(payload)
-        prompt = self._prompt(project)
+        prompt = self._prompt(clip)
         manifest = {
             "schema_version": SCHEMA_VERSION,
             "prompt_sha256": self.prompt_hash(prompt),
             "updated_at": datetime.now(timezone.utc).isoformat(),
             **normalized,
         }
-        target = self._manifest_path(project)
-        lock_path = project / ".generation-settings.lock"
+        target = self._manifest_path(clip)
+        lock_path = clip / ".generation-settings.lock"
         with lock_path.open("a+b") as lock:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-            temp = project / f".{uuid.uuid4().hex}.generation-settings"
+            temp = clip / f".{uuid.uuid4().hex}.generation-settings"
             try:
                 with temp.open("x", encoding="utf-8") as handle:
                     json.dump(manifest, handle, indent=2, ensure_ascii=False)
@@ -388,4 +389,4 @@ class GenerationSettingsStore:
             finally:
                 temp.unlink(missing_ok=True)
                 fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
-        return self.describe(project, include_options=True)
+        return self.describe(project, clip, include_options=True)

@@ -31,7 +31,7 @@ from webapp.studio_manager import StudioJobManager
 
 
 router = APIRouter()
-MEDIA_AREAS = {"references", "generations", "final"}
+MEDIA_AREAS = {"references", "final"}
 
 
 class ProjectIn(BaseModel):
@@ -42,6 +42,32 @@ class ProjectIn(BaseModel):
 class ChatIn(BaseModel):
     message: str
     profile: str | None = None
+
+
+class ClipIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str
+
+
+class ClipUpdateIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str | None = None
+    enabled: bool | None = None
+
+
+class ClipOrderIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    clip_ids: list[str]
+
+
+class SelectedTakeIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    generation: str | None
+    filename: str | None = None
 
 
 class MediaActionIn(BaseModel):
@@ -94,6 +120,12 @@ def _raise_media_review_error(exc: MediaReviewError) -> NoReturn:
         raise HTTPException(404, str(exc))
     if isinstance(exc, UnsupportedMediaError):
         raise HTTPException(415, str(exc))
+    raise HTTPException(400, str(exc))
+
+
+def _raise_clip_store_error(exc: ClipStoreError) -> NoReturn:
+    if isinstance(exc, ClipNotFoundError):
+        raise HTTPException(404, str(exc))
     raise HTTPException(400, str(exc))
 
 
@@ -161,28 +193,101 @@ def get_project(request: Request, project_id: str):
     store = _store(request)
     store.import_chat_if_empty(project.name, project / "chat.jsonl")
     chat_count, _ = store.chat_events(project.name)
+    try:
+        manifest = _clips(request).describe(project)
+    except ClipStoreError as exc:
+        _raise_clip_store_error(exc)
     return {
         "id": project.name,
+        "title": manifest["title"],
         "brief": ds.read_project_text(project, "brief.md"),
-        "current_prompt": ds.read_project_text(project, "current_prompt.txt"),
         "chat_count": chat_count,
-        "generation_settings": _generation_settings(request).describe(project),
+        "clips": manifest["clips"],
     }
 
 
-@router.get("/api/project/{project_id}/generation-settings")
-def get_generation_settings(request: Request, project_id: str):
-    project = resolve_project(request, project_id)
-    return _generation_settings(request).describe(project, include_options=True)
-
-
-@router.put("/api/project/{project_id}/generation-settings")
-def put_generation_settings(request: Request, project_id: str,
-                            body: GenerationSettingsIn):
+@router.get("/api/project/{project_id}/clips")
+def get_clips(request: Request, project_id: str):
     project = resolve_project(request, project_id)
     try:
+        return _clips(request).describe(project)
+    except ClipStoreError as exc:
+        _raise_clip_store_error(exc)
+
+
+@router.post("/api/project/{project_id}/clips", status_code=201)
+def create_clip(request: Request, project_id: str, body: ClipIn):
+    project = resolve_project(request, project_id)
+    try:
+        return {"clip": _clips(request).create_clip(project, body.title)}
+    except ClipStoreError as exc:
+        _raise_clip_store_error(exc)
+
+
+@router.put("/api/project/{project_id}/clips/order")
+def reorder_clips(request: Request, project_id: str, body: ClipOrderIn):
+    project = resolve_project(request, project_id)
+    try:
+        return _clips(request).reorder(project, body.clip_ids)
+    except ClipStoreError as exc:
+        _raise_clip_store_error(exc)
+
+
+@router.get("/api/project/{project_id}/clips/{clip_id}")
+def get_clip(request: Request, project_id: str, clip_id: str):
+    project = resolve_project(request, project_id)
+    clip = resolve_clip(request, project, clip_id)
+    try:
+        manifest = _clips(request).describe(project)
+    except ClipStoreError as exc:
+        _raise_clip_store_error(exc)
+    entry = next(item for item in manifest["clips"] if item["id"] == clip_id)
+    return {
+        **entry,
+        "current_prompt": ds.read_project_text(clip, "current_prompt.txt"),
+        "generation_settings": _generation_settings(request).describe(
+            project, clip),
+    }
+
+
+@router.patch("/api/project/{project_id}/clips/{clip_id}")
+def update_clip(request: Request, project_id: str, clip_id: str,
+                body: ClipUpdateIn):
+    project = resolve_project(request, project_id)
+    try:
+        return {"clip": _clips(request).update_clip(
+            project, clip_id, title=body.title, enabled=body.enabled)}
+    except ClipStoreError as exc:
+        _raise_clip_store_error(exc)
+
+
+@router.put("/api/project/{project_id}/clips/{clip_id}/selected-take")
+def select_clip_take(request: Request, project_id: str, clip_id: str,
+                     body: SelectedTakeIn):
+    project = resolve_project(request, project_id)
+    try:
+        return {"clip": _clips(request).select_take(
+            project, clip_id, body.generation, body.filename)}
+    except ClipStoreError as exc:
+        _raise_clip_store_error(exc)
+
+
+@router.get("/api/project/{project_id}/clips/{clip_id}/generation-settings")
+def get_generation_settings(request: Request, project_id: str, clip_id: str):
+    project = resolve_project(request, project_id)
+    clip = resolve_clip(request, project, clip_id)
+    return _generation_settings(request).describe(
+        project, clip, include_options=True)
+
+
+@router.put("/api/project/{project_id}/clips/{clip_id}/generation-settings")
+def put_generation_settings(request: Request, project_id: str, clip_id: str,
+                            body: GenerationSettingsIn):
+    project = resolve_project(request, project_id)
+    clip = resolve_clip(request, project, clip_id)
+    try:
         return _generation_settings(request).save(
-            project, body.model_dump())
+            project, clip, body.model_dump())
     except GenerationSettingsError as exc:
         raise HTTPException(400, str(exc))
 
@@ -197,55 +302,64 @@ def get_chat(request: Request, project_id: str,
     return {"total": total, "messages": [event.to_dict() for event in events]}
 
 
-@router.get("/api/project/{project_id}/generations")
-def get_generations(request: Request, project_id: str):
+@router.get("/api/project/{project_id}/clips/{clip_id}/generations")
+def get_generations(request: Request, project_id: str, clip_id: str):
     project = resolve_project(request, project_id)
+    clip = resolve_clip(request, project, clip_id)
     reviews = _media_reviews(request)
     generations = []
-    directory = project / "generations"
-    if directory.is_dir():
-        for generation in sorted(directory.iterdir(), reverse=True):
-            if not generation.is_dir() or generation.is_symlink():
-                continue
-            try:
-                generations.append(reviews.describe_generation(
-                    project, generation.name, include_prompt=False))
-            except MediaReviewError:
-                continue
+    directory = clip / "generations"
+    if directory.is_symlink() or not directory.is_dir():
+        raise HTTPException(400, "generations directory is unsafe")
+    for generation in sorted(directory.iterdir(), reverse=True):
+        if not generation.is_dir() or generation.is_symlink():
+            continue
+        try:
+            generations.append(reviews.describe_generation(
+                project, clip, generation.name, include_prompt=False))
+        except MediaReviewError:
+            continue
     return {"generations": generations}
 
 
-@router.get("/api/project/{project_id}/generations/{generation_id}")
-def get_generation(request: Request, project_id: str, generation_id: str):
+@router.get(
+    "/api/project/{project_id}/clips/{clip_id}/generations/{generation_id}")
+def get_generation(request: Request, project_id: str, clip_id: str,
+                   generation_id: str):
     project = resolve_project(request, project_id)
+    clip = resolve_clip(request, project, clip_id)
     try:
         return _media_reviews(request).describe_generation(
-            project, generation_id, include_prompt=True)
+            project, clip, generation_id, include_prompt=True)
     except MediaReviewError as exc:
         _raise_media_review_error(exc)
 
 
 @router.post(
-    "/api/project/{project_id}/generations/{generation_id}/promote")
-def promote_generation_media(request: Request, project_id: str,
+    "/api/project/{project_id}/clips/{clip_id}/generations/"
+    "{generation_id}/promote")
+def promote_generation_media(request: Request, project_id: str, clip_id: str,
                              generation_id: str, body: MediaActionIn):
     project = resolve_project(request, project_id)
+    clip = resolve_clip(request, project, clip_id)
     try:
         saved = _media_reviews(request).publish(
-            project, generation_id, body.filename, "promote")
+            project, clip, generation_id, body.filename, "promote")
     except MediaReviewError as exc:
         _raise_media_review_error(exc)
     return {"ok": True, "result": saved.to_dict()}
 
 
 @router.post(
-    "/api/project/{project_id}/generations/{generation_id}/use-as-reference")
-def use_generation_as_reference(request: Request, project_id: str,
+    "/api/project/{project_id}/clips/{clip_id}/generations/"
+    "{generation_id}/use-as-reference")
+def use_generation_as_reference(request: Request, project_id: str, clip_id: str,
                                 generation_id: str, body: MediaActionIn):
     project = resolve_project(request, project_id)
+    clip = resolve_clip(request, project, clip_id)
     try:
         saved = _media_reviews(request).publish(
-            project, generation_id, body.filename, "reference")
+            project, clip, generation_id, body.filename, "reference")
     except MediaReviewError as exc:
         _raise_media_review_error(exc)
     return {"ok": True, "result": saved.to_dict()}
@@ -324,6 +438,21 @@ def get_project_events(request: Request, project_id: str,
         "cursor": cursor,
         "events": [event.to_dict() for event in events],
     }
+
+
+@router.get(
+    "/media/projects/{project_id}/clips/{clip_id}/generations/"
+    "{generation_id}/{filename}")
+def clip_generation_media(request: Request, project_id: str, clip_id: str,
+                          generation_id: str, filename: str):
+    project = resolve_project(request, project_id)
+    clip = resolve_clip(request, project, clip_id)
+    try:
+        _, source = _media_reviews(request).resolve_media(
+            project, clip, generation_id, filename)
+    except MediaReviewError as exc:
+        _raise_media_review_error(exc)
+    return FileResponse(source)
 
 
 @router.get("/media/projects/{project_id}/{area}/{relative_path:path}")
