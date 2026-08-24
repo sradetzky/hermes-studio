@@ -17,8 +17,8 @@ no state in the UI that isn't already on disk; minimal dependencies.
 
 - `app.py` — inert app factory + lifespan wiring
 - `job_store.py` — typed SQLite jobs, profile sessions, chat and activity events
-- `hermes_events.py` — read-only projection of structured Hermes session rows
-  into safe per-job reasoning/tool activity
+- `hermes_events.py` — exact job-source correlation plus baseline-guarded read-only
+  projection of structured Hermes session rows into safe per-job activity
 - `studio_manager.py` — FIFO scheduler, worker lease, parent-death-supervised
   Hermes process, exact job-token orphan recovery before lease release, and
   scheduler-coupled liveness with top-level execution fault containment

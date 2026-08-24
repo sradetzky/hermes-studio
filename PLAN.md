@@ -193,7 +193,7 @@ project/clip chat scope and exact IDs.
   global GPU lease while a possible job process remains alive.
 - [x] Couple worker lease renewal to scheduler health and recover unexpected
   execution-loop failures instead of leaving permanent running jobs.
-- [ ] Correlate Hermes sessions with exact job identity and retry event baselines
+- [x] Correlate Hermes sessions with exact job identity and retry event baselines
   without replaying prior-session activity.
 - [ ] Persist an immutable generation execution contract per job and require one
   exact contract-bound archive before a generation job can complete.

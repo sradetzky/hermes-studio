@@ -144,6 +144,9 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
 - Scheduler-level fault containment now terminates owned work and persists a
   failure without killing the queue loop; a dead scheduler unregisters its worker
   lease instead of receiving false liveness from the heartbeat thread.
+- New Hermes sessions carry an exact `studio-web:<job-id>` source correlation;
+  resumed-session activity waits for a successfully captured message baseline,
+  preventing previous-job session binding and historical event replay.
 
 ## Next steps
 

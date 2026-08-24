@@ -21,6 +21,9 @@ preview and production releases.
   global execution lease unless process termination is proven
 - Coupled worker liveness to scheduler health and contained unexpected execution
   failures so a dead scheduler cannot keep renewing an unrecoverable job lease
+- Replaced timestamp-shaped Hermes session discovery with exact per-job source
+  correlation and retryable resumed-session baselines that cannot replay old
+  reasoning or tool activity after a transient SQLite failure
 - Web-triggered H3 archives now recover actual seed, canvas, timing, steps,
   acceleration nodes, ordered references, and prompt hash from authoritative
   ComfyUI history; incomplete or mismatched execution metadata fails closed

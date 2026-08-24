@@ -418,7 +418,7 @@ class JobStoreTests(WebAppTestCase):
             )
             connection.execute(
                 "INSERT INTO sessions VALUES (?, ?, ?)",
-                ("session-1", "studio-web", started_at),
+                ("session-1", f"studio-web:{job.id}", started_at),
             )
             connection.execute(
                 "INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -455,7 +455,7 @@ class JobStoreTests(WebAppTestCase):
 
         with patch.dict(os.environ, {"HERMES_HOME": str(home)}):
             bridge = HermesSessionEventBridge(
-                store, self.settings, job, "studio-web", started_at)
+                store, self.settings, job, f"studio-web:{job.id}", started_at)
             bridge.poll()
 
         _, events = store.job_events("project")
@@ -471,6 +471,95 @@ class JobStoreTests(WebAppTestCase):
             [event.detail["arguments"]["path"] for event in completed],
             ["/tmp/b", "/tmp/a"],
         )
+
+    def test_hermes_session_bridge_requires_exact_job_source(self):
+        store = self.store()
+        job = store.create_chat_job(
+            "project", "inspect", clip_id="clip-001")
+        state = Path(self.temp.name) / "exact-source-state.db"
+        state.parent.mkdir(parents=True, exist_ok=True)
+        with closing(sqlite3.connect(state)) as connection:
+            connection.executescript(
+                "CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT, "
+                "started_at REAL);"
+                "CREATE TABLE messages (id INTEGER PRIMARY KEY, session_id TEXT, "
+                "role TEXT, content TEXT, tool_call_id TEXT, tool_name TEXT, "
+                "tool_calls TEXT, reasoning TEXT, reasoning_content TEXT, "
+                "timestamp REAL);"
+            )
+            connection.execute(
+                "INSERT INTO sessions VALUES (?, ?, ?)",
+                ("previous", "studio-web", time.time()),
+            )
+            connection.execute(
+                "INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (1, "previous", "assistant", "", None, None, None,
+                 "old reasoning", None, time.time()),
+            )
+            connection.commit()
+        bridge = HermesSessionEventBridge(
+            store, self.settings, job, f"studio-web:{job.id}", time.time())
+        bridge.database_path = state
+        bridge.poll()
+        self.assertIsNone(bridge.session_id)
+        _, events = store.job_events("project")
+        self.assertNotIn("reasoning", [event.event_type for event in events])
+
+    def test_hermes_session_bridge_retries_baseline_without_replaying_history(self):
+        store = self.store()
+        job = store.create_chat_job(
+            "project", "inspect", clip_id="clip-001")
+        state = Path(self.temp.name) / "baseline-state.db"
+        state.parent.mkdir(parents=True, exist_ok=True)
+        with closing(sqlite3.connect(state)) as connection:
+            connection.executescript(
+                "CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT, "
+                "started_at REAL);"
+                "CREATE TABLE messages (id INTEGER PRIMARY KEY, session_id TEXT, "
+                "role TEXT, content TEXT, tool_call_id TEXT, tool_name TEXT, "
+                "tool_calls TEXT, reasoning TEXT, reasoning_content TEXT, "
+                "timestamp REAL);"
+            )
+            connection.execute(
+                "INSERT INTO sessions VALUES (?, ?, ?)",
+                ("resumed", "old-source", time.time()),
+            )
+            connection.execute(
+                "INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (1, "resumed", "assistant", "", None, None, None,
+                 "old reasoning", None, time.time()),
+            )
+            connection.commit()
+        bridge = HermesSessionEventBridge(
+            store, self.settings, job, f"studio-web:{job.id}", time.time(),
+            session_id="resumed")
+        bridge.database_path = state
+        real_connection = bridge._connection
+        calls = 0
+
+        def flaky_connection():
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise sqlite3.OperationalError("temporarily locked")
+            return real_connection()
+
+        bridge._connection = flaky_connection
+        self.assertFalse(bridge.prepare())
+        bridge.poll()
+        with closing(sqlite3.connect(state)) as connection:
+            connection.execute(
+                "INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (2, "resumed", "assistant", "", None, None, None,
+                 "new reasoning", None, time.time()),
+            )
+            connection.commit()
+        bridge.poll()
+        _, events = store.job_events("project")
+        reasoning = [
+            event.detail["text"] for event in events
+            if event.event_type == "reasoning"]
+        self.assertEqual(reasoning, ["new reasoning"])
 
     def test_cross_connection_active_job_claim_is_atomic(self):
         first_store = self.store()

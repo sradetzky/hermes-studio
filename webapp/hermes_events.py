@@ -100,15 +100,20 @@ class HermesSessionEventBridge:
         self.session_id = session_id
         self.database_path = settings.profile_state_path(job.profile)
         self.cursor = 0
+        self._baseline_ready = session_id is None
         self._open_tools: dict[
             str, deque[tuple[str | None, float, dict]]
         ] = defaultdict(deque)
         self._disabled = False
         self._connected = False
 
-    def prepare(self) -> None:
-        if not self.session_id or not self.database_path.is_file():
-            return
+    def prepare(self) -> bool:
+        if not self.session_id:
+            self._baseline_ready = True
+            return True
+        if not self.database_path.is_file():
+            self._baseline_ready = False
+            return False
         try:
             with closing(self._connection()) as connection:
                 row = connection.execute(
@@ -116,13 +121,20 @@ class HermesSessionEventBridge:
                     "WHERE session_id = ?", (self.session_id,),
                 ).fetchone()
                 self.cursor = row["cursor"]
+            self._baseline_ready = True
+            return True
         except sqlite3.Error:
             log.debug("Could not prepare Hermes event bridge", exc_info=True)
+            self._baseline_ready = False
+            return False
 
     def poll(self) -> None:
         if self._disabled or not self.database_path.is_file():
             return
         try:
+            if self.session_id and not self._baseline_ready:
+                if not self.prepare():
+                    return
             with closing(self._connection()) as connection:
                 if not self.session_id:
                     self.session_id = self._discover_session(connection)
@@ -161,9 +173,9 @@ class HermesSessionEventBridge:
 
     def _discover_session(self, connection: sqlite3.Connection) -> str | None:
         row = connection.execute(
-            "SELECT id FROM sessions WHERE source = ? AND started_at >= ? "
+            "SELECT id FROM sessions WHERE source = ? "
             "ORDER BY started_at DESC LIMIT 1",
-            (self.source, self.started_at - 2.0),
+            (self.source,),
         ).fetchone()
         return row["id"] if row else None
 

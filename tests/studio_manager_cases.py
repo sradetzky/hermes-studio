@@ -211,6 +211,8 @@ class StudioManagerTests(WebAppTestCase):
         self.assertEqual(
             command[command.index("-t") + 1], "file,terminal,skills")
         self.assertNotIn("all", command)
+        self.assertEqual(
+            command[command.index("--source") + 1], f"studio-web:{job.id}")
         query = command[command.index("-q") + 1]
         self.assertIn("Project ID: project", query)
         self.assertIn("Active clip ID: clip-002", query)

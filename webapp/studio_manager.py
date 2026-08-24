@@ -262,11 +262,22 @@ class StudioJobManager:
             self.store,
             self.settings,
             job,
-            source="studio-web",
+            source=self._session_source(job),
             started_at=time.time(),
             session_id=session_id,
         )
-        bridge.prepare()
+        if not self._prepare_event_bridge(bridge):
+            error = "Could not establish Hermes session event baseline"
+            self.store.append_job_event(
+                job.id,
+                job.profile,
+                "job.prepare",
+                error,
+                status="failed",
+            )
+            self.store.fail(job.id, error, self.owner_id)
+            self._export_job_chat(job)
+            return
         process: subprocess.Popen | None = None
         try:
             with self._process_lock:
@@ -369,10 +380,28 @@ class StudioJobManager:
             command += ["-r", session_id]
         toolsets = PROFILE_TOOLSETS.get(job.profile, "all")
         command += [
-            "chat", "-Q", "-t", toolsets, "--source", "studio-web",
+            "chat", "-Q", "-t", toolsets, "--source", self._session_source(job),
             "-q", self._agent_query(job),
         ]
         return command
+
+    @staticmethod
+    def _session_source(job: Job) -> str:
+        return f"studio-web:{job.id}"
+
+    def _prepare_event_bridge(self, bridge: HermesSessionEventBridge) -> bool:
+        deadline = time.monotonic() + 2.0
+        while not self._stop.is_set():
+            if bridge.prepare():
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            try:
+                self.store.heartbeat_worker(self.owner_id)
+            except Exception:
+                log.exception("Could not heartbeat while preparing Hermes events")
+            self._stop.wait(0.1)
+        return False
 
     def _supervised_command(self, command: list[str]) -> list[str]:
         return [
