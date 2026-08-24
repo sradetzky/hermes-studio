@@ -1,8 +1,8 @@
 # PLAN.md — Hermes Studio
 
 **Status**: `v0.1.0-preview.3` release candidate prepared with Phase 4.7
-remediation and Phase 5 project movie assembly complete; Phase 6 interaction
-and continuity polish is defined but not started.
+remediation and Phase 5 project movie assembly complete; a blocking code-quality
+remediation gate is planned before any Phase 6 additions.
 **Owner**: Sven (local setup on RTX 5060 Ti 16GB)  
 **Updated**: 2026-08-24
 **Goal**: Fully local, agent-orchestrated creative studio centered on MiniMax H3 + Hermes, with a simple self-hosted web UI.
@@ -233,7 +233,26 @@ project/clip chat scope and exact IDs.
 - [x] Keep trimming, transitions, timeline editing, and side-by-side take
   comparison outside this phase
 
-### Phase 6 – Interaction and continuity polish (planned)
+### Phase 5.5 – Code-quality remediation gate (planned; blocks Phase 6)
+- [ ] Make all Python tests discoverable through one canonical command; add one
+  executable local release gate and reproducible checkout-independent service
+  setup.
+- [ ] Centralize profile, fleet, real-home, and ComfyUI path resolution across
+  Python and shell; verify both normal and profile-isolated environments.
+- [ ] Establish a dependency-neutral `studio_core` layer, extract the legacy
+  migration engine, and remove bidirectional `webapp`/`scripts` imports.
+- [ ] Execute immutable generation contracts directly instead of using an LLM as
+  a deterministic shell-command proxy; split scheduling, process supervision,
+  agent, generation, and movie execution ownership.
+- [ ] Type job kinds/scopes/phases/payloads at persistence boundaries and decide
+  an explicit runtime-event retention policy from measured data.
+- [ ] Give conversation/reference/media browser controllers explicit local state,
+  reconcile stable activity nodes, fix follow-latest scrolling, and split the
+  behavioral Chromium mega-scenario.
+- [ ] Complete every acceptance criterion in
+  `docs/plans/2026-08-24-code-quality-remediation.md` before new additions.
+
+### Phase 6 – Interaction and continuity additions (planned after Phase 5.5)
 - [ ] Make Hermes `clarify` requests actionable in the web app: render the exact
   single-select, multi-select, or free-text question for the bound job/session
   and submit the response without losing project/clip scope or revision safety.
@@ -241,9 +260,6 @@ project/clip chat scope and exact IDs.
   frame** only when the immediately preceding clip has a valid selected video
   take. Bind the derived frame to that exact source clip/take in the immutable
   generation contract and invalidate it when ordering or selection changes.
-- [ ] Keep newly appended session output visible: when the scrollable activity or
-  response subwindow receives a new response, scroll it to the end instead of
-  resetting to the top. Cover the behavior in a real-browser regression.
 
 ---
 

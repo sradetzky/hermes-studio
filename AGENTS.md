@@ -39,6 +39,8 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
 - `docs/comfyui-mcp.md` — production transport, queue/cleanup transaction
 - `docs/grok-backup.md` — Grok 4.6 web/X/Imagine backup profile + dispatch
 - `docs/frontend-plan.md` — web UI stack, layout, API surface, milestones
+- `docs/plans/2026-08-24-code-quality-remediation.md` — blocking remediation
+  sequence, acceptance gates, and deferred Phase 6 additions
 
 ## Conventions
 
@@ -188,12 +190,17 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
   compact tail-pinned H3 dry-run command plus deterministic MCP submission
   helper, preventing task loss, runner-source loops, and model-transcribed graph
   or prompt corruption.
+- Thermo-nuclear maintainability review consolidated every verified blocker and
+  recommendation into a mandatory correctness, runtime-boundary, and browser-
+  ownership remediation gate before Phase 6 additions.
 
 ## Next steps
 
-- [ ] Phase 6: make Hermes `clarify` requests answerable in the exact scoped web
-  conversation.
-- [ ] Phase 6: add an eligible-only References checkbox that uses the immediately
-  previous clip's selected-take last frame as a provenance-bound generation ref.
-- [ ] Phase 6: keep new session output visible by scrolling its subwindow to the
-  end instead of resetting to the top; add real-browser regression coverage.
+- [ ] Remediation P0: complete canonical test discovery/release gates, path-root
+  resolution, reproducible service/dependency setup, and event-retention decision.
+- [ ] Remediation P1: create `studio_core`, extract migration/domain ownership,
+  remove the LLM generation proxy, split job runners, and type job boundaries.
+- [ ] Remediation P2: extract browser controllers, reconcile stable activity
+  nodes, fix follow-latest scrolling, and split behavioral browser scenarios.
+- [ ] Only after the remediation gate passes, add scoped Hermes `clarify`
+  responses and typed previous-selected-take last-frame generation inputs.
