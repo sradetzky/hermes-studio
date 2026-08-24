@@ -206,8 +206,10 @@ auto-chained, and their result never starts a render without a separate request.
 - **Generate with this prompt** is enabled only for an enabled clip with a ready
   prompt-bound manifest and no active project job. The request carries the exact
   prompt hash and settings revision, is rejected if stale at the API boundary,
-  and is revalidated when its dedicated Studio generation job starts. The agent
-  receives a resolved typed package and explicit one-render authorization.
+  and is expanded into an immutable prompt/settings/execution/archive contract in
+  the dedicated SQLite job. Worker start revalidates current state against that
+  snapshot; archival reads the snapshot back from the exact running job, and a
+  zero-exit agent cannot complete without one matching artifact and prompt ID.
 - No auth v1; Uvicorn remains loopback-only, while optional tailnet access relies
   on Tailscale identity/ACLs plus the exact-host and same-origin guards above.
 

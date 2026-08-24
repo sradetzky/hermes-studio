@@ -195,7 +195,7 @@ project/clip chat scope and exact IDs.
   execution-loop failures instead of leaving permanent running jobs.
 - [x] Correlate Hermes sessions with exact job identity and retry event baselines
   without replaying prior-session activity.
-- [ ] Persist an immutable generation execution contract per job and require one
+- [x] Persist an immutable generation execution contract per job and require one
   exact contract-bound archive before a generation job can complete.
 - [ ] Traverse the exact output-producing ComfyUI graph branch when deriving
   authoritative execution metadata; reject disconnected or ambiguous nodes.

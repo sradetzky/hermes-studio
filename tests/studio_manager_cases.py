@@ -246,6 +246,17 @@ class StudioManagerTests(WebAppTestCase):
             contract["manifest"]["prompt_sha256"],
             contract["manifest"]["updated_at"],
         )
+        payload = json.loads(job.message)
+        self.assertEqual(payload["schema_version"], 1)
+        self.assertEqual(
+            payload["prompt"], "A complete 5-second H3 generation prompt\n")
+        self.assertEqual(payload["settings_manifest"], {
+            "schema_version": 2,
+            "prompt_sha256": contract["manifest"]["prompt_sha256"],
+            "updated_at": contract["manifest"]["updated_at"],
+            **_generation_settings_payload(),
+        })
+        self.assertEqual(payload["expected_generation_id"], "001")
         query = manager._agent_query(job)
         self.assertIn("Explicit user-authorized web generation", query)
         self.assertIn('"action": "generate-current-prompt"', query)
@@ -265,6 +276,42 @@ class StudioManagerTests(WebAppTestCase):
         self.assertEqual(failed.status, JobStatus.FAILED)
         self.assertIn("changed", failed.error.lower())
         self.assertEqual(commands, [])
+
+    def test_generation_exit_zero_without_contract_archive_fails(self):
+        ds.studio_root(str(self.settings.studio_root))
+        project = ds.create_project(
+            self.settings.studio_root, "generation-postcondition")
+        clip = project / "clips" / "clip-001"
+        (clip / "current_prompt.txt").write_text(
+            "A complete 5-second H3 generation prompt\n")
+        contract = GenerationSettingsStore(self.settings).save(
+            project, clip, _generation_settings_payload())
+        store = JobStore(self.settings.database_path)
+        manager = StudioJobManager(
+            self.settings,
+            store,
+            command_builder=lambda *_: [
+                sys.executable, "-c", "print('generation complete')"],
+            cleanup_callback=lambda: None,
+        )
+        with self.assertLogs("webapp.studio_manager", level="ERROR"):
+            manager.start()
+            try:
+                job = manager.submit_generation(
+                    project.name,
+                    "clip-001",
+                    contract["manifest"]["prompt_sha256"],
+                    contract["manifest"]["updated_at"],
+                )
+                finished = self.wait_for_terminal(store, job.id)
+            finally:
+                manager.stop()
+        self.assertIsNotNone(finished)
+        assert finished is not None
+        self.assertEqual(finished.status, JobStatus.FAILED)
+        self.assertIn("generation archive", finished.error.lower())
+        self.assertEqual(
+            list((clip / "generations").iterdir()), [])
 
     def test_shutdown_terminates_tracked_child(self):
         ds.studio_root(str(self.settings.studio_root))

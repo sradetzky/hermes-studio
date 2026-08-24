@@ -48,6 +48,10 @@ if __package__ in {None, ""} and str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from webapp.clip_store import ClipStore
+from webapp.generation_contract import (
+    GenerationContractError,
+    load_running_generation_contract,
+)
 from webapp.safe_files import (
     SafeFilesystemError,
     atomic_exchange_regular_file_at,
@@ -2493,10 +2497,37 @@ def _h3_history_metadata(prompt_id: str, outputs: list[str]) -> dict:
     }
 
 
+def _validate_authoritative_generation_contract(
+        authoritative: dict, contract: dict) -> None:
+    settings = contract["settings_manifest"]
+    execution = contract["execution"]
+    resolution = execution["resolution"]
+    timing = execution["timing"]
+    expected = {
+        "prompt_sha256": contract["prompt_sha256"],
+        "mode": settings["mode"],
+        "width": resolution["width"],
+        "height": resolution["height"],
+        "length": timing["frames"],
+        "fps": timing["fps"],
+        "steps": settings["steps"],
+        "accel": settings["accel"],
+        "references": execution["references"],
+    }
+    for field, value in expected.items():
+        if authoritative.get(field) != value:
+            raise ValueError(
+                f"ComfyUI history {field} does not match the generation contract")
+    if settings["seed"] is not None:
+        if authoritative.get("seed") != int(settings["seed"]):
+            raise ValueError(
+                "ComfyUI history seed does not match the generation contract")
+
+
 def _web_generation_metadata(project: str, clip_id: str, outputs: list[str],
-                             metadata: dict) -> dict:
+                             metadata: dict) -> tuple[dict, dict | None]:
     if os.environ.get("HERMES_STUDIO_JOB_KIND", "") != "generate":
-        return metadata
+        return metadata, None
     if (os.environ.get("HERMES_STUDIO_PROJECT") != project
             or os.environ.get("HERMES_STUDIO_CLIP") != clip_id):
         raise ValueError("web generation archive target does not match its job")
@@ -2506,12 +2537,23 @@ def _web_generation_metadata(project: str, clip_id: str, outputs: list[str],
     job_id = os.environ.get("HERMES_STUDIO_JOB_ID", "")
     if not job_id:
         raise ValueError("web generation archive requires a Studio job id")
+    runtime_root = os.environ.get("HERMES_STUDIO_RUNTIME_ROOT", "")
+    if not runtime_root:
+        raise ValueError("web generation archive requires its runtime root")
+    try:
+        contract = load_running_generation_contract(
+            Path(runtime_root), job_id, project, clip_id)
+    except GenerationContractError as exc:
+        raise ValueError(str(exc)) from exc
     authoritative = _h3_history_metadata(prompt_id, outputs)
+    _validate_authoritative_generation_contract(authoritative, contract)
     return {
         **metadata,
         **authoritative,
         "studio_job_id": job_id,
-    }
+        "generation_contract_version": contract["schema_version"],
+        "settings_updated_at": contract["settings_updated_at"],
+    }, contract
 
 
 def archive_outputs(root: Path, project: str, clip_id: str,
@@ -2521,7 +2563,7 @@ def archive_outputs(root: Path, project: str, clip_id: str,
                     prompt_text: str | None = None) -> Path:
     """Archive outputs beneath one exact clip from one trusted source root."""
     clip = clip_path(root, project, clip_id)
-    archive_metadata = _web_generation_metadata(
+    archive_metadata, generation_contract = _web_generation_metadata(
         project, clip_id, outputs, dict(metadata or {}))
     output_root = Path(os.path.abspath(
         os.path.expanduser(os.fspath(source_root or COMFY_OUTPUT))))
@@ -2558,6 +2600,11 @@ def archive_outputs(root: Path, project: str, clip_id: str,
         with os.fdopen(lock_fd, "a+b") as lock:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
             gen_dir = next_generation_dir(root, project, clip_id)
+            if (generation_contract is not None
+                    and gen_dir.name
+                    != generation_contract["expected_generation_id"]):
+                raise ValueError(
+                    "generation archive sequence does not match its job contract")
             staging = generations / f".publishing-{uuid.uuid4().hex}"
             staging.mkdir()
             copied = []
@@ -2569,9 +2616,17 @@ def archive_outputs(root: Path, project: str, clip_id: str,
                             f"duplicate output filename: {source.name}")
                     copy_opened_file(source, target)
                     copied.append(target.name)
+                supplied_prompt = (
+                    None if prompt_text is None else prompt_text.rstrip() + "\n")
+                if (generation_contract is not None and supplied_prompt is not None
+                        and supplied_prompt != generation_contract["prompt"]):
+                    raise ValueError(
+                        "provided prompt does not match the generation contract")
                 archived_prompt = (
+                    generation_contract["prompt"]
+                    if generation_contract is not None else
                     read_project_text(clip, "current_prompt.txt", required=True)
-                    if prompt_text is None else prompt_text.rstrip() + "\n"
+                    if supplied_prompt is None else supplied_prompt
                 )
                 expected_prompt_hash = archive_metadata.get("prompt_sha256")
                 if (expected_prompt_hash is not None
@@ -2581,18 +2636,28 @@ def archive_outputs(root: Path, project: str, clip_id: str,
                         "archived prompt does not match the ComfyUI history")
                 (staging / "prompt.txt").write_text(
                     archived_prompt, encoding="utf-8")
-                settings_path = clip / "current_generation.json"
-                try:
-                    with open_regular_file(settings_path) as settings:
-                        copy_opened_file(settings, staging / "settings.json")
-                except FileNotFoundError:
-                    # JSON null is the stable snapshot for an unsaved state.
+                if generation_contract is not None:
                     (staging / "settings.json").write_text(
-                        "null\n", encoding="utf-8")
-                except SafeFilesystemError as exc:
-                    raise ValueError(
-                        "current generation settings are not a regular clip file"
-                    ) from exc
+                        json.dumps(
+                            generation_contract["settings_manifest"],
+                            indent=2,
+                            ensure_ascii=False,
+                        ) + "\n",
+                        encoding="utf-8",
+                    )
+                else:
+                    settings_path = clip / "current_generation.json"
+                    try:
+                        with open_regular_file(settings_path) as settings:
+                            copy_opened_file(settings, staging / "settings.json")
+                    except FileNotFoundError:
+                        # JSON null is the stable snapshot for an unsaved state.
+                        (staging / "settings.json").write_text(
+                            "null\n", encoding="utf-8")
+                    except SafeFilesystemError as exc:
+                        raise ValueError(
+                            "current generation settings are not a regular clip file"
+                        ) from exc
                 meta = {
                     **archive_metadata,
                     "generated": _dt.datetime.now().isoformat(timespec="seconds"),

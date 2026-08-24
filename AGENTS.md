@@ -147,6 +147,10 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
 - New Hermes sessions carry an exact `studio-web:<job-id>` source correlation;
   resumed-session activity waits for a successfully captured message baseline,
   preventing previous-job session binding and historical event replay.
+- Generation jobs now own immutable prompt, settings, resolved execution, and
+  expected archive snapshots in SQLite. Web archives read that exact running-job
+  contract, and agent exit zero is rejected unless the matching artifact,
+  authoritative prompt ID, prompt, settings, and metadata all exist.
 
 ## Next steps
 

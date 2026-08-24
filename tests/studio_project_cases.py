@@ -363,8 +363,50 @@ class ProjectPathTests(unittest.TestCase):
         prompt = "A complete 10-second prompt"
         ds.write_prompt(self.root, self.project.name, "clip-001", prompt)
         archived_prompt = prompt + "\n"
+        prompt_sha256 = hashlib.sha256(archived_prompt.encode()).hexdigest()
+        settings_manifest = {
+            "schema_version": 2,
+            "prompt_sha256": prompt_sha256,
+            "updated_at": "2026-08-24T12:00:00+00:00",
+            "mode": "r2v",
+            "aspect": "16:9",
+            "mp": 0.9,
+            "width": 1280,
+            "height": 704,
+            "seed": None,
+            "steps": 8,
+            "accel": True,
+        }
         (clip / "current_generation.json").write_text(
-            json.dumps({"seed": None, "steps": 8}) + "\n", encoding="utf-8")
+            json.dumps(settings_manifest) + "\n", encoding="utf-8")
+        runtime_root = Path(self.temp.name) / "runtime"
+        store = JobStore(runtime_root / "studio.db")
+        store.initialize()
+        payload = {
+            "schema_version": 1,
+            "action": "generate-current-prompt",
+            "prompt": archived_prompt,
+            "prompt_sha256": prompt_sha256,
+            "settings_updated_at": settings_manifest["updated_at"],
+            "settings_manifest": settings_manifest,
+            "execution": {
+                "resolution": {"width": 1280, "height": 704},
+                "timing": {"frames": 243, "fps": 24},
+                "references": ["first.png", "second.png"],
+            },
+            "expected_generation_id": "001",
+        }
+        job = store.create_generation_job(
+            self.project.name,
+            json.dumps(payload, sort_keys=True, separators=(",", ":")),
+            "studio",
+            clip_id="clip-001",
+        )
+        self.assertIsNotNone(store.claim_next("worker"))
+        ds.write_prompt(
+            self.root, self.project.name, "clip-001", "mutated 10-second prompt")
+        (clip / "current_generation.json").write_text(
+            '{"mutated":true}\n', encoding="utf-8")
         prompt_id = "prompt-123"
         graph = {
             "ref-1": {
@@ -422,9 +464,10 @@ class ProjectPathTests(unittest.TestCase):
         }
         environment = {
             "HERMES_STUDIO_JOB_KIND": "generate",
-            "HERMES_STUDIO_JOB_ID": "job-123",
+            "HERMES_STUDIO_JOB_ID": job.id,
             "HERMES_STUDIO_PROJECT": self.project.name,
             "HERMES_STUDIO_CLIP": "clip-001",
+            "HERMES_STUDIO_RUNTIME_ROOT": str(runtime_root),
             "COMFYUI_URL": "http://127.0.0.1:8188",
         }
         with (
@@ -453,7 +496,9 @@ class ProjectPathTests(unittest.TestCase):
             fetch.call_args.args[0].full_url,
             f"http://127.0.0.1:8188/history/{prompt_id}",
         )
-        self.assertEqual(meta["studio_job_id"], "job-123")
+        self.assertEqual(meta["studio_job_id"], job.id)
+        self.assertEqual(meta["generation_contract_version"], 1)
+        self.assertEqual(meta["settings_updated_at"], settings_manifest["updated_at"])
         self.assertEqual(meta["recipe"], "h3-ref2va")
         self.assertEqual(meta["mode"], "r2v")
         self.assertEqual((meta["width"], meta["height"]), (1280, 704))
@@ -474,6 +519,11 @@ class ProjectPathTests(unittest.TestCase):
             hashlib.sha256(archived_prompt.encode()).hexdigest(),
         )
         self.assertFalse(meta["upscale"])
+        self.assertEqual((generation / "prompt.txt").read_text(), archived_prompt)
+        self.assertEqual(
+            json.loads((generation / "settings.json").read_text()),
+            settings_manifest,
+        )
 
     def test_web_generation_archive_rejects_missing_history_identity(self):
         comfy_output = Path(self.temp.name) / "web-missing-history"

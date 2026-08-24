@@ -18,9 +18,11 @@ from pathlib import Path
 from scripts import design_studio as ds
 from webapp.clip_store import ClipStore
 from webapp.config import Settings
+from webapp.generation_contract import parse_generation_job_payload
 from webapp.generation_settings_store import GenerationSettingsStore
 from webapp.hermes_events import HermesSessionEventBridge
 from webapp.job_store import JobStore, JobStoreError
+from webapp.media_review_store import MediaReviewStore
 from webapp.models import Job, JobStatus
 
 
@@ -140,11 +142,49 @@ class StudioJobManager:
     def submit_generation(self, project: str, clip_id: str,
                           prompt_sha256: str,
                           settings_updated_at: str) -> Job:
-        request = json.dumps({
+        project_path = ds.project_path(self.settings.studio_root, project)
+        clip_store = ClipStore()
+        project_manifest = clip_store.describe(project_path)
+        entry = next(
+            (item for item in project_manifest["clips"]
+             if item["id"] == clip_id),
+            None,
+        )
+        if entry is None:
+            raise ValueError(f"clip not found: {clip_id}")
+        if not entry["enabled"]:
+            raise ValueError("clip is disabled")
+        clip = clip_store.resolve_clip(project_path, clip_id)
+        settings_store = GenerationSettingsStore(self.settings)
+        current = settings_store.validate_generation_request(
+            project_path, clip, prompt_sha256, settings_updated_at)
+        normalized_settings = settings_store.normalize(current["settings"])
+        prompt = ds.read_project_text(
+            clip, "current_prompt.txt", required=True)
+        payload = {
+            "schema_version": 1,
             "action": "generate-current-prompt",
+            "prompt": prompt,
             "prompt_sha256": prompt_sha256,
             "settings_updated_at": settings_updated_at,
-        }, sort_keys=True, separators=(",", ":"))
+            "settings_manifest": {
+                "schema_version": current["manifest"]["schema_version"],
+                "prompt_sha256": prompt_sha256,
+                "updated_at": settings_updated_at,
+                **normalized_settings,
+            },
+            "execution": {
+                "resolution": current["readiness"]["resolution"],
+                "timing": current["readiness"]["timing"],
+                "references": current["readiness"]["references"],
+            },
+            "expected_generation_id": ds.next_generation_dir(
+                self.settings.studio_root, project, clip_id).name,
+        }
+        request = json.dumps(
+            payload, sort_keys=True, separators=(",", ":"),
+            ensure_ascii=False)
+        parse_generation_job_payload(request)
         chat_path = self._chat_path(project, clip_id)
         self.store.import_chat_if_empty(
             project, chat_path, clip_id=clip_id)
@@ -350,6 +390,8 @@ class StudioJobManager:
                     job.id, "Studio agent returned an empty reply", self.owner_id)
                 self._export_job_chat(job)
                 return
+            if job.kind == "generate":
+                self._verify_generation_completion(job)
             match = SESSION_RE.search(stderr)
             self.store.complete(
                 job.id, self.owner_id, reply,
@@ -441,15 +483,7 @@ class StudioJobManager:
         if job.kind != "generate":
             return context + f"User request:\n{job.message}"
 
-        request = json.loads(job.message)
-        contract = self._validate_generation_job(job)
-        package = {
-            "request": request,
-            "settings": contract["settings"],
-            "resolution": contract["readiness"]["resolution"],
-            "timing": contract["readiness"]["timing"],
-            "references": contract["readiness"]["references"],
-        }
+        package = self._validate_generation_job(job)
         return context + (
             "Explicit user-authorized web generation. Do not ask for confirmation, "
             "do not rewrite current_prompt.txt or current_generation.json, and do not "
@@ -466,17 +500,7 @@ class StudioJobManager:
         )
 
     def _validate_generation_job(self, job: Job) -> dict:
-        try:
-            request = json.loads(job.message)
-        except json.JSONDecodeError as exc:
-            raise ValueError("generation request payload is invalid") from exc
-        if (not isinstance(request, dict)
-                or set(request) != {
-                    "action", "prompt_sha256", "settings_updated_at"}
-                or request.get("action") != "generate-current-prompt"
-                or not isinstance(request.get("prompt_sha256"), str)
-                or not isinstance(request.get("settings_updated_at"), str)):
-            raise ValueError("generation request payload is invalid")
+        request = parse_generation_job_payload(job.message)
         project = ds.project_path(self.settings.studio_root, job.project)
         clip_store = ClipStore()
         manifest = clip_store.describe(project)
@@ -487,12 +511,70 @@ class StudioJobManager:
         if not entry["enabled"]:
             raise ValueError("clip is disabled")
         clip = clip_store.resolve_clip(project, job.clip_id)
-        return GenerationSettingsStore(self.settings).validate_generation_request(
+        settings_store = GenerationSettingsStore(self.settings)
+        current = settings_store.validate_generation_request(
             project,
             clip,
             request["prompt_sha256"],
             request["settings_updated_at"],
         )
+        current_settings = {
+            "schema_version": current["manifest"]["schema_version"],
+            "prompt_sha256": current["manifest"]["prompt_sha256"],
+            "updated_at": current["manifest"]["updated_at"],
+            **settings_store.normalize(current["settings"]),
+        }
+        current_execution = {
+            "resolution": current["readiness"]["resolution"],
+            "timing": current["readiness"]["timing"],
+            "references": current["readiness"]["references"],
+        }
+        if (ds.read_project_text(clip, "current_prompt.txt", required=True)
+                != request["prompt"]
+                or current_settings != request["settings_manifest"]
+                or current_execution != request["execution"]):
+            raise ValueError("generation contract changed after enqueue")
+        expected_generation_id = ds.next_generation_dir(
+            self.settings.studio_root, job.project, job.clip_id).name
+        if expected_generation_id != request["expected_generation_id"]:
+            raise ValueError("generation archive sequence changed after enqueue")
+        return request
+
+    def _verify_generation_completion(self, job: Job) -> None:
+        contract = parse_generation_job_payload(job.message)
+        project = ds.project_path(self.settings.studio_root, job.project)
+        clip = ClipStore().resolve_clip(project, job.clip_id)
+        generation_id = contract["expected_generation_id"]
+        try:
+            details = MediaReviewStore().describe_generation(
+                project, clip, generation_id, include_prompt=True)
+        except Exception as exc:
+            raise ValueError(
+                "generation archive postcondition was not satisfied") from exc
+        meta = details["meta"]
+        if (meta.get("studio_job_id") != job.id
+                or meta.get("generation_contract_version") != 1
+                or meta.get("prompt_sha256") != contract["prompt_sha256"]
+                or meta.get("settings_updated_at")
+                != contract["settings_updated_at"]
+                or not isinstance(meta.get("prompt_id"), str)
+                or not meta["prompt_id"]
+                or not details["files"]
+                or sorted(meta.get("files", [])) != sorted(details["files"])
+                or details.get("prompt") != contract["prompt"]):
+            raise ValueError(
+                "generation archive does not match its immutable job contract")
+        try:
+            archived_settings = json.loads(ds.read_project_text(
+                clip / "generations" / generation_id,
+                "settings.json",
+                required=True,
+            ))
+        except json.JSONDecodeError as exc:
+            raise ValueError("generation archive settings are invalid") from exc
+        if archived_settings != contract["settings_manifest"]:
+            raise ValueError(
+                "generation archive settings do not match its immutable job contract")
 
     def _job_environment(self, job: Job) -> dict[str, str]:
         environment = os.environ.copy()
