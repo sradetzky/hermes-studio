@@ -226,6 +226,10 @@ auto-chained, and their result never starts a render without a separate request.
 - Chat submissions include a monotonic request revision in their immutable scope;
   stale success/failure cannot update another conversation. ComfyUI queue polling
   is latest-request-wins, preventing slower old snapshots from replacing new state.
+- Take detail rendering reuses the active media node while kind and URL are stable,
+  preserving playback through select/promote/reference refreshes. A raw-CDP
+  Chromium regression now forces close/reopen and out-of-order dialog, chat, and
+  queue completion and asserts media-node identity through a review action.
 - No auth v1; Uvicorn remains loopback-only, while optional tailnet access relies
   on Tailscale identity/ACLs plus the exact-host and same-origin guards above.
 

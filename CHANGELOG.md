@@ -41,6 +41,8 @@ preview and production releases.
   dialog instances so navigation, close/reopen, and take changes reject stale work
 - Bound chat completion to an exact conversation/request revision and made ComfyUI
   queue polling latest-request-wins, preventing stale workspace or queue updates
+- Preserved active take media elements across review refreshes and added real
+  Chromium coverage for close/reopen, navigation, stale chat/queue, and playback
 - Web-triggered H3 archives now recover actual seed, canvas, timing, steps,
   acceleration nodes, ordered references, and prompt hash from authoritative
   ComfyUI history; incomplete or mismatched execution metadata fails closed

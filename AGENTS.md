@@ -165,6 +165,8 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
   revisioned dialog instances, including same-project or same-clip close/reopen.
 - Chat submissions and ComfyUI queue refreshes now reject out-of-order completion
   through conversation-bound and latest-request-wins revision checks.
+- Stable take media nodes now preserve playback through review updates. Real
+  Chromium/CDP tests force deferred dialog/chat/queue responses and close/reopen.
 
 ## Next steps
 

@@ -213,8 +213,8 @@ function renderSelectedGenerationMedia() {
   const item = selectedGenerationMedia();
   $('#delete-generation').disabled = !state.generationDetail || state.mediaActioning;
   const stage = $('#generation-media');
-  stage.replaceChildren();
   if (!item) {
+    stage.replaceChildren();
     showEmpty(stage, 'No supported media in this take');
     $('#generation-filename').textContent = '—';
     $('#select-generation').disabled = true;
@@ -222,22 +222,27 @@ function renderSelectedGenerationMedia() {
     $('#reference-generation').disabled = true;
     return;
   }
-  let media;
-  if (item.kind === 'video') {
-    media = document.createElement('video');
-    media.controls = true;
-    media.preload = 'metadata';
-    media.playsInline = true;
-  } else if (item.kind === 'image') {
-    media = document.createElement('img');
-    media.alt = item.name;
-  } else {
-    media = document.createElement('audio');
-    media.controls = true;
+  delete stage.dataset.empty;
+  const mediaKey = JSON.stringify([item.kind, item.url]);
+  let media = stage.querySelector('.detail-media');
+  if (media?.dataset.mediaKey !== mediaKey) {
+    if (item.kind === 'video') {
+      media = document.createElement('video');
+      media.controls = true;
+      media.preload = 'metadata';
+      media.playsInline = true;
+    } else if (item.kind === 'image') {
+      media = document.createElement('img');
+      media.alt = item.name;
+    } else {
+      media = document.createElement('audio');
+      media.controls = true;
+    }
+    media.src = item.url;
+    media.className = 'detail-media';
+    media.dataset.mediaKey = mediaKey;
+    stage.replaceChildren(media);
   }
-  media.src = item.url;
-  media.className = 'detail-media';
-  stage.append(media);
   $('#generation-filename').textContent = `${item.name} · ${formatBytes(item.size)}`;
   const states = [];
   const selectedTake = isSelectedTake(state.generationDetail.gen, item.name);
@@ -436,7 +441,9 @@ export function initializeMediaReview(refresh) {
   $('#promote-generation').addEventListener('click', () => performMediaAction('promote'));
   $('#reference-generation').addEventListener('click', () => performMediaAction('reference'));
   $('#delete-generation').addEventListener('click', deleteTake);
-  dialog.addEventListener('close', () => closeGenerationDialog());
+  dialog.addEventListener('close', () => {
+    if (!dialog.open) closeGenerationDialog();
+  });
   dialog.addEventListener('click', event => {
     if (event.target === dialog) closeGenerationDialog();
   });

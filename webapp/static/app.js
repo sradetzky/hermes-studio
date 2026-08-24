@@ -969,6 +969,7 @@ $('#project-metadata-dialog').addEventListener('cancel', event => {
   if (state.projectMetadataSaving) event.preventDefault();
 });
 $('#project-metadata-dialog').addEventListener('close', () => {
+  if ($('#project-metadata-dialog').open) return;
   const opener = state.projectMetadataOpener;
   if (state.projectMetadataDialogContext) {
     state.projectMetadataDialogRevision += 1;

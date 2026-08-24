@@ -207,8 +207,8 @@ project/clip chat scope and exact IDs.
   stale responses must not mutate the current workspace.
   - [x] Project metadata and take dialog instances.
   - [x] Chat submissions and ComfyUI queue refreshes.
-- [ ] Preserve media element identity and playback state across review actions.
-- [ ] Add behavioral Chromium coverage for navigation, dialogs, stale responses,
+- [x] Preserve media element identity and playback state across review actions.
+- [x] Add behavioral Chromium coverage for navigation, dialogs, stale responses,
   queue sequencing, and playback; source-text regex checks remain supplementary.
 
 ### Phase 5 – Project movie assembly (blocked by Phase 4.7)

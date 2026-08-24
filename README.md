@@ -160,7 +160,8 @@ Run the complete test suite:
 
 ```bash
 .venv/bin/python -m unittest discover -s tests
-node --test tests/test_frontend_contracts.mjs tests/test_frontend_dom.mjs
+node --test tests/test_frontend_contracts.mjs tests/test_frontend_dom.mjs \
+  tests/test_frontend_browser.mjs
 ```
 
 Compile-check Python and JavaScript:
