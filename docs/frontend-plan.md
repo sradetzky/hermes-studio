@@ -220,6 +220,9 @@ auto-chained, and their result never starts a render without a separate request.
 - Promote/reference actions record descriptor-derived SHA-256 identities for the
   archive source and published target. Retries reuse a target only while both
   still match; changed content is republished without overwriting the old copy.
+- Project metadata and take detail dialogs own revisioned request contexts.
+  Navigation, close/reopen, and same-clip take changes invalidate older loads,
+  saves, and actions before they can mutate the current dialog or busy state.
 - No auth v1; Uvicorn remains loopback-only, while optional tailnet access relies
   on Tailscale identity/ACLs plus the exact-host and same-origin guards above.
 

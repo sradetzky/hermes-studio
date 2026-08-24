@@ -20,6 +20,21 @@ export function captureClipContext(state) {
   };
 }
 
+export function captureProjectDialogContext(state) {
+  return {
+    ...captureProjectContext(state),
+    dialogRevision: state.projectMetadataDialogRevision,
+  };
+}
+
+export function captureGenerationDialogContext(state, generationId) {
+  return {
+    ...captureClipContext(state),
+    generationId,
+    dialogRevision: state.generationDialogRevision,
+  };
+}
+
 export function captureChatContext(state) {
   const clipScoped = state.chatScope === 'clip';
   return {
@@ -40,6 +55,16 @@ export function isClipContextCurrent(state, context) {
   return isProjectContextCurrent(state, context) &&
     context.clipId === state.currentClip &&
     context.clipRevision === state.clipRevision;
+}
+
+export function isProjectDialogContextCurrent(state, context) {
+  return isProjectContextCurrent(state, context) &&
+    context.dialogRevision === state.projectMetadataDialogRevision;
+}
+
+export function isGenerationDialogContextCurrent(state, context) {
+  return isClipContextCurrent(state, context) &&
+    context.dialogRevision === state.generationDialogRevision;
 }
 
 export function isChatContextCurrent(state, context) {

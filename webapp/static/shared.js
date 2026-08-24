@@ -23,6 +23,8 @@ export const state = {
   generationDetail: null,
   selectedGenerationFile: null,
   generationOpener: null,
+  generationDialogRevision: 0,
+  generationDialogContext: null,
   mediaActioning: false,
   generationSettings: null,
   generationSettingsOptions: null,
@@ -36,6 +38,8 @@ export const state = {
   uploading: false,
   projectMetadataSaving: false,
   projectMetadataOpener: null,
+  projectMetadataDialogRevision: 0,
+  projectMetadataDialogContext: null,
 };
 
 export function activeClip() {

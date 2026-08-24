@@ -1,8 +1,8 @@
 import {$, activeClip, requestJson, showEmpty, state} from './shared.js';
 import {apiPaths} from './api-paths.mjs';
 import {
-  captureClipContext,
-  isClipContextCurrent,
+  captureGenerationDialogContext,
+  isGenerationDialogContextCurrent,
 } from './frontend-contracts.mjs';
 
 let refreshProject = async () => {};
@@ -144,21 +144,24 @@ function showGenerationLoading(generationId) {
 
 async function openGeneration(generationId, opener = null) {
   const dialog = $('#generation-dialog');
+  state.generationDialogRevision += 1;
+  const context = captureGenerationDialogContext(state, generationId);
+  state.generationDialogContext = context;
   state.generationOpener = opener || state.generationOpener;
   state.generationDetail = null;
   state.selectedGenerationFile = null;
+  state.mediaActioning = false;
   showGenerationLoading(generationId);
   if (!dialog.open) dialog.showModal();
-  const context = captureClipContext(state);
   try {
     const detail = await requestJson(
       apiPaths.generation(context.projectId, context.clipId, generationId));
-    if (!isClipContextCurrent(state, context) || !dialog.open) return;
+    if (!isGenerationDialogContextCurrent(state, context) || !dialog.open) return;
     state.generationDetail = detail;
     state.selectedGenerationFile = detail.media[0]?.name || null;
     renderGenerationDetail();
   } catch (error) {
-    if (!isClipContextCurrent(state, context)) return;
+    if (!isGenerationDialogContextCurrent(state, context) || !dialog.open) return;
     $('#media-action-status').textContent = `Unable to load: ${error.message}`;
     $('#generation-media').replaceChildren();
     showEmpty($('#generation-media'), 'take unavailable');
@@ -265,12 +268,14 @@ async function performMediaAction(action) {
   const detail = state.generationDetail;
   const item = selectedGenerationMedia();
   if (!detail || !item || state.mediaActioning) return;
+  const context = state.generationDialogContext;
+  if (!context || context.generationId !== detail.gen ||
+      !isGenerationDialogContextCurrent(state, context)) return;
   state.mediaActioning = true;
   renderSelectedGenerationMedia();
   const status = $('#media-action-status');
   status.textContent = action === 'promote' ? 'Promoting…' : 'Copying reference…';
   const endpoint = action === 'promote' ? 'promote' : 'use-as-reference';
-  const context = captureClipContext(state);
   try {
     const response = await requestJson(
       apiPaths.generationAction(
@@ -280,13 +285,13 @@ async function performMediaAction(action) {
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({filename: item.name}),
       });
-    if (!isClipContextCurrent(state, context)) return;
+    if (!isGenerationDialogContextCurrent(state, context)) return;
     status.textContent = action === 'promote'
       ? `Promoted as ${response.result.target}`
       : `Reference saved as ${response.result.target}`;
     const refreshed = await requestJson(
       apiPaths.generation(context.projectId, context.clipId, detail.gen));
-    if (!isClipContextCurrent(state, context)) return;
+    if (!isGenerationDialogContextCurrent(state, context)) return;
     state.generationDetail = refreshed;
     state.selectedGenerationFile = item.name;
     state.generationSignature = '';
@@ -294,10 +299,10 @@ async function performMediaAction(action) {
     renderGenerationDetail();
     await refreshProject();
   } catch (error) {
-    if (!isClipContextCurrent(state, context)) return;
+    if (!isGenerationDialogContextCurrent(state, context)) return;
     status.textContent = `Action failed: ${error.message}`;
   } finally {
-    if (isClipContextCurrent(state, context)) {
+    if (isGenerationDialogContextCurrent(state, context)) {
       state.mediaActioning = false;
       renderSelectedGenerationMedia();
     }
@@ -310,11 +315,13 @@ async function selectTake() {
   const clip = activeClip();
   if (!detail || !item || item.kind !== 'video' || !clip?.enabled ||
       state.mediaActioning) return;
+  const context = state.generationDialogContext;
+  if (!context || context.generationId !== detail.gen ||
+      !isGenerationDialogContextCurrent(state, context)) return;
   state.mediaActioning = true;
   renderSelectedGenerationMedia();
   const status = $('#media-action-status');
   status.textContent = 'Selecting take…';
-  const context = captureClipContext(state);
   try {
     const response = await requestJson(
       apiPaths.selectedTake(context.projectId, context.clipId), {
@@ -322,7 +329,7 @@ async function selectTake() {
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({generation: detail.gen, filename: item.name}),
       });
-    if (!isClipContextCurrent(state, context)) return;
+    if (!isGenerationDialogContextCurrent(state, context)) return;
     state.clips = state.clips.map(entry =>
       entry.id === context.clipId ? response.clip : entry);
     state.generationSignature = '';
@@ -331,10 +338,10 @@ async function selectTake() {
     renderGenerations();
     await refreshProject();
   } catch (error) {
-    if (!isClipContextCurrent(state, context)) return;
+    if (!isGenerationDialogContextCurrent(state, context)) return;
     status.textContent = `Selection failed: ${error.message}`;
   } finally {
-    if (isClipContextCurrent(state, context)) {
+    if (isGenerationDialogContextCurrent(state, context)) {
       state.mediaActioning = false;
       renderSelectedGenerationMedia();
     }
@@ -350,27 +357,29 @@ async function deleteTake() {
       detail.gen, clip?.selected_take?.generation === detail.gen),
   )) return;
 
+  const context = state.generationDialogContext;
+  if (!context || context.generationId !== detail.gen ||
+      !isGenerationDialogContextCurrent(state, context)) return;
   state.mediaActioning = true;
   renderSelectedGenerationMedia();
   const status = $('#media-action-status');
   status.textContent = 'Deleting take…';
-  const context = captureClipContext(state);
   try {
     const response = await requestJson(
       apiPaths.generation(context.projectId, context.clipId, detail.gen),
       {method: 'DELETE'},
     );
-    if (!isClipContextCurrent(state, context)) return;
+    if (!isGenerationDialogContextCurrent(state, context)) return;
     state.clips = state.clips.map(entry =>
       entry.id === context.clipId ? response.clip : entry);
     state.generationSignature = '';
     closeGenerationDialog(false);
     await refreshProject();
   } catch (error) {
-    if (!isClipContextCurrent(state, context)) return;
+    if (!isGenerationDialogContextCurrent(state, context)) return;
     status.textContent = `Delete failed: ${error.message}`;
   } finally {
-    if (isClipContextCurrent(state, context)
+    if (isGenerationDialogContextCurrent(state, context)
         && state.generationDetail?.gen === detail.gen) {
       state.mediaActioning = false;
       renderSelectedGenerationMedia();
@@ -396,6 +405,10 @@ function navigateGeneration(direction) {
 function closeGenerationDialog(restoreFocus = true) {
   const dialog = $('#generation-dialog');
   const opener = state.generationOpener;
+  if (state.generationDialogContext || dialog.open) {
+    state.generationDialogRevision += 1;
+  }
+  state.generationDialogContext = null;
   state.generationDetail = null;
   state.selectedGenerationFile = null;
   state.generationOpener = null;

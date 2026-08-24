@@ -19,9 +19,11 @@ import {
 import {
   captureChatContext,
   captureClipContext,
+  captureProjectDialogContext,
   captureProjectContext,
   isChatContextCurrent,
   isClipContextCurrent,
+  isProjectDialogContextCurrent,
   isProjectContextCurrent,
 } from './frontend-contracts.mjs';
 import {
@@ -222,6 +224,8 @@ function renderProjectMetadataControls() {
 
 function openProjectMetadata() {
   if (!state.project || state.jobActive || state.projectMetadataSaving) return;
+  state.projectMetadataDialogRevision += 1;
+  state.projectMetadataDialogContext = captureProjectDialogContext(state);
   state.projectMetadataOpener = document.activeElement;
   $('#project-metadata-id').textContent = state.project.id;
   $('#project-metadata-display-title').value = state.project.title;
@@ -231,20 +235,26 @@ function openProjectMetadata() {
   $('#project-metadata-display-title').focus();
 }
 
-function closeProjectMetadata(restoreFocus = true) {
+function closeProjectMetadata(restoreFocus = true, force = false) {
   const dialog = $('#project-metadata-dialog');
-  if (state.projectMetadataSaving || !dialog.open) return;
-  dialog.close();
-  if (restoreFocus && state.projectMetadataOpener?.isConnected) {
-    state.projectMetadataOpener.focus();
-  }
+  if (state.projectMetadataSaving && !force) return;
+  const opener = state.projectMetadataOpener;
+  state.projectMetadataDialogRevision += 1;
+  state.projectMetadataDialogContext = null;
+  state.projectMetadataSaving = false;
   state.projectMetadataOpener = null;
+  if (dialog.open) dialog.close();
+  if (restoreFocus && opener?.isConnected) {
+    opener.focus();
+  }
+  renderProjectMetadataControls();
 }
 
 async function saveProjectMetadata(event) {
   event.preventDefault();
   if (!state.project || state.jobActive || state.projectMetadataSaving) return;
-  const context = captureProjectContext(state);
+  const context = state.projectMetadataDialogContext;
+  if (!context || !isProjectDialogContextCurrent(state, context)) return;
   const title = $('#project-metadata-display-title').value.trim();
   const brief = $('#project-metadata-brief').value;
   if (!title) {
@@ -260,19 +270,22 @@ async function saveProjectMetadata(event) {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({title, brief}),
     });
-    if (!isProjectContextCurrent(state, context)) return;
+    if (!isProjectDialogContextCurrent(state, context)) return;
     state.project = response.project;
     state.projectMetadataSaving = false;
     closeProjectMetadata(false);
     await loadProjects();
+    if (!isProjectContextCurrent(state, context)) return;
     await refreshProject();
   } catch (error) {
-    if (isProjectContextCurrent(state, context)) {
+    if (isProjectDialogContextCurrent(state, context)) {
       $('#project-metadata-status').textContent = error.message;
     }
   } finally {
-    state.projectMetadataSaving = false;
-    renderProjectMetadataControls();
+    if (isProjectDialogContextCurrent(state, context)) {
+      state.projectMetadataSaving = false;
+      renderProjectMetadataControls();
+    }
   }
 }
 
@@ -469,7 +482,7 @@ async function toggleClip() {
 
 async function selectProject(projectId) {
   setWorkspacePane('chat');
-  closeProjectMetadata(false);
+  closeProjectMetadata(false, true);
   closeGenerationDialog(false);
   closeGenerationSettings(false);
   state.current = projectId;
@@ -947,8 +960,15 @@ $('#project-metadata-dialog').addEventListener('cancel', event => {
   if (state.projectMetadataSaving) event.preventDefault();
 });
 $('#project-metadata-dialog').addEventListener('close', () => {
-  if (state.projectMetadataOpener?.isConnected) state.projectMetadataOpener.focus();
+  const opener = state.projectMetadataOpener;
+  if (state.projectMetadataDialogContext) {
+    state.projectMetadataDialogRevision += 1;
+    state.projectMetadataDialogContext = null;
+    state.projectMetadataSaving = false;
+  }
+  if (opener?.isConnected) opener.focus();
   state.projectMetadataOpener = null;
+  renderProjectMetadataControls();
 });
 initializeGenerationSettings(refreshProject);
 initializeMediaReview(refreshProject);

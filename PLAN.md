@@ -205,6 +205,8 @@ project/clip chat scope and exact IDs.
   than filenames alone.
 - [ ] Give project/take dialogs and chat/queue requests immutable request context;
   stale responses must not mutate the current workspace.
+  - [x] Project metadata and take dialog instances.
+  - [ ] Chat submissions and ComfyUI queue refreshes.
 - [ ] Preserve media element identity and playback state across review actions.
 - [ ] Add behavioral Chromium coverage for navigation, dialogs, stale responses,
   queue sequencing, and playback; source-text regex checks remain supplementary.

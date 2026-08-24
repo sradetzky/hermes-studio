@@ -37,6 +37,8 @@ preview and production releases.
   under the project lock, preventing concurrent deletion from dangling selection
 - Bound promote/reference retry idempotency to recorded source and target SHA-256
   identities; changed archive or destination bytes now produce a new safe copy
+- Bound project-metadata and take-detail asynchronous operations to revisioned
+  dialog instances so navigation, close/reopen, and take changes reject stale work
 - Web-triggered H3 archives now recover actual seed, canvas, timing, steps,
   acceleration nodes, ordered references, and prompt hash from authoritative
   ComfyUI history; incomplete or mismatched execution metadata fails closed

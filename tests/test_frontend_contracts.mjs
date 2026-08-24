@@ -4,9 +4,13 @@ import test from 'node:test';
 import {
   captureChatContext,
   captureClipContext,
+  captureGenerationDialogContext,
+  captureProjectDialogContext,
   captureProjectContext,
   isChatContextCurrent,
   isClipContextCurrent,
+  isGenerationDialogContextCurrent,
+  isProjectDialogContextCurrent,
   isProjectContextCurrent,
   isSeedWithinRange,
   MAX_SAFE_SEED,
@@ -83,6 +87,28 @@ test('chat context rejects scope and active-clip changes independently', () => {
   state.currentClip = 'clip-003';
   state.clipRevision += 1;
   assert.equal(isChatContextCurrent(state, nextClipChat), false);
+});
+
+test('dialog contexts reject close-reopen and same-clip take navigation', () => {
+  const state = {
+    current: 'project-a', currentClip: 'clip-001',
+    projectRevision: 3, clipRevision: 7,
+    projectMetadataDialogRevision: 1,
+    generationDialogRevision: 4,
+  };
+  const projectDialog = captureProjectDialogContext(state);
+  const takeDialog = captureGenerationDialogContext(state, 'take-001');
+  assert.equal(isProjectDialogContextCurrent(state, projectDialog), true);
+  assert.equal(isGenerationDialogContextCurrent(state, takeDialog), true);
+
+  state.projectMetadataDialogRevision += 1;
+  assert.equal(isProjectDialogContextCurrent(state, projectDialog), false);
+
+  state.generationDialogRevision += 1;
+  const nextTake = captureGenerationDialogContext(state, 'take-002');
+  assert.equal(isGenerationDialogContextCurrent(state, takeDialog), false);
+  assert.equal(isGenerationDialogContextCurrent(state, nextTake), true);
+  assert.equal(nextTake.generationId, 'take-002');
 });
 
 test('responsive workspace navigation defaults to chat and wraps predictably', () => {
