@@ -141,5 +141,8 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
 
 ## Next steps
 
-- [ ] Phase 5: project-level **Export selected takes as movie** with ordered
+- [ ] Complete the Phase 4.7 fresh-eyes remediation gate in `PLAN.md`: process
+  ownership/leases, exact session and generation contracts, graph-bound metadata,
+  filesystem races, stale browser state, playback preservation, and behavioral QA
+- [ ] Then Phase 5: project-level **Export selected takes as movie** with ordered
   enabled-clip readiness, hard cuts, versioned publication, and exact provenance

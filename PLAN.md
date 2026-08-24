@@ -1,7 +1,7 @@
 # PLAN.md — Hermes Studio
 
 **Status**: `v0.1.0-preview.2` released with web M4.2–M4.6 and the real
-clip-bound H3 E2E complete. Next: project-level selected-take movie assembly.
+clip-bound H3 E2E complete. A fresh-eyes remediation gate now blocks Phase 5.
 **Owner**: Sven (local setup on RTX 5060 Ti 16GB)  
 **Updated**: 2026-08-24
 **Goal**: Fully local, agent-orchestrated creative studio centered on MiniMax H3 + Hermes, with a simple self-hosted web UI.
@@ -188,7 +188,28 @@ project/clip chat scope and exact IDs.
 - [x] Re-run desktop and narrow-browser release gates, synchronize current docs,
   and cut `v0.1.0-preview.2` only after both slices are verified
 
-### Phase 5 – Project movie assembly (next)
+### Phase 4.7 – Fresh-eyes remediation gate (blocking)
+- [ ] Make detached Hermes process ownership crash-safe and never release the
+  global GPU lease while a possible job process remains alive.
+- [ ] Couple worker lease renewal to scheduler health and recover unexpected
+  execution-loop failures instead of leaving permanent running jobs.
+- [ ] Correlate Hermes sessions with exact job identity and retry event baselines
+  without replaying prior-session activity.
+- [ ] Persist an immutable generation execution contract per job and require one
+  exact contract-bound archive before a generation job can complete.
+- [ ] Traverse the exact output-producing ComfyUI graph branch when deriving
+  authoritative execution metadata; reject disconnected or ambiguous nodes.
+- [ ] Prevent active project jobs from racing clip/settings mutations.
+- [ ] Validate and publish selected-take provenance under one project lock.
+- [ ] Bind review-action idempotency to source and target content identity rather
+  than filenames alone.
+- [ ] Give project/take dialogs and chat/queue requests immutable request context;
+  stale responses must not mutate the current workspace.
+- [ ] Preserve media element identity and playback state across review actions.
+- [ ] Add behavioral Chromium coverage for navigation, dialogs, stale responses,
+  queue sequencing, and playback; source-text regex checks remain supplementary.
+
+### Phase 5 – Project movie assembly (blocked by Phase 4.7)
 - [ ] Add project-level assembly readiness for all enabled clips in manifest order;
   block and identify every enabled clip without one valid selected video take
 - [ ] Add an explicit **Export selected takes as movie** project action that runs
