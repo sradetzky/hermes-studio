@@ -191,4 +191,9 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
 
 ## Next steps
 
-- [ ] Define the next milestone after Phase 5
+- [ ] Phase 6: make Hermes `clarify` requests answerable in the exact scoped web
+  conversation.
+- [ ] Phase 6: add an eligible-only References checkbox that uses the immediately
+  previous clip's selected-take last frame as a provenance-bound generation ref.
+- [ ] Phase 6: keep new session output visible by scrolling its subwindow to the
+  end instead of resetting to the top; add real-browser regression coverage.

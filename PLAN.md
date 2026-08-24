@@ -1,7 +1,8 @@
 # PLAN.md — Hermes Studio
 
 **Status**: `v0.1.0-preview.3` release candidate prepared with Phase 4.7
-remediation and Phase 5 project movie assembly complete.
+remediation and Phase 5 project movie assembly complete; Phase 6 interaction
+and continuity polish is defined but not started.
 **Owner**: Sven (local setup on RTX 5060 Ti 16GB)  
 **Updated**: 2026-08-24
 **Goal**: Fully local, agent-orchestrated creative studio centered on MiniMax H3 + Hermes, with a simple self-hosted web UI.
@@ -231,6 +232,18 @@ project/clip chat scope and exact IDs.
 - [x] Expose completed project movies in Media for playback and download
 - [x] Keep trimming, transitions, timeline editing, and side-by-side take
   comparison outside this phase
+
+### Phase 6 – Interaction and continuity polish (planned)
+- [ ] Make Hermes `clarify` requests actionable in the web app: render the exact
+  single-select, multi-select, or free-text question for the bound job/session
+  and submit the response without losing project/clip scope or revision safety.
+- [ ] In a clip's References view, offer **Use previous selected take's last
+  frame** only when the immediately preceding clip has a valid selected video
+  take. Bind the derived frame to that exact source clip/take in the immutable
+  generation contract and invalidate it when ordering or selection changes.
+- [ ] Keep newly appended session output visible: when the scrollable activity or
+  response subwindow receives a new response, scroll it to the end instead of
+  resetting to the top. Cover the behavior in a real-browser regression.
 
 ---
 

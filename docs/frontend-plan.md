@@ -281,6 +281,14 @@ auto-chained, and their result never starts a render without a separate request.
   trimming, transitions, timeline, or take comparison.
 - Preview.3 release gate (done): synchronized Phase 4.7/5 public scope and passed
   complete local, clean-archive, service/API, and real-browser verification.
+- M6 (planned): interaction and continuity polish:
+  - present Hermes `clarify` questions in the exact scoped web conversation and
+    submit single-select, multi-select, or free-text answers to the waiting job;
+  - add a References-view **Use previous selected take's last frame** checkbox,
+    enabled only when the immediately preceding clip has a valid selected video
+    take, with exact source provenance in the generation contract;
+  - scroll a session-output subwindow to its end when a new response is appended,
+    never back to the top, with real-browser regression coverage.
 
 ## Out of scope (v1)
 
