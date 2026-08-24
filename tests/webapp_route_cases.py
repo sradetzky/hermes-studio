@@ -674,6 +674,56 @@ class AppFactoryTests(WebAppTestCase):
             self.assertEqual(
                 stale["generation_settings"]["readiness"]["status"], "stale")
 
+    def test_active_job_blocks_clip_and_generation_contract_mutations(self):
+        with TestClient(self.app()) as client:
+            project = self.create_project(client, "active-contract-guard")
+            clip_path = (
+                self.settings.studio_root / "projects" / project /
+                "clips" / "clip-001")
+            (clip_path / "current_prompt.txt").write_text(
+                "A complete 5-second H3 prompt\n", encoding="utf-8")
+            saved = client.put(
+                f"/api/project/{project}/clips/clip-001/generation-settings",
+                json=_generation_settings_payload(),
+            )
+            self.assertEqual(saved.status_code, 200)
+            queued = client.post(
+                f"/api/project/{project}/clips/clip-001/chat",
+                json={"message": "inspect this clip"},
+            )
+            self.assertEqual(queued.status_code, 202)
+
+            blocked = [
+                client.patch(
+                    f"/api/project/{project}/clips/clip-001",
+                    json={"title": "Changed", "enabled": False},
+                ),
+                client.put(
+                    f"/api/project/{project}/clips/clip-001/generation-settings",
+                    json=_generation_settings_payload(steps=7),
+                ),
+                client.post(
+                    f"/api/project/{project}/clips",
+                    json={"title": "Another clip"},
+                ),
+                client.put(
+                    f"/api/project/{project}/clips/order",
+                    json={"clip_ids": ["clip-001"]},
+                ),
+            ]
+            for response in blocked:
+                self.assertEqual(response.status_code, 409)
+                self.assertIn("active job", response.json()["detail"])
+
+            clip = client.get(
+                f"/api/project/{project}/clips/clip-001").json()
+            self.assertEqual(clip["title"], "Main clip")
+            self.assertTrue(clip["enabled"])
+            self.assertEqual(
+                clip["generation_settings"]["settings"]["steps"], 20)
+            self.assertEqual(len(client.get(
+                f"/api/project/{project}/clips").json()["clips"]), 1)
+
     def test_generate_current_prompt_queues_exact_validated_studio_job(self):
         with TestClient(self.app()) as client:
             project = self.create_project(client, "generate-current")

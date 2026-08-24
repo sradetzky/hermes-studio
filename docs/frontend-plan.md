@@ -212,6 +212,9 @@ auto-chained, and their result never starts a render without a separate request.
   zero-exit agent cannot complete without one matching artifact and prompt ID.
   Authoritative metadata follows the exact executed `SaveVideo` producer branch;
   disconnected decoys and ambiguous output producers fail closed.
+- Project metadata, clip creation/order/title/enabled state, generation settings,
+  and take deletion share a project job-coordination lock with enqueue. Mutations
+  return `409` once a project job exists and cannot pass a check/enqueue TOCTOU gap.
 - No auth v1; Uvicorn remains loopback-only, while optional tailnet access relies
   on Tailscale identity/ACLs plus the exact-host and same-origin guards above.
 

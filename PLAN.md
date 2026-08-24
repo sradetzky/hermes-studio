@@ -199,7 +199,7 @@ project/clip chat scope and exact IDs.
   exact contract-bound archive before a generation job can complete.
 - [x] Traverse the exact output-producing ComfyUI graph branch when deriving
   authoritative execution metadata; reject disconnected or ambiguous nodes.
-- [ ] Prevent active project jobs from racing clip/settings mutations.
+- [x] Prevent active project jobs from racing clip/settings mutations.
 - [ ] Validate and publish selected-take provenance under one project lock.
 - [ ] Bind review-action idempotency to source and target content identity rather
   than filenames alone.

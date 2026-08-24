@@ -25,6 +25,7 @@ from webapp.generation_settings_store import GenerationSettingsStore
 from webapp.hermes_events import HermesSessionEventBridge
 from webapp.job_store import ActiveJobError, JobStore, JobStoreError
 from webapp.models import JobStatus
+from webapp.project_jobs import project_job_guard
 from webapp.runtime_schema import CURRENT_SCHEMA_VERSION, LEGACY_CLIP_ERROR
 from webapp import safe_files
 from webapp.studio_manager import StudioJobManager, process_start_time
@@ -199,6 +200,33 @@ class StudioManagerTests(WebAppTestCase):
         )
         self.assertEqual(
             [row["content"] for row in clip_rows], ["clip refinement"])
+
+    def test_job_submission_waits_for_project_mutation_guard(self):
+        project = ds.create_project(
+            self.settings.studio_root, "coordinated-submission")
+        store = JobStore(self.settings.database_path)
+        store.initialize()
+        manager = StudioJobManager(self.settings, store)
+        entered = Event()
+        finished = Event()
+        submitted = []
+
+        def submit():
+            entered.set()
+            submitted.append(manager.submit_chat(
+                project.name, "clip-001", "inspect"))
+            finished.set()
+
+        with project_job_guard(project):
+            worker = Thread(target=submit)
+            worker.start()
+            self.assertTrue(entered.wait(timeout=1))
+            self.assertFalse(finished.wait(timeout=0.1))
+            self.assertEqual(store.active_jobs(), [])
+        worker.join(timeout=2)
+        self.assertFalse(worker.is_alive())
+        self.assertTrue(finished.is_set())
+        self.assertEqual(store.active_jobs()[0].id, submitted[0].id)
 
     def test_specialist_command_uses_minimal_toolset(self):
         store = JobStore(self.settings.database_path)

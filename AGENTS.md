@@ -154,6 +154,9 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
 - ComfyUI metadata recovery now binds archived files to one executed `SaveVideo`
   node and traverses only that node's upstream graph, rejecting disconnected
   class-name decoys, ambiguous producers, and duplicate execution nodes.
+- Project job enqueue and contract-affecting web mutations now share a descriptor-
+  safe coordination lock. Clip/settings changes and take deletion cannot race a
+  job into existence between the active-job check and filesystem publication.
 
 ## Next steps
 

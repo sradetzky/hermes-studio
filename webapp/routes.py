@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from pathlib import Path
 from typing import NoReturn
 
@@ -32,6 +33,7 @@ from webapp.reference_store import (
     ReferenceTooLargeError,
     UnsupportedReferenceError,
 )
+from webapp.project_jobs import ProjectJobGuardError, project_job_guard
 from webapp.safe_response import DescriptorFileResponse
 from webapp.studio_manager import StudioJobManager
 
@@ -155,6 +157,22 @@ def _raise_clip_store_error(exc: ClipStoreError) -> NoReturn:
     raise HTTPException(400, str(exc))
 
 
+@contextmanager
+def _inactive_project_write(request: Request, project: Path, action: str):
+    try:
+        with project_job_guard(project):
+            if any(
+                    job.project == project.name
+                    for job in _store(request).active_jobs()):
+                raise HTTPException(
+                    409,
+                    f"cannot {action} while this project has an active job",
+                )
+            yield
+    except ProjectJobGuardError as exc:
+        raise HTTPException(400, str(exc))
+
+
 def resolve_project(request: Request, project_id: str) -> Path:
     try:
         return ds.project_path(_settings(request).studio_root, project_id)
@@ -241,14 +259,12 @@ def get_project(request: Request, project_id: str):
 @router.patch("/api/project/{project_id}")
 def update_project(request: Request, project_id: str, body: ProjectUpdateIn):
     project = resolve_project(request, project_id)
-    if any(job.project == project.name for job in _store(request).active_jobs()):
-        raise HTTPException(
-            409, "cannot update project metadata while this project has an active job")
-    try:
-        metadata = _clips(request).update_project_metadata(
-            project, title=body.title, brief=body.brief)
-    except ClipStoreError as exc:
-        _raise_clip_store_error(exc)
+    with _inactive_project_write(request, project, "update project metadata"):
+        try:
+            metadata = _clips(request).update_project_metadata(
+                project, title=body.title, brief=body.brief)
+        except ClipStoreError as exc:
+            _raise_clip_store_error(exc)
     return {"project": {"id": project.name, **metadata}}
 
 
@@ -264,19 +280,21 @@ def get_clips(request: Request, project_id: str):
 @router.post("/api/project/{project_id}/clips", status_code=201)
 def create_clip(request: Request, project_id: str, body: ClipIn):
     project = resolve_project(request, project_id)
-    try:
-        return {"clip": _clips(request).create_clip(project, body.title)}
-    except ClipStoreError as exc:
-        _raise_clip_store_error(exc)
+    with _inactive_project_write(request, project, "create a clip"):
+        try:
+            return {"clip": _clips(request).create_clip(project, body.title)}
+        except ClipStoreError as exc:
+            _raise_clip_store_error(exc)
 
 
 @router.put("/api/project/{project_id}/clips/order")
 def reorder_clips(request: Request, project_id: str, body: ClipOrderIn):
     project = resolve_project(request, project_id)
-    try:
-        return _clips(request).reorder(project, body.clip_ids)
-    except ClipStoreError as exc:
-        _raise_clip_store_error(exc)
+    with _inactive_project_write(request, project, "reorder clips"):
+        try:
+            return _clips(request).reorder(project, body.clip_ids)
+        except ClipStoreError as exc:
+            _raise_clip_store_error(exc)
 
 
 @router.get("/api/project/{project_id}/clips/{clip_id}")
@@ -303,11 +321,12 @@ def get_clip(request: Request, project_id: str, clip_id: str):
 def update_clip(request: Request, project_id: str, clip_id: str,
                 body: ClipUpdateIn):
     project = resolve_project(request, project_id)
-    try:
-        return {"clip": _clips(request).update_clip(
-            project, clip_id, title=body.title, enabled=body.enabled)}
-    except ClipStoreError as exc:
-        _raise_clip_store_error(exc)
+    with _inactive_project_write(request, project, "update a clip"):
+        try:
+            return {"clip": _clips(request).update_clip(
+                project, clip_id, title=body.title, enabled=body.enabled)}
+        except ClipStoreError as exc:
+            _raise_clip_store_error(exc)
 
 
 @router.put("/api/project/{project_id}/clips/{clip_id}/selected-take")
@@ -336,12 +355,13 @@ def get_generation_settings(request: Request, project_id: str, clip_id: str):
 def put_generation_settings(request: Request, project_id: str, clip_id: str,
                             body: GenerationSettingsIn):
     project = resolve_project(request, project_id)
-    clip = resolve_clip(request, project, clip_id)
-    try:
-        return _generation_settings(request).save(
-            project, clip, body.model_dump())
-    except GenerationSettingsError as exc:
-        raise HTTPException(400, str(exc))
+    with _inactive_project_write(request, project, "update generation settings"):
+        clip = resolve_clip(request, project, clip_id)
+        try:
+            return _generation_settings(request).save(
+                project, clip, body.model_dump())
+        except GenerationSettingsError as exc:
+            raise HTTPException(400, str(exc))
 
 
 @router.post(
@@ -369,7 +389,7 @@ def generate_current_prompt(request: Request, project_id: str, clip_id: str,
             body.prompt_sha256,
             body.settings_updated_at,
         )
-    except ActiveJobError as exc:
+    except (ActiveJobError, ProjectJobGuardError, ValueError) as exc:
         raise HTTPException(409, str(exc))
     return job.to_dict()
 
@@ -426,13 +446,11 @@ def get_generation(request: Request, project_id: str, clip_id: str,
 def delete_generation(request: Request, project_id: str, clip_id: str,
                       generation_id: str):
     project = resolve_project(request, project_id)
-    if any(job.project == project.name for job in _store(request).active_jobs()):
-        raise HTTPException(
-            409, "cannot delete a take while this project has an active job")
-    try:
-        clip = _clips(request).delete_take(project, clip_id, generation_id)
-    except ClipStoreError as exc:
-        _raise_clip_store_error(exc)
+    with _inactive_project_write(request, project, "delete a take"):
+        try:
+            clip = _clips(request).delete_take(project, clip_id, generation_id)
+        except ClipStoreError as exc:
+            _raise_clip_store_error(exc)
     return {"ok": True, "deleted": generation_id, "clip": clip}
 
 
@@ -502,7 +520,7 @@ def project_chat(request: Request, project_id: str, body: ChatIn):
     try:
         job = _manager(request).submit_project_chat(
             project.name, message, profile)
-    except ActiveJobError as exc:
+    except (ActiveJobError, ProjectJobGuardError) as exc:
         raise HTTPException(409, str(exc))
     return job.to_dict()
 
@@ -521,7 +539,7 @@ def clip_chat(request: Request, project_id: str, clip_id: str, body: ChatIn):
     try:
         job = _manager(request).submit_chat(
             project.name, clip_id, message, profile)
-    except ActiveJobError as exc:
+    except (ActiveJobError, ProjectJobGuardError) as exc:
         raise HTTPException(409, str(exc))
     return job.to_dict()
 

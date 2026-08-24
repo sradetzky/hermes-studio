@@ -30,6 +30,9 @@ preview and production releases.
 - Bound authoritative H3 metadata to the exact executed `SaveVideo` output branch
   instead of global first-class-name matches; disconnected or ambiguous graph
   nodes and output producers now fail closed
+- Serialized project job enqueue against project metadata, clip creation/order/
+  metadata, generation-settings writes, and take deletion; active-job mutations
+  now return `409` without a check/enqueue race window
 - Web-triggered H3 archives now recover actual seed, canvas, timing, steps,
   acceleration nodes, ordered references, and prompt hash from authoritative
   ComfyUI history; incomplete or mismatched execution metadata fails closed

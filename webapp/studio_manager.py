@@ -24,6 +24,7 @@ from webapp.hermes_events import HermesSessionEventBridge
 from webapp.job_store import JobStore, JobStoreError
 from webapp.media_review_store import MediaReviewStore
 from webapp.models import Job, JobStatus
+from webapp.project_jobs import project_job_guard
 
 
 log = logging.getLogger(__name__)
@@ -119,22 +120,26 @@ class StudioJobManager:
 
     def submit_project_chat(self, project: str, message: str,
                             profile: str | None = None) -> Job:
-        chat_path = self._chat_path(project)
-        self.store.import_chat_if_empty(project, chat_path)
-        job = self.store.create_project_chat_job(
-            project, message, profile or self.settings.studio_profile)
+        project_path = ds.project_path(self.settings.studio_root, project)
+        with project_job_guard(project_path):
+            chat_path = self._chat_path(project)
+            self.store.import_chat_if_empty(project, chat_path)
+            job = self.store.create_project_chat_job(
+                project, message, profile or self.settings.studio_profile)
         self._export_chat(project)
         self._wake.set()
         return job
 
     def submit_chat(self, project: str, clip_id: str, message: str,
                     profile: str | None = None) -> Job:
-        chat_path = self._chat_path(project, clip_id)
-        self.store.import_chat_if_empty(
-            project, chat_path, clip_id=clip_id)
-        job = self.store.create_chat_job(
-            project, message, profile or self.settings.studio_profile,
-            clip_id=clip_id)
+        project_path = ds.project_path(self.settings.studio_root, project)
+        with project_job_guard(project_path):
+            chat_path = self._chat_path(project, clip_id)
+            self.store.import_chat_if_empty(
+                project, chat_path, clip_id=clip_id)
+            job = self.store.create_chat_job(
+                project, message, profile or self.settings.studio_profile,
+                clip_id=clip_id)
         self._export_chat(project, clip_id)
         self._wake.set()
         return job
@@ -143,6 +148,22 @@ class StudioJobManager:
                           prompt_sha256: str,
                           settings_updated_at: str) -> Job:
         project_path = ds.project_path(self.settings.studio_root, project)
+        with project_job_guard(project_path):
+            request = self._generation_request(
+                project_path, project, clip_id,
+                prompt_sha256, settings_updated_at)
+            chat_path = self._chat_path(project, clip_id)
+            self.store.import_chat_if_empty(
+                project, chat_path, clip_id=clip_id)
+            job = self.store.create_generation_job(
+                project, request, self.settings.studio_profile, clip_id=clip_id)
+        self._export_chat(project, clip_id)
+        self._wake.set()
+        return job
+
+    def _generation_request(
+            self, project_path: Path, project: str, clip_id: str,
+            prompt_sha256: str, settings_updated_at: str) -> str:
         clip_store = ClipStore()
         project_manifest = clip_store.describe(project_path)
         entry = next(
@@ -185,14 +206,7 @@ class StudioJobManager:
             payload, sort_keys=True, separators=(",", ":"),
             ensure_ascii=False)
         parse_generation_job_payload(request)
-        chat_path = self._chat_path(project, clip_id)
-        self.store.import_chat_if_empty(
-            project, chat_path, clip_id=clip_id)
-        job = self.store.create_generation_job(
-            project, request, self.settings.studio_profile, clip_id=clip_id)
-        self._export_chat(project, clip_id)
-        self._wake.set()
-        return job
+        return request
 
     def _scheduler_loop(self) -> None:
         while not self._stop.is_set():
