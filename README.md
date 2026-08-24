@@ -116,8 +116,36 @@ The stop command refuses while a job is queued or running. After deliberately
 deciding to cancel active work, use `./webapp/stop.sh --force`; Studio then
 terminates its tracked Hermes process, cancels ComfyUI work, and clears VRAM.
 
-The server intentionally binds only to localhost. Do not expose it on a network
-without adding authentication and reviewing the media/write endpoints.
+The server intentionally remains bound to localhost. For persistent startup and
+tailnet-only HTTPS access, install the included user service and allowlist this
+machine's exact Tailscale DNS name:
+
+```bash
+./webapp/stop.sh
+install -Dm644 webapp/hermes-studio.service \
+  "$HOME/.config/systemd/user/hermes-studio.service"
+install -d -m700 "$HOME/.config/hermes-studio"
+printf '%s\n' 'HERMES_STUDIO_TRUSTED_HOSTS=<machine>.<tailnet>.ts.net' \
+  > "$HOME/.config/hermes-studio/environment"
+chmod 600 "$HOME/.config/hermes-studio/environment"
+systemctl --user daemon-reload
+systemctl --user enable --now hermes-studio.service
+sudo tailscale serve --bg --yes --https=8788 http://127.0.0.1:8788
+```
+
+Open `https://<machine>.<tailnet>.ts.net:8788/` from a device permitted by the
+tailnet ACL. Port 8788 deliberately avoids replacing any existing Serve handler
+on standard HTTPS port 443. Do not use Tailscale Funnel: Studio has no separate
+application login, so every tailnet identity allowed to reach this device is
+trusted with its project, media, and write APIs.
+
+Inspect or remove the exposure with:
+
+```bash
+tailscale serve status
+sudo tailscale serve --https=8788 off
+systemctl --user disable --now hermes-studio.service
+```
 
 ## Development
 
@@ -167,7 +195,8 @@ reference images.
 - One job runs globally at a time; specialist handoffs are serialized.
 - Generation settings are prompt-hash-bound and must be re-approved after edits.
 - Upload, media, promotion, and reference paths reject traversal and symlink escapes.
-- Trusted-host and origin checks preserve the localhost-only write boundary.
+- Trusted-host and origin checks allow localhost plus only explicitly configured
+  exact Tailscale DNS names; wildcard tailnet hosts and host:port values are rejected.
 - Review actions copy rather than move and never overwrite an existing file.
 - Generation workflows must archive output and release VRAM after terminal state.
 - The user remains the final judge of generated media; automated deletion is forbidden.
@@ -176,7 +205,8 @@ reference images.
 
 ## Preview limitations
 
-- No authentication or multi-user support
+- No application authentication or multi-user isolation; tailnet access relies
+  on Tailscale identity and ACL policy
 - No direct typed **Generate with this prompt** button yet
 - No mobile-first replacement for the fixed three-pane workspace
 - No packaged installer or model/workflow downloader

@@ -69,14 +69,15 @@ def create_app(settings: Settings | None = None,
     application.state.settings = settings
     application.add_middleware(
         TrustedHostMiddleware,
-        allowed_hosts=["127.0.0.1", "localhost", "testserver"],
+        allowed_hosts=list(settings.trusted_hosts),
     )
 
     @application.middleware("http")
     async def protect_local_writes(request, call_next):
         if request.method not in {"GET", "HEAD", "OPTIONS"}:
             origin = request.headers.get("origin")
-            if origin and urlsplit(origin).hostname not in {"127.0.0.1", "localhost"}:
+            origin_host = urlsplit(origin).hostname if origin else None
+            if origin_host and origin_host.lower() not in settings.trusted_hosts:
                 return JSONResponse(
                     {"detail": "cross-origin writes are not allowed"},
                     status_code=403,

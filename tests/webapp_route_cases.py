@@ -89,6 +89,17 @@ class WebAppTestCase(unittest.TestCase):
         return response.json()["id"]
 
 class LauncherScriptTests(unittest.TestCase):
+    def test_user_service_keeps_loopback_launcher_and_external_host_config(self):
+        unit = (
+            Path(__file__).resolve().parent.parent /
+            "webapp" / "hermes-studio.service"
+        ).read_text()
+        self.assertIn("ExecStart=%h/repos/hermes-studio/webapp/run.sh", unit)
+        self.assertIn(
+            "EnvironmentFile=-%h/.config/hermes-studio/environment", unit)
+        self.assertIn("Restart=on-failure", unit)
+        self.assertIn("SuccessExitStatus=143", unit)
+
     def test_profile_sync_allows_missing_optional_grok_profile(self):
         with tempfile.TemporaryDirectory() as directory:
             hermes_home = Path(directory)
@@ -184,6 +195,44 @@ class AppFactoryTests(WebAppTestCase):
                 headers={"Origin": "https://attacker.example"},
                 json={"name": "blocked", "brief": ""},
             ).status_code, 403)
+
+    def test_exact_tailnet_host_allows_same_origin_reads_and_writes(self):
+        host = "studio-device.example.ts.net"
+        settings = replace(
+            self.settings,
+            trusted_hosts=("127.0.0.1", "localhost", "testserver", host),
+        )
+        with TestClient(create_app(settings, PassiveManager)) as client:
+            self.assertEqual(client.get(
+                "/api/projects", headers={"Host": f"{host}:8788"},
+            ).status_code, 200)
+            response = client.post(
+                "/api/projects",
+                headers={
+                    "Host": f"{host}:8788",
+                    "Origin": f"https://{host}:8788",
+                },
+                json={"name": "tailnet", "brief": ""},
+            )
+        self.assertEqual(response.status_code, 200)
+
+    def test_trusted_hosts_extend_from_environment(self):
+        with patch.dict(os.environ, {
+            "HERMES_STUDIO_TRUSTED_HOSTS": "studio-device.example.ts.net",
+        }, clear=False):
+            settings = Settings.from_environment()
+        self.assertEqual(settings.trusted_hosts, (
+            "127.0.0.1", "localhost", "testserver",
+            "studio-device.example.ts.net",
+        ))
+
+    def test_trusted_hosts_reject_wildcards_and_ports(self):
+        for value in ("*.ts.net", "natasha.ts.net:8788"):
+            with self.subTest(value=value), patch.dict(os.environ, {
+                "HERMES_STUDIO_TRUSTED_HOSTS": value,
+            }, clear=False):
+                with self.assertRaisesRegex(ValueError, "exact DNS names"):
+                    Settings.from_environment()
 
     def test_default_job_timeout_covers_long_h3_runs(self):
         with patch.dict(os.environ, {}, clear=False):

@@ -1,0 +1,19 @@
+[Unit]
+Description=Hermes Studio local web application
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/repos/hermes-studio
+EnvironmentFile=-%h/.config/hermes-studio/environment
+ExecStart=%h/repos/hermes-studio/webapp/run.sh
+Restart=on-failure
+RestartSec=3s
+SuccessExitStatus=143
+KillMode=mixed
+TimeoutStopSec=5min
+UMask=0077
+
+[Install]
+WantedBy=default.target

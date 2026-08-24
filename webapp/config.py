@@ -5,6 +5,31 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+LOCAL_TRUSTED_HOSTS = ("127.0.0.1", "localhost", "testserver")
+
+
+def _trusted_hosts(extra_hosts: str) -> tuple[str, ...]:
+    hosts: list[str] = list(LOCAL_TRUSTED_HOSTS)
+    for candidate in extra_hosts.split(","):
+        host = candidate.strip().lower().rstrip(".")
+        if not host:
+            continue
+        labels = host.split(".")
+        if (
+            len(host) > 253
+            or any(not label or len(label) > 63 for label in labels)
+            or any(label.startswith("-") or label.endswith("-") for label in labels)
+            or any(not char.isascii() or not (char.isalnum() or char == "-")
+                   for label in labels for char in label)
+        ):
+            raise ValueError(
+                "HERMES_STUDIO_TRUSTED_HOSTS must contain exact DNS names "
+                "without ports or wildcards")
+        if host not in hosts:
+            hosts.append(host)
+    return tuple(hosts)
+
+
 @dataclass(frozen=True)
 class Settings:
     repo: Path
@@ -12,6 +37,7 @@ class Settings:
     comfy_output: Path
     runtime_root: Path
     comfy_url: str = "http://127.0.0.1:8188"
+    trusted_hosts: tuple[str, ...] = LOCAL_TRUSTED_HOSTS
     hermes_command: str = "hermes"
     studio_profile: str = "studio"
     specialist_profiles: tuple[str, ...] = (
@@ -59,6 +85,8 @@ class Settings:
             runtime_root=repo / ".runtime",
             comfy_url=os.environ.get(
                 "COMFYUI_URL", "http://127.0.0.1:8188").rstrip("/"),
+            trusted_hosts=_trusted_hosts(os.environ.get(
+                "HERMES_STUDIO_TRUSTED_HOSTS", "")),
             job_timeout_seconds=int(os.environ.get(
                 "HERMES_STUDIO_JOB_TIMEOUT_SECONDS", "10800")),
         )

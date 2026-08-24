@@ -9,7 +9,17 @@ if [[ -f "$PIDFILE" ]]; then
   if [[ "$pid" =~ ^[0-9]+$ ]] && [[ -d "/proc/$pid" ]]; then
     command="$(tr '\0' ' ' < "/proc/$pid/cmdline")"
     if [[ "$command" == *"webapp/run.sh"* ]]; then
-      echo "Hermes Studio running (pid $pid) — http://127.0.0.1:8788"
+      message="Hermes Studio running (pid $pid) — http://127.0.0.1:8788"
+      environment="$HOME/.config/hermes-studio/environment"
+      if [[ -f "$environment" ]]; then
+        while IFS='=' read -r key value; do
+          if [[ "$key" == "HERMES_STUDIO_TRUSTED_HOSTS" && -n "$value" ]]; then
+            message+=" · https://${value%%,*}:8788"
+            break
+          fi
+        done < "$environment"
+      fi
+      echo "$message"
       exit 0
     fi
   fi

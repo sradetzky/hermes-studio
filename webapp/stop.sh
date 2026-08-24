@@ -62,7 +62,14 @@ if [[ ! "$timeout" =~ ^[1-9][0-9]*$ ]]; then
   echo "HERMES_STUDIO_STOP_TIMEOUT_SECONDS must be a positive integer" >&2
   exit 2
 fi
-kill -TERM "$pid"
+service_pid="$(systemctl --user show hermes-studio.service \
+  --property=MainPID --value 2>/dev/null || true)"
+if [[ "$service_pid" == "$pid" ]] && \
+   systemctl --user is-active --quiet hermes-studio.service 2>/dev/null; then
+  systemctl --user stop hermes-studio.service
+else
+  kill -TERM "$pid"
+fi
 for ((attempt = 0; attempt < timeout * 10; attempt++)); do
   [[ ! -d "/proc/$pid" ]] && break
   sleep .1

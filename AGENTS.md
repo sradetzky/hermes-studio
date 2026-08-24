@@ -103,6 +103,9 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
 - ComfyUI queue observability added to the web header with sanitized running and
   pending prompt IDs; Studio render waits now use comfyui-mcp's two-second
   batch status loop instead of fixed three-minute terminal waits
+- Persistent user-systemd startup and tailnet-only Tailscale Serve HTTPS added
+  without widening Uvicorn beyond loopback; exact tailnet host/origin checks
+  preserve the trusted-access boundary and coexist with the existing port 443 app
 
 ## Next steps
 
