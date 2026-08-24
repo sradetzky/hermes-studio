@@ -116,6 +116,9 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
 - Prompt-ready enabled clips now expose **Generate with this prompt**. The typed
   request is revision-guarded at enqueue and worker start, creates a dedicated
   Studio generation job, and uses the verified comfyui-mcp archive/cleanup path
+- Project and clip conversations are now explicitly selectable and isolated end
+  to end: transcript/activity cursors, Studio and specialist Hermes sessions,
+  and filesystem exports. Legacy shared history migrates intact to Project chat.
 
 ## Next steps
 

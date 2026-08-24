@@ -5,7 +5,7 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 
 
-CURRENT_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 4
 LEGACY_CLIP_ERROR = "Legacy active job lacked an exact clip binding"
 
 
@@ -14,6 +14,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     id TEXT PRIMARY KEY,
     project TEXT NOT NULL,
     clip_id TEXT NOT NULL DEFAULT '',
+    chat_scope TEXT NOT NULL DEFAULT 'project' CHECK (
+        chat_scope IN ('project', 'clip')
+    ),
     kind TEXT NOT NULL,
     profile TEXT NOT NULL DEFAULT 'studio',
     status TEXT NOT NULL CHECK (
@@ -48,15 +51,17 @@ CREATE TABLE IF NOT EXISTS sessions (
 
 CREATE TABLE IF NOT EXISTS profile_sessions (
     project TEXT NOT NULL,
+    clip_id TEXT NOT NULL DEFAULT '',
     profile TEXT NOT NULL,
     session_id TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    PRIMARY KEY(project, profile)
+    PRIMARY KEY(project, clip_id, profile)
 );
 
 CREATE TABLE IF NOT EXISTS chat_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     project TEXT NOT NULL,
+    clip_id TEXT NOT NULL DEFAULT '',
     job_id TEXT REFERENCES jobs(id) ON DELETE SET NULL,
     role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
     content TEXT NOT NULL,
@@ -199,11 +204,80 @@ def _migration_3_exact_active_clips(connection: sqlite3.Connection) -> None:
     )
 
 
+def _migration_4_chat_and_session_scopes(connection: sqlite3.Connection) -> None:
+    connection.execute("DROP TRIGGER IF EXISTS jobs_require_active_clip_on_insert")
+    connection.execute("DROP TRIGGER IF EXISTS jobs_require_active_clip_on_update")
+
+    if "chat_scope" not in _columns(connection, "jobs"):
+        connection.execute(
+            "ALTER TABLE jobs ADD COLUMN chat_scope TEXT NOT NULL "
+            "DEFAULT 'project'")
+    connection.execute(
+        "UPDATE jobs SET chat_scope = 'clip' "
+        "WHERE status IN ('queued', 'running') AND kind <> 'chat'")
+
+    if "clip_id" not in _columns(connection, "profile_sessions"):
+        connection.execute(
+            "ALTER TABLE profile_sessions RENAME TO legacy_profile_sessions")
+        connection.execute("""
+            CREATE TABLE profile_sessions (
+                project TEXT NOT NULL,
+                clip_id TEXT NOT NULL DEFAULT '',
+                profile TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY(project, clip_id, profile)
+            )
+        """)
+        connection.execute(
+            "INSERT INTO profile_sessions "
+            "(project, clip_id, profile, session_id, updated_at) "
+            "SELECT project, '', profile, session_id, updated_at "
+            "FROM legacy_profile_sessions")
+        connection.execute("DROP TABLE legacy_profile_sessions")
+
+    if "clip_id" not in _columns(connection, "chat_events"):
+        connection.execute(
+            "ALTER TABLE chat_events "
+            "ADD COLUMN clip_id TEXT NOT NULL DEFAULT ''")
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS chat_project_clip_id "
+        "ON chat_events(project, clip_id, id)")
+
+    connection.execute("""
+        CREATE TRIGGER jobs_require_active_clip_on_insert
+        BEFORE INSERT ON jobs
+        WHEN NEW.status IN ('queued', 'running')
+             AND (
+                 NEW.chat_scope NOT IN ('project', 'clip')
+                 OR (NEW.chat_scope = 'clip' AND trim(NEW.clip_id) = '')
+                 OR (NEW.chat_scope = 'project' AND NEW.kind <> 'chat')
+             )
+        BEGIN
+            SELECT RAISE(ABORT, 'active job has an invalid chat scope');
+        END
+    """)
+    connection.execute("""
+        CREATE TRIGGER jobs_require_active_clip_on_update
+        BEFORE UPDATE OF status, clip_id, kind, chat_scope ON jobs
+        WHEN NEW.status IN ('queued', 'running')
+             AND (
+                 NEW.chat_scope NOT IN ('project', 'clip')
+                 OR (NEW.chat_scope = 'clip' AND trim(NEW.clip_id) = '')
+                 OR (NEW.chat_scope = 'project' AND NEW.kind <> 'chat')
+             )
+        BEGIN
+            SELECT RAISE(ABORT, 'active job has an invalid chat scope');
+        END
+    """)
+
+
 Migration = Callable[[sqlite3.Connection], None]
 MIGRATIONS: tuple[Migration, ...] = (
     _migration_1_job_columns,
     _migration_2_event_and_session_backfill,
     _migration_3_exact_active_clips,
+    _migration_4_chat_and_session_scopes,
 )
 
 
@@ -223,8 +297,12 @@ def initialize_runtime_schema(connection: sqlite3.Connection) -> None:
         except Exception:
             connection.rollback()
             raise
-    required = {"profile", "clip_id", "pid_start_time"}
+    required = {"profile", "clip_id", "chat_scope", "pid_start_time"}
     missing = required - _columns(connection, "jobs")
     if missing:
         raise RuntimeSchemaError(
             f"runtime jobs schema is missing columns: {sorted(missing)}")
+    for table in ("profile_sessions", "chat_events"):
+        if "clip_id" not in _columns(connection, table):
+            raise RuntimeSchemaError(
+                f"runtime {table} schema is missing clip_id")

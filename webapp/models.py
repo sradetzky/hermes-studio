@@ -20,6 +20,7 @@ class Job:
     id: str
     project: str
     clip_id: str
+    chat_scope: str
     kind: str
     profile: str
     status: JobStatus
@@ -43,6 +44,7 @@ class Job:
 class ChatEvent:
     id: int
     project: str
+    clip_id: str
     job_id: str | None
     role: ChatRole
     content: str
@@ -52,6 +54,7 @@ class ChatEvent:
     def to_dict(self) -> dict:
         return {
             "id": self.id,
+            "clip_id": self.clip_id,
             "role": self.role,
             "content": self.content,
             "ts": self.created_at,

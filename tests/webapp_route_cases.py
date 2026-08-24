@@ -59,6 +59,10 @@ class PassiveManager:
     def stop(self):
         pass
 
+    def submit_project_chat(self, project, message, profile=None):
+        return self.store.create_project_chat_job(
+            project, message, profile or "studio")
+
     def submit_chat(self, project, clip_id, message, profile=None):
         return self.store.create_chat_job(
             project, message, profile or "studio", clip_id=clip_id)
@@ -451,24 +455,77 @@ class AppFactoryTests(WebAppTestCase):
             self.assertEqual(first.json()["profile"], "studio")
             self.assertEqual(first.json()["clip_id"], "clip-001")
             self.assertEqual(second.status_code, 409)
-            chat = client.get(f"/api/project/{project}/chat").json()
+            chat = client.get(
+                f"/api/project/{project}/clips/clip-001/chat").json()
             self.assertEqual(
                 [(message["role"], message["content"]) for message in chat["messages"]],
                 [("user", "hello")],
             )
             self.assertEqual(chat["cursor"], chat["messages"][-1]["id"])
             unchanged = client.get(
-                f"/api/project/{project}/chat?after={chat['cursor']}"
+                f"/api/project/{project}/clips/clip-001/chat"
+                f"?after={chat['cursor']}"
             ).json()
             self.assertEqual(unchanged, {
                 "cursor": chat["cursor"], "messages": []})
             activity = client.get(
-                f"/api/project/{project}/events").json()
+                f"/api/project/{project}/clips/clip-001/events").json()
             self.assertEqual(activity["events"][0]["event_type"], "job.queued")
             self.assertEqual(activity["events"][0]["profile"], "studio")
             listing = client.get(f"/api/project/{project}/jobs").json()
             self.assertEqual([job["id"] for job in listing["jobs"]],
                              [first.json()["id"]])
+
+    def test_project_and_clip_chat_routes_keep_history_and_activity_separate(self):
+        app = self.app()
+        with TestClient(app) as client:
+            project = self.create_project(client, "scoped-chat")
+            project_turn = client.post(
+                f"/api/project/{project}/chat",
+                json={"message": "project direction"},
+            )
+            self.assertEqual(project_turn.status_code, 202)
+            self.assertEqual(project_turn.json()["clip_id"], "")
+            self.assertEqual(project_turn.json()["chat_scope"], "project")
+            app.state.job_store.fail(
+                project_turn.json()["id"], "test completion")
+
+            clip_turn = client.post(
+                f"/api/project/{project}/clips/clip-001/chat",
+                json={"message": "clip refinement"},
+            )
+            self.assertEqual(clip_turn.status_code, 202)
+            self.assertEqual(clip_turn.json()["chat_scope"], "clip")
+
+            project_chat = client.get(
+                f"/api/project/{project}/chat").json()["messages"]
+            clip_chat = client.get(
+                f"/api/project/{project}/clips/clip-001/chat").json()["messages"]
+            self.assertEqual(
+                [message["content"] for message in project_chat],
+                ["project direction", "Studio job failed: test completion"],
+            )
+            self.assertEqual(
+                [message["content"] for message in clip_chat],
+                ["clip refinement"],
+            )
+            self.assertTrue(all(message["clip_id"] == ""
+                                for message in project_chat))
+            self.assertTrue(all(message["clip_id"] == "clip-001"
+                                for message in clip_chat))
+
+            project_events = client.get(
+                f"/api/project/{project}/events").json()["events"]
+            clip_events = client.get(
+                f"/api/project/{project}/clips/clip-001/events").json()["events"]
+            self.assertEqual(
+                {event["job_id"] for event in project_events},
+                {project_turn.json()["id"]},
+            )
+            self.assertEqual(
+                {event["job_id"] for event in clip_events},
+                {clip_turn.json()["id"]},
+            )
 
     def test_chat_route_requires_an_exact_clip(self):
         with TestClient(self.app()) as client:
@@ -592,7 +649,9 @@ class AppFactoryTests(WebAppTestCase):
                 "action": "generate-current-prompt",
                 **token,
             })
-            chat = client.get(f"/api/project/{project}/chat").json()["messages"]
+            chat = client.get(
+                f"/api/project/{project}/clips/clip-001/chat"
+            ).json()["messages"]
             self.assertEqual(
                 [(entry["role"], entry["content"]) for entry in chat],
                 [("user", "Generate with this prompt")],

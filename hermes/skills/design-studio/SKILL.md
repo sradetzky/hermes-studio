@@ -26,7 +26,7 @@ they are not the normal Studio transport.
 ```
 <root>/projects/YYYY-MM-DD_<name>/
   project.json  brief.md  chat.jsonl  references/  research/  final/
-  clips/clip-001/{current_prompt.txt,current_generation.json}
+  clips/clip-001/{chat.jsonl,current_prompt.txt,current_generation.json}
   clips/clip-001/generations/NNN/{video.mp4,prompt.txt,settings.json,meta.json}
 <root>/shared/{characters,styles,workflows}/   <root>/tmp/
 ```
@@ -41,6 +41,8 @@ python3 ~/repos/hermes-studio/scripts/design_studio.py create-clip <project-id> 
 python3 ~/repos/hermes-studio/scripts/design_studio.py write-prompt \
   <project-id> <clip-id> "<structured prompt>"
 python3 ~/repos/hermes-studio/scripts/design_studio.py append-chat <project-id> user "..."
+python3 ~/repos/hermes-studio/scripts/design_studio.py append-chat \
+  <project-id> user "..." --clip <clip-id>
 # after an MCP job completes:
 python3 ~/repos/hermes-studio/scripts/design_studio.py archive-output \
   <project-id> <clip-id> <comfy-output-file> \
@@ -118,7 +120,7 @@ python3 ~/repos/hermes-studio/scripts/design_studio.py dispatch-grok \
   <project-id> "<self-contained research or image task>"
 ```
 
-The dispatcher maintains one Grok session per project and exposes only
+The dispatcher maintains one Grok session per project or exact clip scope and exposes only
 `web,x_search,image_gen,vision,file,terminal`. Preserve citations and clearly
 attribute findings to the Grok backup. It is excluded from fleet model
 switching and never has comfyui-mcp/GPU ownership.
@@ -147,7 +149,8 @@ python3 ~/repos/hermes-studio/scripts/design_studio.py dispatch-profile \
 
 Allowed profiles are `studio-storyboarder`, `studio-prompt-engineer`,
 `studio-reviewer`, and `studio-illustrator`. Handoffs are serialized and keep a
-per-project session for each profile. The web runtime projects their reasoning,
+independent session for each project or exact clip scope. The web runtime
+projects their reasoning,
 tool use, and lifecycle into the parent job's activity feed. Specialists never
 queue ComfyUI; only `studio` owns GPU execution. Use the reviewer only when the
 user explicitly requests agent review—the human remains the final judge.
@@ -180,6 +183,9 @@ Always official H3 structure (see `minimax-h3-prompt` skill):
 
 ## Web contract
 
-The FastAPI UI reads/writes only through exact nested clip APIs. Chat and
-references remain project-shared; prompts, settings, takes, and take selection
-remain clip-local. See PLAN.md Phase 3.
+The FastAPI UI has explicit Project and Clip chat scopes. Project chat owns
+cross-clip planning; every clip chat has an independent transcript, activity
+cursor, Studio session, and specialist sessions. Dispatch and `append-chat`
+inherit `HERMES_STUDIO_CHAT_SCOPE`/`HERMES_STUDIO_CLIP` inside web jobs; manual
+calls can pass `--clip`. References remain project-shared; prompts, settings,
+takes, and take selection remain clip-local. See PLAN.md Phase 3.

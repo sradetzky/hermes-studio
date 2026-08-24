@@ -1342,6 +1342,8 @@ def _validate_canonical_clip_descriptor(clip_fd: int, clip_id: str) -> tuple[int
     required = {"current_prompt.txt", "generations"}
     optional_files = {
         "current_generation.json",
+        "chat.jsonl",
+        ".chat.lock",
         # archive_generation() owns this clip-local lock file.
         ".generation-archive.lock",
     }
@@ -2221,8 +2223,11 @@ def write_prompt(root: Path, project: str, clip_id: str, prompt: str) -> Path:
     return out
 
 
-def append_chat(root: Path, project: str, role: str, content: str) -> None:
+def append_chat(root: Path, project: str, role: str, content: str, *,
+                clip_id: str | None = None) -> None:
     pp = project_path(root, project)
+    scoped_clip_id, scoped_clip = _dispatch_clip_scope(root, pp, clip_id)
+    chat_path = (scoped_clip / "chat.jsonl") if scoped_clip else (pp / "chat.jsonl")
     configured_root = Path(
         os.environ.get("DESIGN_STUDIO_ROOT", DEFAULT_ROOT)
     ).expanduser().resolve()
@@ -2235,9 +2240,12 @@ def append_chat(root: Path, project: str, role: str, content: str) -> None:
         )).expanduser().resolve()
         store = JobStore(runtime / "studio.db")
         store.initialize()
-        store.import_chat_if_empty(pp.name, pp / "chat.jsonl")
-        store.append_external_event(pp.name, role, content)
-        store.export_chat(pp.name, pp / "chat.jsonl")
+        store.import_chat_if_empty(
+            pp.name, chat_path, clip_id=scoped_clip_id)
+        store.append_external_event(
+            pp.name, role, content, clip_id=scoped_clip_id)
+        store.export_chat(
+            pp.name, chat_path, clip_id=scoped_clip_id)
         return
     entry = {"role": role,
              "content": content,
@@ -2245,8 +2253,7 @@ def append_chat(root: Path, project: str, role: str, content: str) -> None:
     # O_APPEND + single write: atomic enough for line-sized records even with
     # concurrent writers (threads / CLI + webapp).
     data = json.dumps(entry, ensure_ascii=False).encode("utf-8") + b"\n"
-    lock_path = pp / ".chat.lock"
-    chat_path = pp / "chat.jsonl"
+    lock_path = chat_path.parent / ".chat.lock"
     if lock_path.is_symlink() or chat_path.is_symlink():
         raise ValueError("project chat files may not be symlinks")
     lock_fd = os.open(
@@ -2394,15 +2401,36 @@ def archive_outputs(root: Path, project: str, clip_id: str,
     return gen_dir
 
 
+def _dispatch_clip_scope(
+        root: Path, project: Path, clip_id: str | None) -> tuple[str, Path | None]:
+    if clip_id is None:
+        if (os.environ.get("HERMES_STUDIO_PROJECT", "").strip() == project.name
+                and os.environ.get("HERMES_STUDIO_CHAT_SCOPE", "").strip()
+                == "clip"):
+            clip_id = os.environ.get("HERMES_STUDIO_CLIP", "").strip()
+    if not clip_id:
+        return "", None
+    clip = clip_path(root, project.name, clip_id)
+    return clip.name, clip
+
+
+def _profile_session_path(
+        session_dir: Path, project: str, profile: str, clip_id: str) -> Path:
+    scope = f".{clip_id}" if clip_id else ""
+    return session_dir / f"{project}{scope}.{profile}"
+
+
 def dispatch_profile(root: Path, project: str, profile: str, task: str,
-                     timeout: int = 1800) -> str:
+                     timeout: int = 1800, *, clip_id: str | None = None) -> str:
     """Run one serialized local specialist handoff with a persistent session."""
     if profile not in LOCAL_SPECIALIST_PROFILES:
         raise ValueError(f"unsupported Studio specialist profile: {profile}")
     pp = project_path(root, project)
+    scoped_clip_id, scoped_clip = _dispatch_clip_scope(root, pp, clip_id)
     session_dir = root / "tmp" / "profile-sessions"
     session_dir.mkdir(parents=True, exist_ok=True)
-    session_file = session_dir / f"{pp.name}.{profile}"
+    session_file = _profile_session_path(
+        session_dir, pp.name, profile, scoped_clip_id)
     lock_path = root / "tmp" / ".profile-dispatch.lock"
     command = ["hermes", "-p", profile]
     session_id = None
@@ -2411,9 +2439,17 @@ def dispatch_profile(root: Path, project: str, profile: str, task: str,
         if re.fullmatch(r"[A-Za-z0-9_-]+", candidate):
             session_id = candidate
             command += ["-r", candidate]
+    scope_context = (
+        f"Conversation scope: clip\n"
+        f"Active clip id: {scoped_clip_id}\n"
+        f"Active clip path: {scoped_clip}\n"
+        if scoped_clip else
+        "Conversation scope: project. There is no active clip.\n"
+    )
     prompt = (
         f"Hermes Studio project id: {pp.name}\n"
-        f"Project path: {pp}\n\n"
+        f"Project path: {pp}\n"
+        f"{scope_context}\n"
         f"Handoff from the studio orchestrator:\n{task}"
     )
     command += [
@@ -2526,20 +2562,30 @@ def dispatch_profile(root: Path, project: str, profile: str, task: str,
 
 
 def dispatch_grok(root: Path, project: str, task: str,
-                  timeout: int = 600) -> str:
-    """Run a persistent per-project task on the xAI backup profile."""
+                  timeout: int = 600, *, clip_id: str | None = None) -> str:
+    """Run a persistent scope-local task on the xAI backup profile."""
     pp = project_path(root, project)
+    scoped_clip_id, scoped_clip = _dispatch_clip_scope(root, pp, clip_id)
     session_dir = root / "tmp" / "profile-sessions"
     session_dir.mkdir(parents=True, exist_ok=True)
-    session_file = session_dir / f"{pp.name}.studio-grok"
+    session_file = _profile_session_path(
+        session_dir, pp.name, "studio-grok", scoped_clip_id)
     cmd = ["hermes", "-p", "studio-grok"]
     if session_file.exists():
         session_id = session_file.read_text(encoding="utf-8").strip()
         if re.fullmatch(r"[A-Za-z0-9_-]+", session_id):
             cmd += ["-r", session_id]
+    scope_context = (
+        f"Conversation scope: clip\n"
+        f"Active clip id: {scoped_clip_id}\n"
+        f"Active clip path: {scoped_clip}\n"
+        if scoped_clip else
+        "Conversation scope: project. There is no active clip.\n"
+    )
     prompt = (
         f"Hermes Studio project id: {pp.name}\n"
-        f"Project path: {pp}\n\n"
+        f"Project path: {pp}\n"
+        f"{scope_context}\n"
         f"Task from the Studio orchestrator:\n{task}"
     )
     cmd += ["chat", "-Q", "-t",
@@ -2726,6 +2772,7 @@ def main(argv=None) -> int:
 
     sp = sub.add_parser("append-chat")
     sp.add_argument("project"); sp.add_argument("role"); sp.add_argument("content")
+    sp.add_argument("--clip")
 
     sp = sub.add_parser("generate")
     sp.add_argument("project"); sp.add_argument("clip")
@@ -2764,12 +2811,14 @@ def main(argv=None) -> int:
     sp.add_argument("project")
     sp.add_argument("task")
     sp.add_argument("--timeout", type=int, default=600)
+    sp.add_argument("--clip")
 
     sp = sub.add_parser("dispatch-profile")
     sp.add_argument("project")
     sp.add_argument("profile", choices=sorted(LOCAL_SPECIALIST_PROFILES))
     sp.add_argument("task")
     sp.add_argument("--timeout", type=int, default=1800)
+    sp.add_argument("--clip")
 
     args = ap.parse_args(argv)
     root = studio_root(
@@ -2817,7 +2866,8 @@ def main(argv=None) -> int:
         print(write_prompt(
             root, args.project, args.clip, " ".join(args.prompt)))
     elif args.cmd == "append-chat":
-        append_chat(root, args.project, args.role, args.content)
+        append_chat(
+            root, args.project, args.role, args.content, clip_id=args.clip)
         print("appended")
     elif args.cmd == "generate":
         extra = []
@@ -2868,10 +2918,12 @@ def main(argv=None) -> int:
             root, args.project, args.clip, args.outputs, meta,
             source_root=GROK_IMAGE_OUTPUT, transport="xai-imagine"))
     elif args.cmd == "dispatch-grok":
-        print(dispatch_grok(root, args.project, args.task, args.timeout))
+        print(dispatch_grok(
+            root, args.project, args.task, args.timeout, clip_id=args.clip))
     elif args.cmd == "dispatch-profile":
         print(dispatch_profile(
-            root, args.project, args.profile, args.task, args.timeout))
+            root, args.project, args.profile, args.task, args.timeout,
+            clip_id=args.clip))
     return 0
 
 

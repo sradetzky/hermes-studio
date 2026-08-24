@@ -60,6 +60,10 @@ class PassiveManager:
     def stop(self):
         pass
 
+    def submit_project_chat(self, project, message, profile=None):
+        return self.store.create_project_chat_job(
+            project, message, profile or "studio")
+
     def submit_chat(self, project, clip_id, message, profile=None):
         return self.store.create_chat_job(
             project, message, profile or "studio", clip_id=clip_id)
@@ -147,11 +151,53 @@ class StudioManagerTests(WebAppTestCase):
             manager.stop()
         self.assertEqual(completed.status, JobStatus.COMPLETED)
         rows = [json.loads(line) for line in
-                (project / "chat.jsonl").read_text().splitlines()]
+                (project / "clips" / "clip-001" / "chat.jsonl")
+                .read_text().splitlines()]
         self.assertEqual(
             [(row["role"], row["content"]) for row in rows],
             [("user", "question"), ("assistant", "reply")],
         )
+
+    def test_project_and_clip_submissions_export_to_independent_scopes(self):
+        project = ds.create_project(self.settings.studio_root, "scoped-manager")
+        store = JobStore(self.settings.database_path)
+        store.initialize()
+        manager = StudioJobManager(self.settings, store)
+
+        project_job = manager.submit_project_chat(
+            project.name, "project direction")
+        self.assertEqual(project_job.clip_id, "")
+        self.assertIn(
+            "Conversation scope: project chat",
+            manager._agent_query(project_job),
+        )
+        project_environment = manager._job_environment(project_job)
+        self.assertEqual(project_environment["HERMES_STUDIO_CLIP"], "")
+        self.assertEqual(project_environment["HERMES_STUDIO_CLIP_PATH"], "")
+        self.assertEqual(
+            project_environment["HERMES_STUDIO_CHAT_SCOPE"], "project")
+        store.claim(project_job.id, "worker")
+        store.complete(
+            project_job.id, "worker", "project reply", "project-session")
+        manager._export_chat(project.name)
+
+        clip_job = manager.submit_chat(
+            project.name, "clip-001", "clip refinement")
+        self.assertIsNone(
+            store.get_session(project.name, clip_id="clip-001"))
+        self.assertIn("Active clip ID: clip-001", manager._agent_query(clip_job))
+
+        project_rows = [json.loads(line) for line in
+                        (project / "chat.jsonl").read_text().splitlines()]
+        clip_rows = [json.loads(line) for line in
+                     (project / "clips" / "clip-001" / "chat.jsonl")
+                     .read_text().splitlines()]
+        self.assertEqual(
+            [row["content"] for row in project_rows],
+            ["project direction", "project reply"],
+        )
+        self.assertEqual(
+            [row["content"] for row in clip_rows], ["clip refinement"])
 
     def test_specialist_command_uses_minimal_toolset(self):
         store = JobStore(self.settings.database_path)
@@ -306,7 +352,8 @@ class StudioManagerTests(WebAppTestCase):
         finally:
             manager.stop()
         self.assertEqual(failed.status, JobStatus.FAILED)
-        cursor, events = store.chat_events(project.name)
+        cursor, events = store.chat_events(
+            project.name, clip_id="clip-001")
         self.assertEqual(cursor, events[-1].id)
         self.assertEqual(len(events), 2)
         self.assertEqual(
@@ -347,7 +394,7 @@ class StudioManagerTests(WebAppTestCase):
             finally:
                 manager.stop()
         self.assertEqual(completed.status, JobStatus.COMPLETED)
-        _, chat = store.chat_events(project.name)
+        _, chat = store.chat_events(project.name, clip_id="clip-001")
         self.assertEqual(chat[-1].content, "recovered")
 
     def test_specialist_failure_does_not_interrupt_comfyui(self):

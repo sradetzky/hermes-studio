@@ -59,6 +59,10 @@ class PassiveManager:
     def stop(self):
         pass
 
+    def submit_project_chat(self, project, message, profile=None):
+        return self.store.create_project_chat_job(
+            project, message, profile or "studio")
+
     def submit_chat(self, project, clip_id, message, profile=None):
         return self.store.create_chat_job(
             project, message, profile or "studio", clip_id=clip_id)
@@ -109,6 +113,7 @@ class JobStoreTests(WebAppTestCase):
             connection.execute("DROP TRIGGER jobs_require_active_clip_on_insert")
             connection.execute("DROP TRIGGER jobs_require_active_clip_on_update")
             connection.execute("ALTER TABLE jobs DROP COLUMN clip_id")
+            connection.execute("ALTER TABLE jobs DROP COLUMN chat_scope")
             connection.execute("PRAGMA user_version = 0")
             connection.commit()
 
@@ -125,7 +130,117 @@ class JobStoreTests(WebAppTestCase):
         self.assertEqual(migrated.clip_id, "")
         self.assertEqual(migrated.status, JobStatus.FAILED)
         self.assertEqual(migrated.error, LEGACY_CLIP_ERROR)
+        self.assertEqual(migrated.chat_scope, "project")
         self.assertEqual(store.active_jobs(), [])
+
+    def test_scope_migration_preserves_legacy_chat_and_session_as_project_history(self):
+        self.settings.runtime_root.mkdir()
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            connection.executescript("""
+                CREATE TABLE jobs (
+                    id TEXT PRIMARY KEY,
+                    project TEXT NOT NULL,
+                    clip_id TEXT NOT NULL DEFAULT '',
+                    kind TEXT NOT NULL,
+                    profile TEXT NOT NULL DEFAULT 'studio',
+                    status TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    error TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    started_at TEXT NOT NULL DEFAULT '',
+                    finished_at TEXT NOT NULL DEFAULT '',
+                    owner_id TEXT NOT NULL DEFAULT '',
+                    pid INTEGER,
+                    pid_start_time INTEGER
+                );
+                CREATE TABLE profile_sessions (
+                    project TEXT NOT NULL,
+                    profile TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY(project, profile)
+                );
+                CREATE TABLE chat_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    project TEXT NOT NULL,
+                    job_id TEXT,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(job_id, role)
+                );
+                CREATE TABLE job_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    project TEXT NOT NULL,
+                    job_id TEXT NOT NULL,
+                    profile TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT '',
+                    summary TEXT NOT NULL,
+                    detail TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL
+                );
+                INSERT INTO profile_sessions VALUES (
+                    'project', 'studio', 'legacy-session', '2026-08-24T00:00:00Z');
+                INSERT INTO jobs VALUES (
+                    'legacy-job', 'project', 'clip-001', 'chat', 'studio',
+                    'completed', 'legacy history', '',
+                    '2026-08-24T00:00:00Z', '2026-08-24T00:00:01Z',
+                    '2026-08-24T00:00:02Z', '', NULL, NULL);
+                INSERT INTO chat_events (
+                    project, job_id, role, content, created_at
+                ) VALUES (
+                    'project', 'legacy-job', 'user', 'legacy history',
+                    '2026-08-24T00:00:00Z'
+                );
+                INSERT INTO job_events (
+                    project, job_id, profile, event_type, status, summary,
+                    detail, created_at
+                ) VALUES (
+                    'project', 'legacy-job', 'studio', 'job.completed',
+                    'completed', 'legacy complete', '{}',
+                    '2026-08-24T00:00:02Z'
+                );
+                PRAGMA user_version = 3;
+            """)
+
+        store = JobStore(self.settings.database_path)
+        store.initialize()
+
+        with closing(sqlite3.connect(self.settings.database_path)) as connection:
+            session_columns = {
+                row[1] for row in connection.execute(
+                    "PRAGMA table_info(profile_sessions)").fetchall()
+            }
+            chat_columns = {
+                row[1] for row in connection.execute(
+                    "PRAGMA table_info(chat_events)").fetchall()
+            }
+            version = connection.execute("PRAGMA user_version").fetchone()[0]
+        self.assertIn("clip_id", session_columns)
+        self.assertIn("clip_id", chat_columns)
+        self.assertEqual(version, CURRENT_SCHEMA_VERSION)
+        self.assertEqual(store.get_session("project", "studio", clip_id=""),
+                         "legacy-session")
+        self.assertIsNone(
+            store.get_session("project", "studio", clip_id="clip-001"))
+        _, project_chat = store.chat_events("project", clip_id="")
+        _, clip_chat = store.chat_events("project", clip_id="clip-001")
+        self.assertEqual([event.content for event in project_chat], ["legacy history"])
+        self.assertEqual(clip_chat, [])
+        migrated_job = store.get_job("legacy-job")
+        self.assertEqual(migrated_job.clip_id, "clip-001")
+        self.assertEqual(migrated_job.chat_scope, "project")
+        self.assertEqual(
+            [job.id for job in store.list_jobs("project", clip_id="")],
+            ["legacy-job"],
+        )
+        self.assertEqual(store.list_jobs("project", clip_id="clip-001"), [])
+        _, project_activity = store.job_events("project", clip_id="")
+        _, clip_activity = store.job_events("project", clip_id="clip-001")
+        self.assertEqual(
+            [event.summary for event in project_activity], ["legacy complete"])
+        self.assertEqual(clip_activity, [])
 
     def test_active_jobs_require_a_valid_exact_clip(self):
         store = self.store()
@@ -140,9 +255,10 @@ class JobStoreTests(WebAppTestCase):
             connection.execute(
                 "UPDATE jobs SET status = 'failed' WHERE id = ?", (job.id,))
             with self.assertRaisesRegex(
-                    sqlite3.IntegrityError, "exact clip binding"):
+                    sqlite3.IntegrityError, "invalid chat scope"):
                 connection.execute(
-                    "UPDATE jobs SET status = 'queued', clip_id = '' WHERE id = ?",
+                    "UPDATE jobs SET status = 'queued', clip_id = '', "
+                    "kind = 'generate' WHERE id = ?",
                     (job.id,),
                 )
 
@@ -202,13 +318,41 @@ class JobStoreTests(WebAppTestCase):
         store.complete(second.id, "worker", "prompted", "prompt-session")
 
         self.assertEqual(
-            store.get_session("project", "studio-storyboarder"),
+            store.get_session(
+                "project", "studio-storyboarder", clip_id="clip-001"),
             "story-session",
         )
         self.assertEqual(
-            store.get_session("project", "studio-prompt-engineer"),
+            store.get_session(
+                "project", "studio-prompt-engineer", clip_id="clip-001"),
             "prompt-session",
         )
+
+    def test_project_and_clip_chat_sessions_are_isolated(self):
+        store = self.store()
+        project_job = store.create_project_chat_job("project", "plan", "studio")
+        self.assertEqual(project_job.chat_scope, "project")
+        store.claim(project_job.id, "worker")
+        store.complete(
+            project_job.id, "worker", "project reply", "project-session")
+        clip_job = store.create_chat_job(
+            "project", "refine", "studio", clip_id="clip-001")
+        self.assertEqual(clip_job.chat_scope, "clip")
+        store.claim(clip_job.id, "worker")
+        store.complete(clip_job.id, "worker", "clip reply", "clip-session")
+
+        self.assertEqual(
+            store.get_session("project", "studio", clip_id=""),
+            "project-session")
+        self.assertEqual(
+            store.get_session("project", "studio", clip_id="clip-001"),
+            "clip-session")
+        _, project_chat = store.chat_events("project", clip_id="")
+        _, clip_chat = store.chat_events("project", clip_id="clip-001")
+        self.assertEqual(
+            [event.content for event in project_chat], ["plan", "project reply"])
+        self.assertEqual(
+            [event.content for event in clip_chat], ["refine", "clip reply"])
 
     def test_external_user_append_dedupes_active_web_turn(self):
         store = self.store()
@@ -390,14 +534,15 @@ class JobStoreTests(WebAppTestCase):
             "project", "question", clip_id="clip-001")
         store.claim_next("worker")
         store.complete(job.id, "worker", "answer", "session-1")
-        cursor, events = store.chat_events("project")
+        cursor, events = store.chat_events("project", clip_id="clip-001")
         self.assertEqual(cursor, events[-1].id)
         self.assertEqual(len(events), 2)
         self.assertEqual(
             [(event.role, event.content) for event in events],
             [("user", "question"), ("assistant", "answer")],
         )
-        self.assertEqual(store.get_session("project"), "session-1")
+        self.assertEqual(
+            store.get_session("project", clip_id="clip-001"), "session-1")
         self.assertEqual(store.get_job(job.id).reply, "answer")
 
     def test_existing_chat_jsonl_imports_once_and_logs_corruption(self):

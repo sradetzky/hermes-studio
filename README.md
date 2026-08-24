@@ -7,15 +7,16 @@ GPU execution, and the project filesystem remains the media source of truth.
 
 > **Preview status:** the planning, settings, activity, and media-review workflow
 > is operational and locally tested on Linux with an RTX 5060 Ti 16 GB. The web
-> UI is localhost-only, has no auth, and still requires an explicit chat
-> instruction to start a generation. The real web-to-ComfyUI H3 path is not yet
-> verified end to end. Models and ComfyUI workflows are not bundled.
+> UI is localhost-only and has no application auth. Ready clips can be generated
+> through an explicit revision-guarded action, and the real web-to-ComfyUI H3
+> path is verified end to end. Models and ComfyUI workflows are not bundled.
 
 ## What works
 
-- Folder-backed projects with ordered clips; chat/references are shared while
-  prompts, settings, immutable takes, and selected-take provenance are clip-local
-- Persistent per-project Hermes sessions and serialized global job execution
+- Folder-backed projects with ordered clips; references stay shared while
+  execution chat, prompts, settings, immutable takes, and selection are clip-local
+- Explicit cross-clip Project chat plus independent per-clip Hermes sessions,
+  with serialized global job execution
 - Live profile reasoning summaries, tool activity, handoffs, and job status
 - Safe multi-file reference uploads with atomic non-overwriting publication
 - Typed prompt-bound H3 generation settings with readiness/staleness validation

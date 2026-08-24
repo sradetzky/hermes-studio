@@ -2,8 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  captureChatContext,
   captureClipContext,
   captureProjectContext,
+  isChatContextCurrent,
   isClipContextCurrent,
   isProjectContextCurrent,
   isSeedWithinRange,
@@ -53,6 +55,31 @@ test('project and clip contexts reject stale responses independently', () => {
   assert.equal(isProjectContextCurrent(state, project), false);
 });
 
+test('chat context rejects scope and active-clip changes independently', () => {
+  const state = {
+    current: 'project-a', currentClip: 'clip-001', chatScope: 'clip',
+    projectRevision: 3, clipRevision: 7, chatRevision: 2,
+  };
+  const clipChat = captureChatContext(state);
+  assert.equal(isChatContextCurrent(state, clipChat), true);
+
+  state.chatScope = 'project';
+  state.chatRevision += 1;
+  assert.equal(isChatContextCurrent(state, clipChat), false);
+
+  const projectChat = captureChatContext(state);
+  state.currentClip = 'clip-002';
+  state.clipRevision += 1;
+  assert.equal(isChatContextCurrent(state, projectChat), true);
+
+  state.chatScope = 'clip';
+  state.chatRevision += 1;
+  const nextClipChat = captureChatContext(state);
+  state.currentClip = 'clip-003';
+  state.clipRevision += 1;
+  assert.equal(isChatContextCurrent(state, nextClipChat), false);
+});
+
 test('API paths encode every external identifier once', () => {
   assert.equal(
     apiPaths.generationAction('project / one', 'clip-001', 'take #1', 'promote'),
@@ -67,6 +94,12 @@ test('API paths encode every external identifier once', () => {
     '/api/project/project%20%2F%20one/clips/clip%20%231/generate',
   );
   assert.equal(apiPaths.chat('project', 42), '/api/project/project/chat?after=42');
+  assert.equal(apiPaths.projectChat('project / one'),
+    '/api/project/project%20%2F%20one/chat');
+  assert.equal(apiPaths.clipChat('project / one', 'clip #1', 7),
+    '/api/project/project%20%2F%20one/clips/clip%20%231/chat?after=7');
+  assert.equal(apiPaths.clipEvents('project / one', 'clip #1', 9),
+    '/api/project/project%20%2F%20one/clips/clip%20%231/events?after=9');
   assert.equal(apiPaths.comfyQueue, '/api/comfyui/queue');
 });
 
@@ -135,14 +168,16 @@ test('Comfy queue details format sanitized render metadata and timing', () => {
 test('live refresh planes fail and apply independently', async () => {
   const applied = [];
   const reported = [];
+  const requested = [];
   await refreshLivePlane({
     requestJson: async url => {
+      requested.push(url);
       if (url.includes('/chat?')) throw new Error('chat unavailable');
       if (url.includes('/jobs?')) return {jobs: ['job']};
       return {events: ['activity'], cursor: 12};
     },
     paths: apiPaths,
-    context: {projectId: 'project'},
+    context: {projectId: 'project', chatScope: 'clip', clipId: 'clip-001'},
     cursors: {chat: 4, activity: 8},
     isCurrent: () => true,
     handlers: {
@@ -157,4 +192,6 @@ test('live refresh planes fail and apply independently', async () => {
   assert.deepEqual(reported.sort(), [
     ['activity', null], ['chat', 'chat unavailable'], ['jobs', null],
   ]);
+  assert.ok(requested.includes('/api/project/project/clips/clip-001/chat?after=4'));
+  assert.ok(requested.includes('/api/project/project/clips/clip-001/events?after=8'));
 });

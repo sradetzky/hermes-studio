@@ -17,8 +17,10 @@ import {
   queuePresentation,
 } from './comfy-queue.mjs';
 import {
+  captureChatContext,
   captureClipContext,
   captureProjectContext,
+  isChatContextCurrent,
   isClipContextCurrent,
   isProjectContextCurrent,
 } from './frontend-contracts.mjs';
@@ -171,6 +173,51 @@ function resetClipState() {
   renderGenerationReadiness(null);
 }
 
+function renderChatScope() {
+  const clip = activeClip();
+  const clipScoped = state.chatScope === 'clip';
+  const clipTab = $('#clip-chat-scope');
+  const projectTab = $('#project-chat-scope');
+  clipTab.disabled = !clip;
+  clipTab.textContent = clip ? `Clip · ${clip.title}` : 'Clip';
+  clipTab.classList.toggle('active', clipScoped);
+  clipTab.setAttribute('aria-selected', String(clipScoped));
+  projectTab.classList.toggle('active', !clipScoped);
+  projectTab.setAttribute('aria-selected', String(!clipScoped));
+  $('#chat-scope-help').textContent = clipScoped
+    ? `Independent conversation for ${clip?.id || 'this clip'}`
+    : 'Project-wide direction and cross-clip continuity';
+  $('#active-clip-label').textContent = clipScoped
+    ? (clip ? `Clip chat · ${clip.id}` : 'Clip chat')
+    : 'Project chat';
+  $('#active-clip-label').title = clipScoped ? (clip?.title || '')
+    : 'Project-wide conversation';
+  $('#chatinput').placeholder = clipScoped
+    ? 'Message this clip agent…' : 'Message the project agent…';
+  const unavailable = !state.current || (clipScoped && !clip);
+  $('#chatinput').disabled = state.jobActive || unavailable;
+  $('#send-button').disabled = state.jobActive || unavailable;
+  $('#profile-select').disabled = state.jobActive || unavailable;
+}
+
+function resetChatState() {
+  state.chatRevision += 1;
+  state.chatCursor = 0;
+  state.activityCursor = 0;
+  state.activityByJob = {};
+  $('#chatlog').replaceChildren();
+  delete $('#chatlog').dataset.empty;
+  renderChatScope();
+}
+
+async function switchChatScope(scope) {
+  if (scope === state.chatScope ||
+      (scope === 'clip' && !activeClip())) return;
+  state.chatScope = scope;
+  resetChatState();
+  await refreshProject();
+}
+
 function renderClips() {
   const navigation = $('#clips');
   navigation.replaceChildren();
@@ -212,16 +259,21 @@ function renderClips() {
     index >= state.clips.length - 1 || state.jobActive;
   $('#toggle-clip').disabled = !clip || state.jobActive;
   $('#toggle-clip').textContent = clip?.enabled ? 'Disable' : 'Enable';
-  $('#active-clip-label').textContent = clip ? `${clip.id} · ${clip.title}` : 'No clip';
-  $('#active-clip-label').title = clip?.title || '';
+  renderChatScope();
 }
 
 async function selectClip(clipId) {
-  if (clipId === state.currentClip || !state.clips.some(clip => clip.id === clipId)) return;
+  if (!state.clips.some(clip => clip.id === clipId)) return;
+  if (clipId === state.currentClip) {
+    await switchChatScope('clip');
+    return;
+  }
   closeGenerationDialog(false);
   closeGenerationSettings(false);
   state.currentClip = clipId;
   state.clipRevision += 1;
+  state.chatScope = 'clip';
+  resetChatState();
   resetClipState();
   renderClips();
   await refreshProject();
@@ -251,6 +303,8 @@ async function createClip() {
       });
     state.currentClip = created.clip.id;
     state.clipRevision += 1;
+    state.chatScope = 'clip';
+    resetChatState();
     resetClipState();
   });
 }
@@ -300,15 +354,13 @@ async function selectProject(projectId) {
   state.projectRevision += 1;
   state.currentClip = null;
   state.clipRevision += 1;
+  state.chatScope = 'clip';
   state.clips = [];
-  state.chatCursor = 0;
-  state.activityCursor = 0;
-  state.activityByJob = {};
+  state.jobs = [];
   state.refreshErrors = {};
+  resetChatState();
   resetClipState();
   state.referenceSignature = '';
-  $('#chatlog').replaceChildren();
-  delete $('#chatlog').dataset.empty;
   $('#refs').replaceChildren();
   renderActivity([]);
   renderProjects();
@@ -345,6 +397,15 @@ function applyProjectNavigation(project) {
     closeGenerationDialog(false);
     closeGenerationSettings(false);
     resetClipState();
+    if (state.chatScope === 'clip') {
+      resetChatState();
+      state.refreshPending = true;
+    }
+  }
+  if (!state.currentClip && state.chatScope === 'clip') {
+    state.chatScope = 'project';
+    resetChatState();
+    state.refreshPending = true;
   }
   renderClips();
   document.title = `${project.id} — Hermes Studio`;
@@ -401,17 +462,20 @@ async function refreshProject() {
     return;
   }
   state.refreshing = true;
-  const context = captureProjectContext(state);
-  const isCurrent = () => isProjectContextCurrent(state, context);
+  const projectContext = captureProjectContext(state);
+  const chatContext = captureChatContext(state);
+  const isProjectCurrent = () =>
+    isProjectContextCurrent(state, projectContext);
+  const isChatCurrent = () => isChatContextCurrent(state, chatContext);
   try {
     await Promise.all([
-      refreshNavigationPlane(context),
+      refreshNavigationPlane(projectContext),
       refreshLivePlane({
         requestJson,
         paths: apiPaths,
-        context,
+        context: chatContext,
         cursors: {chat: state.chatCursor, activity: state.activityCursor},
-        isCurrent,
+        isCurrent: isChatCurrent,
         handlers: {
           chat: chat => {
             appendMessages(chat.messages);
@@ -428,8 +492,8 @@ async function refreshProject() {
       refreshReferencePlane({
         requestJson,
         paths: apiPaths,
-        context,
-        isCurrent,
+        context: projectContext,
+        isCurrent: isProjectCurrent,
         apply: references => {
           const signature = JSON.stringify(references.references);
           if (signature === state.referenceSignature) return;
@@ -452,7 +516,9 @@ function appendMessages(messages) {
   const chat = $('#chatlog');
   const shouldScroll = chat.scrollHeight - chat.scrollTop - chat.clientHeight < 80;
   if (!messages.length && state.chatCursor === 0 && !chat.children.length) {
-    showEmpty(chat, 'Say hello to start planning…');
+    showEmpty(chat, state.chatScope === 'clip'
+      ? 'Start this clip conversation…'
+      : 'Project history and cross-clip direction live here…');
     return;
   }
   if (messages.length && chat.dataset.empty) {
@@ -636,6 +702,7 @@ function renderReferences(references) {
 }
 
 function renderActivity(jobs) {
+  state.jobs = jobs;
   const latest = jobs[0];
   const active = jobs.find(job => job.status === 'queued' || job.status === 'running');
   state.jobActive = Boolean(active);
@@ -650,9 +717,6 @@ function renderActivity(jobs) {
   };
   $('#activity-text').textContent = labels[activityState] || activityState;
   $('#activity').title = latest?.error || latest?.message || 'Studio activity';
-  $('#chatinput').disabled = Boolean(active);
-  $('#send-button').disabled = Boolean(active);
-  $('#profile-select').disabled = Boolean(active);
   renderClips();
   renderGenerationReadiness(state.generationSettings);
 }
@@ -662,25 +726,31 @@ async function sendChat(event) {
   event.preventDefault();
   const input = $('#chatinput');
   const message = input.value.trim();
-  if (!message || !state.current || !state.currentClip) {
-    alert('Pick a project and clip first');
+  const clipScoped = state.chatScope === 'clip';
+  if (!message || !state.current || (clipScoped && !state.currentClip)) {
+    alert(clipScoped ? 'Pick a project and clip first' : 'Pick a project first');
     return;
   }
+  const context = captureChatContext(state);
   input.value = '';
   $('#status').textContent = 'studio is thinking…';
   try {
     const job = await requestJson(
-      apiPaths.clipChat(state.current, state.currentClip), {
+      clipScoped
+        ? apiPaths.clipChat(state.current, state.currentClip)
+        : apiPaths.projectChat(state.current), {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({message, profile: $('#profile-select').value || 'studio'}),
       });
     $('#status').textContent = '';
-    renderActivity([job]);
+    renderActivity([job, ...state.jobs.filter(item => item.id !== job.id)]);
     await refreshProject();
   } catch (error) {
-    if (!input.value) input.value = message;
-    $('#status').textContent = `error: ${error.message}`;
+    if (isChatContextCurrent(state, context)) {
+      if (!input.value) input.value = message;
+      $('#status').textContent = `error: ${error.message}`;
+    } else $('#status').textContent = '';
   }
 }
 
@@ -732,6 +802,8 @@ $('#rename-clip').addEventListener('click', renameClip);
 $('#move-clip-up').addEventListener('click', () => moveClip(-1));
 $('#move-clip-down').addEventListener('click', () => moveClip(1));
 $('#toggle-clip').addEventListener('click', toggleClip);
+$('#clip-chat-scope').addEventListener('click', () => switchChatScope('clip'));
+$('#project-chat-scope').addEventListener('click', () => switchChatScope('project'));
 $('#chat-form').addEventListener('submit', sendChat);
 initializeGenerationSettings(refreshProject);
 initializeMediaReview(refreshProject);

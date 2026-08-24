@@ -19,6 +19,8 @@ preview and production releases.
   with dedicated Studio jobs, worker-start revalidation, and exact typed run packages
 - Compact ComfyUI header status with expandable sanitized render specifications,
   elapsed/waiting time, queue order, and exact last-completed execution duration
+- Explicit Clip/Project chat selector with independent transcripts, activity
+  cursors, Hermes profile sessions, specialist sessions, and clip-local exports
 
 ### Changed
 
@@ -27,8 +29,10 @@ preview and production releases.
 - Removed SeedVR2, turbo, W4A8, model, and reference controls from the dialog
 - Acceleration now uses only Sol fused modulation and ChunkFF, without Sage,
   sparse Sol attention, or EasyCache
-- Prompt, generation settings, and take archives moved from project scope to
-  `clips/<clip-id>/`; project chat, references, research, and final stay shared
+- Prompt, generation settings, take archives, and execution chat moved into
+  `clips/<clip-id>/`; Project chat remains available for cross-clip direction
+- Existing shared transcript/session/activity state migrates transactionally and
+  losslessly into Project history; clip conversations start clean
 
 ## [0.1.0-preview.1] - 2026-08-23
 

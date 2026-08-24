@@ -27,6 +27,13 @@ textarea:focus-visible, video:focus-visible {
 .clip-actions .btn { padding:.25rem .45rem; font-size:.68rem; }
 .clip-actions #toggle-clip { grid-column:1/-1; }
 .active-clip-label { align-self:center; max-width:9rem; overflow:hidden; padding:0 .35rem; color:#7f8997; font-size:.65rem; text-overflow:ellipsis; white-space:nowrap; }
+.chat-scope-bar { display:flex; align-items:center; gap:.75rem; padding:.35rem; }
+.chat-scope-tabs { display:flex; gap:.2rem; padding:.15rem; border:1px solid #252c35; border-radius:.55rem; background:#0e1115; }
+.chat-scope-tab { max-width:14rem; overflow:hidden; padding:.3rem .7rem; border-radius:.4rem; color:#727d8b; font-size:.68rem; text-overflow:ellipsis; white-space:nowrap; }
+.chat-scope-tab:hover:not(:disabled) { color:#b9c3cf; background:#181d24; }
+.chat-scope-tab.active { color:#d5e7ff; background:#1e2c3d; box-shadow:inset 0 0 0 1px #304862; }
+.chat-scope-tab:disabled { opacity:.4; }
+.chat-scope-help { min-width:0; overflow:hidden; color:#677280; font-size:.65rem; text-overflow:ellipsis; white-space:nowrap; }
 #chatlog > div { margin-bottom:.6rem; line-height:1.45; }
 .chat-row { white-space:pre-wrap; }
 .role-user { color:#7ab7ff; }

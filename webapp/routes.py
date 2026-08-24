@@ -349,12 +349,25 @@ def generate_current_prompt(request: Request, project_id: str, clip_id: str,
 
 
 @router.get("/api/project/{project_id}/chat")
-def get_chat(request: Request, project_id: str,
-             after: int = Query(0, ge=0)):
+def get_project_chat(request: Request, project_id: str,
+                     after: int = Query(0, ge=0)):
     project = resolve_project(request, project_id)
     store = _store(request)
     store.import_chat_if_empty(project.name, project / "chat.jsonl")
     cursor, events = store.chat_events(project.name, after)
+    return {"cursor": cursor, "messages": [event.to_dict() for event in events]}
+
+
+@router.get("/api/project/{project_id}/clips/{clip_id}/chat")
+def get_clip_chat(request: Request, project_id: str, clip_id: str,
+                  after: int = Query(0, ge=0)):
+    project = resolve_project(request, project_id)
+    clip = resolve_clip(request, project, clip_id)
+    store = _store(request)
+    store.import_chat_if_empty(
+        project.name, clip / "chat.jsonl", clip_id=clip_id)
+    cursor, events = store.chat_events(
+        project.name, after, clip_id=clip_id)
     return {"cursor": cursor, "messages": [event.to_dict() for event in events]}
 
 
@@ -451,9 +464,26 @@ def upload_references(request: Request, project_id: str,
     return {"references": [item.to_dict() for item in saved]}
 
 
+@router.post("/api/project/{project_id}/chat", status_code=202)
+def project_chat(request: Request, project_id: str, body: ChatIn):
+    project = resolve_project(request, project_id)
+    message = body.message.strip()
+    if not message:
+        raise HTTPException(400, "empty message")
+    profile = body.profile or _settings(request).studio_profile
+    if profile not in _settings(request).profiles:
+        raise HTTPException(400, f"unknown Studio profile: {profile}")
+    try:
+        job = _manager(request).submit_project_chat(
+            project.name, message, profile)
+    except ActiveJobError as exc:
+        raise HTTPException(409, str(exc))
+    return job.to_dict()
+
+
 @router.post(
     "/api/project/{project_id}/clips/{clip_id}/chat", status_code=202)
-def chat(request: Request, project_id: str, clip_id: str, body: ChatIn):
+def clip_chat(request: Request, project_id: str, clip_id: str, body: ChatIn):
     project = resolve_project(request, project_id)
     resolve_clip(request, project, clip_id)
     message = body.message.strip()
@@ -490,7 +520,21 @@ def get_project_jobs(request: Request, project_id: str,
 def get_project_events(request: Request, project_id: str,
                        after: int = Query(0, ge=0)):
     project = resolve_project(request, project_id)
-    cursor, events = _store(request).job_events(project.name, after)
+    cursor, events = _store(request).job_events(
+        project.name, after, clip_id="")
+    return {
+        "cursor": cursor,
+        "events": [event.to_dict() for event in events],
+    }
+
+
+@router.get("/api/project/{project_id}/clips/{clip_id}/events")
+def get_clip_events(request: Request, project_id: str, clip_id: str,
+                    after: int = Query(0, ge=0)):
+    project = resolve_project(request, project_id)
+    resolve_clip(request, project, clip_id)
+    cursor, events = _store(request).job_events(
+        project.name, after, clip_id=clip_id)
     return {
         "cursor": cursor,
         "events": [event.to_dict() for event in events],

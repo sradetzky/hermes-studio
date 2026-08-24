@@ -205,6 +205,7 @@ class ClipStore:
     def _create_clip_tree(directory: Path) -> None:
         directory.mkdir()
         (directory / "current_prompt.txt").touch()
+        (directory / "chat.jsonl").touch()
         (directory / "generations").mkdir()
 
     def initialize(self, project: Path, title: str) -> dict:

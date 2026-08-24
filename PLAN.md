@@ -63,6 +63,7 @@ Folder structure on disk (source of truth for projects & media)
 │       ├── research/
 │       ├── clips/
 │       │   └── clip-001/
+│       │       ├── chat.jsonl
 │       │       ├── current_prompt.txt
 │       │       ├── current_generation.json # typed settings + prompt hash
 │       │       └── generations/
@@ -79,9 +80,11 @@ Folder structure on disk (source of truth for projects & media)
 └── tmp/
 ```
 
-Project chat, references, research, and final exports are shared. Each clip owns
-its prompt, generation contract, immutable takes, and optional selected take.
-Hermes and the web UI always carry exact project and clip IDs.
+Project chat owns cross-clip planning and direction; each clip owns an
+independent execution chat. References, research, and final exports stay
+shared. Each clip also owns its prompt, generation contract, immutable takes,
+and optional selected take. Hermes and the web UI always carry an explicit
+project/clip chat scope and exact IDs.
 
 ### 2.4 Prompting
 - Use official MiniMax H3 structure strictly.
@@ -93,7 +96,7 @@ Hermes and the web UI always carry exact project and clip IDs.
 
 ### 2.5 Web UI Requirements (Simple)
 - Self-hosted, minimal dependencies.
-- Chat interface with Hermes `studio` profile.
+- Explicit Project/Clip chat selector with independent Hermes `studio` sessions.
 - Display current structured prompt.
 - Play generated videos (HTML5).
 - Show reference thumbnails + previous generations.
@@ -108,7 +111,8 @@ Hermes and the web UI always carry exact project and clip IDs.
 - Pre-export clean API-format workflows for T2VA, FL2VA, Ref2VA with injectable parameters (prompt, duration, seed, refs, turbo strength, etc.).
 - Hermes skill must be able to:
   - Create new project folder
-  - Write/update one exact clip's `current_prompt.txt` and append to shared `chat.jsonl`
+  - Write/update one exact clip's `current_prompt.txt` and append to the explicit
+    project or clip `chat.jsonl`
   - Call ComfyUI workflow
   - Archive finished outputs into `clips/<clip-id>/generations/NNN/`
     with prompt/settings/metadata snapshots
@@ -144,8 +148,8 @@ Hermes and the web UI always carry exact project and clip IDs.
 ### Phase 3 – Minimal Web UI
 - FastAPI app that:
   - Serves static index.html
-  - nested project/clip chat, settings, take, and media APIs
-  - project-scoped reference, job, chat-history, and activity APIs
+  - independently scoped project/clip chat, settings, take, and media APIs
+  - project-scoped reference/job APIs plus scope-bound chat/activity APIs
   - guarded media from shared references/final and exact clip take archives
 - Single page with project + clip navigation, chat, take player, prompt viewer,
   settings, references, and selected-take controls.
@@ -159,6 +163,8 @@ Hermes and the web UI always carry exact project and clip IDs.
   handoffs.
 - [x] Ordered clip hierarchy with clip-local prompts/settings/takes, exact
   clip-scoped jobs and APIs, selected-take provenance, migration, and web controls.
+- [x] Explicit Project/Clip chat scope with isolated transcripts, activity
+  cursors, profile sessions, specialist continuity, and lossless project-history migration.
 
 ### Phase 4 – Polish
 - [x] Media detail/filter/review actions

@@ -20,6 +20,17 @@ export function captureClipContext(state) {
   };
 }
 
+export function captureChatContext(state) {
+  const clipScoped = state.chatScope === 'clip';
+  return {
+    ...captureProjectContext(state),
+    chatScope: clipScoped ? 'clip' : 'project',
+    chatRevision: state.chatRevision,
+    clipId: clipScoped ? state.currentClip : null,
+    clipRevision: clipScoped ? state.clipRevision : null,
+  };
+}
+
 export function isProjectContextCurrent(state, context) {
   return context.projectId === state.current &&
     context.revision === state.projectRevision;
@@ -28,5 +39,14 @@ export function isProjectContextCurrent(state, context) {
 export function isClipContextCurrent(state, context) {
   return isProjectContextCurrent(state, context) &&
     context.clipId === state.currentClip &&
+    context.clipRevision === state.clipRevision;
+}
+
+export function isChatContextCurrent(state, context) {
+  if (!isProjectContextCurrent(state, context) ||
+      context.chatScope !== state.chatScope ||
+      context.chatRevision !== state.chatRevision) return false;
+  if (context.chatScope !== 'clip') return true;
+  return context.clipId === state.currentClip &&
     context.clipRevision === state.clipRevision;
 }

@@ -10,8 +10,8 @@ no state in the UI that isn't already on disk; minimal dependencies.
   no SPA framework
 - Media served only through guarded shared references/final routes and exact
   project/clip/take routes
-- Chat jobs resume one persistent Hermes session per project/profile and run
-  asynchronously behind a transactional SQLite runtime store
+- Chat jobs resume an explicit project-level or clip-level Hermes session per
+  profile and run asynchronously behind a transactional SQLite runtime store
 
 ## Backend ownership
 
@@ -20,8 +20,9 @@ no state in the UI that isn't already on disk; minimal dependencies.
 - `hermes_events.py` — read-only projection of structured Hermes session rows
   into safe per-job reasoning/tool activity
 - `studio_manager.py` — FIFO scheduler, worker lease, tracked Hermes process
-- `job_store.py` / `runtime_schema.py` — transactional job/chat/event state and
-  ordered SQLite migrations; every active job has a database-enforced clip id
+- `job_store.py` / `runtime_schema.py` — transactional scoped job/chat/event
+  state and ordered SQLite migrations; clip work has a database-enforced exact
+  clip id while project chat has an explicit project scope
 - `reference_store.py` — synchronous staging + atomic no-overwrite publication
 - `clip_store.py` — canonical project manifest, exact clip resolution, ordering,
   enabled state, and selected-take provenance
@@ -40,16 +41,18 @@ no state in the UI that isn't already on disk; minimal dependencies.
 
 ```
 ┌──────────┬──────────────────────────────┬────────────┐
-│ PROJECTS │  CHAT (with studio agent)    │ MEDIA      │
-│ + clips  │  persistent project session  │ references │
-│ + new    │  exact active clip context   │ takes      │
+│ PROJECTS │  CLIP CHAT / PROJECT CHAT    │ MEDIA      │
+│ + clips  │  independent scoped sessions │ references │
+│ + new    │  explicit visible scope      │ takes      │
 │          │  ACTIVE CLIP PROMPT panel    │ video/img  │
 │          │  (clip/current_prompt.txt)   │ players    │
 └──────────┴──────────────────────────────┴────────────┘
 ```
 
 - Project + ordered clip switcher = left rail; add/rename/reorder/enable controls
-- Center: chat with the studio agent; below it the current structured prompt
+- Center: explicit Clip/Project chat selector, scoped chat with the studio
+  agent, and below it the current structured prompt. Clip chat is the default
+  after selecting a clip; Project chat owns cross-clip direction and history.
 - Prompt panel: readiness badge and compact H3 run contract (mode, MP or
   explicit canvas, seed, steps, and fused-modulation/ChunkFF acceleration);
   clip length and ordered references come from the prompt itself
@@ -61,9 +64,10 @@ no state in the UI that isn't already on disk; minimal dependencies.
   of sanitized recipe/mode, canvas, approximate media length, frames, steps,
   accel, seed, elapsed/waiting time, prompt IDs, and the last exact completed
   duration
-- Polling every 2s runs project navigation, chat/jobs/activity, references, and
-  clip/generation requests as independently failing planes. Project and clip revision
-  tokens reject stale responses; media DOM rebuilds only when listing signatures change,
+- Polling every 2s runs project navigation, scoped chat/jobs/activity,
+  references, and clip/generation requests as independently failing planes.
+  Project, clip, and chat-scope revision tokens reject stale responses; media
+  DOM rebuilds only when listing signatures change,
   so active video playback is stable.
 
 ## API surface (v1)
@@ -85,11 +89,12 @@ no state in the UI that isn't already on disk; minimal dependencies.
 | PUT | `/api/project/{id}/clips/{clip}/selected-take` | select/clear one exact video take |
 | POST | `/api/project/{id}/clips/{clip}/generations/{gen}/promote` | copy selected media to shared `final/` |
 | POST | `/api/project/{id}/clips/{clip}/generations/{gen}/use-as-reference` | copy selected media to shared `references/` |
-| GET | `/api/project/{id}/chat?after=N` | poll new chat lines |
-| POST | `/api/project/{id}/clips/{clip}/chat` | queue exact-clip Studio work → HTTP 202 + job record |
+| GET/POST | `/api/project/{id}/chat?after=N` | project-level chat/session for cross-clip direction |
+| GET/POST | `/api/project/{id}/clips/{clip}/chat?after=N` | independent exact-clip chat/session |
 | GET | `/api/jobs/{id}` | one job's queued/running/completed/failed state |
 | GET | `/api/project/{id}/jobs` | recent project activity |
-| GET | `/api/project/{id}/events?after=N` | incremental profile/tool/reasoning activity |
+| GET | `/api/project/{id}/events?after=N` | project-chat profile/tool/reasoning activity |
+| GET | `/api/project/{id}/clips/{clip}/events?after=N` | exact-clip activity |
 | GET | `/api/project/{id}/references` | list current project references |
 | POST | `/api/project/{id}/references` | multi-file drag/drop upload |
 | GET | `/media/projects/{id}/{area}/{path}` | guarded shared references/final media |
@@ -97,13 +102,18 @@ no state in the UI that isn't already on disk; minimal dependencies.
 
 ## Chat → Hermes wiring
 
-The nested clip chat endpoint accepts an explicit allowlisted profile, validates
-the exact clip, rejects a second active project job, returns HTTP 202 immediately,
-and atomically inserts the user turn, clip-scoped job and queued activity event.
+The project and nested clip chat endpoints accept an explicit allowlisted
+profile, reject a second active project job, return HTTP 202 immediately, and
+atomically insert the user turn, scope-bound job, and queued activity event.
+Clip chat additionally validates the exact clip.
 A lifespan-owned scheduler atomically claims
 the oldest global job and spawns
 `hermes -p PROFILE [-r SESSION] chat -Q -t TOOLSETS --source studio-web -q "<msg>"`.
-The command carries exact project/clip IDs and paths in its query and environment.
+The command carries the exact project/chat scope and, for clip work, exact clip
+ID and path in its query and environment. Runtime sessions are keyed by
+project + scope + profile, so one clip never resumes another clip's conversation.
+Schema-v4 migration keeps every existing transcript, job, activity row, and
+Hermes session in Project history; it does not guess or duplicate clip history.
 The orchestrator receives `all`; specialists receive fixed minimal toolsets.
 While the subprocess remains isolated, the manager reads that profile's
 structured SQLite session messages to project model reasoning, commentary and
@@ -125,7 +135,8 @@ profile failures never interrupt ComfyUI.
 
 `design_studio.py dispatch-profile` provides serialized orchestrator handoffs to
 storyboarder, prompt-engineer, reviewer and illustrator profiles. Each keeps a
-per-project session and projects its activity into the parent web job. The
+session for the parent project or exact clip scope and projects its activity
+into the parent web job. The
 specialists receive fixed minimal toolsets and remain prohibited from queueing
 GPU work. Dispatch requires an explicit profile selection or `/handoff <role>`
 command; ordinary language is never auto-routed, specialists are not
@@ -133,8 +144,9 @@ auto-chained, and their result never starts a render without a separate request.
 
 ## Safety / scope guards
 
-- Backend writes only through project creation, transactional chat events plus
-  derived `chat.jsonl` export, validated reference uploads, and explicit M4
+- Backend writes only through project creation, transactional scoped chat
+  events plus derived project/clip `chat.jsonl` exports, validated reference
+  uploads, and explicit M4
   promote/use-as-reference/delete actions. Generation stays agent-side.
 - Queue observability is a read-only native ComfyUI exception to MCP-only control.
   It reads `GET /queue` plus, only while expanded, completed timing from
@@ -189,6 +201,8 @@ auto-chained, and their result never starts a render without a separate request.
   ordered clip controls, selected-take provenance, and clip-safe polling
 - M4.3 (done): revision-guarded **Generate with this prompt** action, dedicated
   generation jobs, worker-start revalidation, and queued/active browser feedback
+- M4.4 (done): explicit Project/Clip chat selector, independently persisted
+  transcripts/activity/profile sessions, and lossless project-history migration
 - Real E2E checkpoint (done): exact-clip web job → Studio → comfyui-mcp H3
   submission → parameter read-back → clip-local archive → VRAM cleanup
 

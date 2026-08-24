@@ -249,6 +249,29 @@ class ProjectPathTests(unittest.TestCase):
                     (self.project / "chat.jsonl").read_text().splitlines()]
         self.assertEqual(exported[0]["content"], "transactional")
 
+    def test_configured_cli_chat_append_inherits_clip_scope(self):
+        runtime = Path(self.temp.name) / "clip-runtime"
+        environment = {
+            "DESIGN_STUDIO_ROOT": str(self.root),
+            "HERMES_STUDIO_RUNTIME_ROOT": str(runtime),
+            "HERMES_STUDIO_PROJECT": self.project.name,
+            "HERMES_STUDIO_CHAT_SCOPE": "clip",
+            "HERMES_STUDIO_CLIP": "clip-001",
+        }
+        with patch.dict(os.environ, environment):
+            ds.append_chat(
+                self.root, self.project.name, "system", "clip-local")
+        store = JobStore(runtime / "studio.db")
+        _, project_events = store.chat_events(self.project.name)
+        _, clip_events = store.chat_events(
+            self.project.name, clip_id="clip-001")
+        self.assertEqual(project_events, [])
+        self.assertEqual(
+            [event.content for event in clip_events], ["clip-local"])
+        clip_chat = self.project / "clips" / "clip-001" / "chat.jsonl"
+        self.assertEqual(
+            json.loads(clip_chat.read_text().strip())["content"], "clip-local")
+
     def test_direct_script_entrypoint_reaches_transactional_store(self):
         runtime = Path(self.temp.name) / "direct-runtime"
         environment = {
@@ -289,15 +312,19 @@ class ProjectPathTests(unittest.TestCase):
             store.claim_next("worker")
             store.complete(job.id, "worker", "answer", "session")
             store.export_chat(self.project.name, self.project / "chat.jsonl")
-        rows = [json.loads(line) for line in
-                (self.project / "chat.jsonl").read_text().splitlines()]
+            clip_chat = self.project / "clips" / "clip-001" / "chat.jsonl"
+            store.export_chat(
+                self.project.name, clip_chat, clip_id="clip-001")
+        project_rows = [json.loads(line) for line in
+                        (self.project / "chat.jsonl").read_text().splitlines()]
+        clip_rows = [json.loads(line) for line in clip_chat.read_text().splitlines()]
         self.assertEqual(
-            [(row["role"], row["content"]) for row in rows],
-            [
-                ("system", "external-after-import"),
-                ("user", "question"),
-                ("assistant", "answer"),
-            ],
+            [(row["role"], row["content"]) for row in project_rows],
+            [("system", "external-after-import")],
+        )
+        self.assertEqual(
+            [(row["role"], row["content"]) for row in clip_rows],
+            [("user", "question"), ("assistant", "answer")],
         )
 
     def test_archives_mcp_outputs_with_protected_metadata(self):
@@ -813,6 +840,17 @@ class ProjectPathTests(unittest.TestCase):
         self.assertIn("-r", second_command)
         self.assertIn("grok-session-1", second_command)
 
+        run.return_value = SimpleNamespace(
+            returncode=0, stdout="clip research\n",
+            stderr="session_id: grok-clip-session\n")
+        ds.dispatch_grok(
+            self.root, self.project.name, "clip research", clip_id="clip-001")
+        clip_command = run.call_args.args[0]
+        self.assertNotIn("-r", clip_command)
+        clip_prompt = clip_command[clip_command.index("-q") + 1]
+        self.assertIn("Conversation scope: clip", clip_prompt)
+        self.assertIn("Active clip id: clip-001", clip_prompt)
+
     @patch.object(ds.subprocess, "Popen")
     def test_local_profile_dispatch_persists_project_session(self, popen):
         process = MagicMock()
@@ -843,6 +881,43 @@ class ProjectPathTests(unittest.TestCase):
             second_command = popen.call_args.args[0]
             self.assertIn("-r", second_command)
             self.assertIn("storyboard-session", second_command)
+
+    @patch.object(ds.subprocess, "Popen")
+    def test_local_profile_dispatch_inherits_independent_clip_session(self, popen):
+        process = MagicMock()
+        process.returncode = 0
+        popen.return_value = process
+        process.communicate.return_value = (
+            "project ready\n", "session_id: project-session\n")
+        ds.dispatch_profile(
+            self.root, self.project.name,
+            "studio-storyboarder", "Project plan", clip_id="")
+
+        process.communicate.return_value = (
+            "clip ready\n", "session_id: clip-session\n")
+        environment = {
+            "HERMES_STUDIO_PROJECT": self.project.name,
+            "HERMES_STUDIO_CHAT_SCOPE": "clip",
+            "HERMES_STUDIO_CLIP": "clip-001",
+            "HERMES_STUDIO_JOB_ID": "",
+        }
+        with patch.dict(os.environ, environment, clear=False):
+            ds.dispatch_profile(
+                self.root, self.project.name,
+                "studio-storyboarder", "Clip plan")
+            clip_command = popen.call_args.args[0]
+            self.assertNotIn("-r", clip_command)
+            clip_prompt = clip_command[clip_command.index("-q") + 1]
+            self.assertIn("Conversation scope: clip", clip_prompt)
+            self.assertIn("Active clip id: clip-001", clip_prompt)
+
+            ds.dispatch_profile(
+                self.root, self.project.name,
+                "studio-storyboarder", "Revise clip")
+            resumed_command = popen.call_args.args[0]
+            self.assertIn("-r", resumed_command)
+            self.assertIn("clip-session", resumed_command)
+            self.assertNotIn("project-session", resumed_command)
 
     def test_local_profile_dispatch_rejects_unknown_profile(self):
         with self.assertRaisesRegex(ValueError, "unsupported"):

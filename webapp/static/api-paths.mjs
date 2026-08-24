@@ -11,12 +11,17 @@ export const apiPaths = {
   clipOrder: project => `/api/project/${encode(project)}/clips/order`,
   chat: (project, after = 0) =>
     `/api/project/${encode(project)}/chat?after=${encode(after)}`,
-  clipChat: (project, clip) =>
-    `/api/project/${encode(project)}/clips/${encode(clip)}/chat`,
+  projectChat: project => `/api/project/${encode(project)}/chat`,
+  clipChat: (project, clip, after = null) =>
+    `/api/project/${encode(project)}/clips/${encode(clip)}/chat` +
+    (after === null ? '' : `?after=${encode(after)}`),
   references: project => `/api/project/${encode(project)}/references`,
   jobs: project => `/api/project/${encode(project)}/jobs?limit=5`,
   events: (project, after = 0) =>
     `/api/project/${encode(project)}/events?after=${encode(after)}`,
+  clipEvents: (project, clip, after = 0) =>
+    `/api/project/${encode(project)}/clips/${encode(clip)}/events` +
+    `?after=${encode(after)}`,
   generationSettings: (project, clip) =>
     `/api/project/${encode(project)}/clips/${encode(clip)}/generation-settings`,
   generate: (project, clip) =>

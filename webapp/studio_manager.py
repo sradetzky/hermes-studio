@@ -107,20 +107,31 @@ class StudioJobManager:
         for job in self.store.active_jobs():
             if job.owner_id == self.owner_id:
                 self.store.fail(job.id, "Studio server stopped", self.owner_id)
-                self._export_chat(job.project)
+                self._export_job_chat(job)
         self._heartbeat_stop.set()
         if self._heartbeat:
             self._heartbeat.join(timeout=5)
         self.store.unregister_worker(self.owner_id)
 
-    def submit_chat(self, project: str, clip_id: str, message: str,
-                    profile: str | None = None) -> Job:
+    def submit_project_chat(self, project: str, message: str,
+                            profile: str | None = None) -> Job:
         chat_path = self._chat_path(project)
         self.store.import_chat_if_empty(project, chat_path)
+        job = self.store.create_project_chat_job(
+            project, message, profile or self.settings.studio_profile)
+        self._export_chat(project)
+        self._wake.set()
+        return job
+
+    def submit_chat(self, project: str, clip_id: str, message: str,
+                    profile: str | None = None) -> Job:
+        chat_path = self._chat_path(project, clip_id)
+        self.store.import_chat_if_empty(
+            project, chat_path, clip_id=clip_id)
         job = self.store.create_chat_job(
             project, message, profile or self.settings.studio_profile,
             clip_id=clip_id)
-        self._export_chat(project)
+        self._export_chat(project, clip_id)
         self._wake.set()
         return job
 
@@ -132,11 +143,12 @@ class StudioJobManager:
             "prompt_sha256": prompt_sha256,
             "settings_updated_at": settings_updated_at,
         }, sort_keys=True, separators=(",", ":"))
-        chat_path = self._chat_path(project)
-        self.store.import_chat_if_empty(project, chat_path)
+        chat_path = self._chat_path(project, clip_id)
+        self.store.import_chat_if_empty(
+            project, chat_path, clip_id=clip_id)
         job = self.store.create_generation_job(
             project, request, self.settings.studio_profile, clip_id=clip_id)
-        self._export_chat(project)
+        self._export_chat(project, clip_id)
         self._wake.set()
         return job
 
@@ -162,7 +174,7 @@ class StudioJobManager:
                 continue
             if self._stop.is_set():
                 self.store.fail(job.id, "Studio server stopped", self.owner_id)
-                self._export_chat(job.project)
+                self._export_job_chat(job)
                 break
             self._execute(job)
 
@@ -187,10 +199,11 @@ class StudioJobManager:
                     status="failed",
                 )
                 self.store.fail(job.id, error, self.owner_id)
-                self._export_chat(job.project)
+                self._export_job_chat(job)
                 return
         try:
-            session_id = self.store.get_session(job.project, job.profile)
+            session_id = self.store.get_session(
+                job.project, job.profile, clip_id=self._scope_clip_id(job))
             command = self.command_builder(job, session_id)
         except Exception as exc:
             error = f"Could not prepare Studio job: {exc}"
@@ -202,7 +215,7 @@ class StudioJobManager:
                 status="failed",
             )
             self.store.fail(job.id, error, self.owner_id)
-            self._export_chat(job.project)
+            self._export_job_chat(job)
             return
         bridge = HermesSessionEventBridge(
             self.store,
@@ -219,7 +232,7 @@ class StudioJobManager:
                 if self._stop.is_set():
                     self.store.fail(
                         job.id, "Studio server stopped", self.owner_id)
-                    self._export_chat(job.project)
+                    self._export_job_chat(job)
                     return
                 process = subprocess.Popen(
                     command,
@@ -260,7 +273,7 @@ class StudioJobManager:
                     f"{self.settings.job_timeout_seconds}s",
                     self.owner_id,
                 )
-                self._export_chat(job.project)
+                self._export_job_chat(job)
                 return
             if process.returncode:
                 if self._stop.is_set():
@@ -275,7 +288,7 @@ class StudioJobManager:
                 self.store.fail(
                     job.id, error, self.owner_id,
                 )
-                self._export_chat(job.project)
+                self._export_job_chat(job)
                 return
             reply = stdout.strip()
             if not reply:
@@ -283,14 +296,14 @@ class StudioJobManager:
                     self._cleanup_safely()
                 self.store.fail(
                     job.id, "Studio agent returned an empty reply", self.owner_id)
-                self._export_chat(job.project)
+                self._export_job_chat(job)
                 return
             match = SESSION_RE.search(stderr)
             self.store.complete(
                 job.id, self.owner_id, reply,
                 match.group(1) if match else bridge.session_id,
             )
-            self._export_chat(job.project)
+            self._export_job_chat(job)
         except Exception as exc:
             log.exception("Studio job %s failed", job.id)
             if process:
@@ -299,7 +312,7 @@ class StudioJobManager:
                 self._cleanup_safely()
             try:
                 self.store.fail(job.id, str(exc), self.owner_id)
-                self._export_chat(job.project)
+                self._export_job_chat(job)
             except Exception:
                 log.exception("Could not persist failure for job %s", job.id)
         finally:
@@ -322,6 +335,21 @@ class StudioJobManager:
 
     def _agent_query(self, job: Job) -> str:
         project_path = self.settings.studio_root / "projects" / job.project
+        if job.chat_scope == "project":
+            target_context = (
+                f"This migrated project-scope job explicitly targets clip "
+                f"{job.clip_id}.\n"
+                if job.clip_id else "There is no active clip.\n")
+            return (
+                "Exact Studio context (do not guess or fuzzy-match paths):\n"
+                f"Project ID: {job.project}\n"
+                f"Project path: {project_path}\n"
+                f"Conversation scope: project chat. {target_context}"
+                "Work only on project-wide planning, continuity, shared references, "
+                "research, or final assembly. Do not choose or mutate a clip unless "
+                "the user explicitly identifies one.\n\n"
+                f"User request:\n{job.message}"
+            )
         clip_path = project_path / "clips" / job.clip_id
         context = (
             "Exact Studio context (do not guess or fuzzy-match paths):\n"
@@ -387,26 +415,40 @@ class StudioJobManager:
 
     def _job_environment(self, job: Job) -> dict[str, str]:
         environment = os.environ.copy()
+        clip_path = (
+            self.settings.studio_root / "projects" / job.project /
+            "clips" / job.clip_id
+            if job.clip_id else None)
         environment.update({
             "DESIGN_STUDIO_ROOT": str(self.settings.studio_root),
             "HERMES_STUDIO_RUNTIME_ROOT": str(self.settings.runtime_root),
             "HERMES_STUDIO_JOB_ID": job.id,
             "HERMES_STUDIO_PROJECT": job.project,
             "HERMES_STUDIO_CLIP": job.clip_id,
-            "HERMES_STUDIO_CLIP_PATH": str(
-                self.settings.studio_root / "projects" / job.project /
-                "clips" / job.clip_id),
+            "HERMES_STUDIO_CLIP_PATH": str(clip_path) if clip_path else "",
+            "HERMES_STUDIO_CHAT_SCOPE": job.chat_scope,
             "HERMES_STUDIO_PROFILE": job.profile,
             "HERMES_STUDIO_JOB_KIND": job.kind,
         })
         return environment
 
-    def _chat_path(self, project: str) -> Path:
-        return self.settings.studio_root / "projects" / project / "chat.jsonl"
+    def _chat_path(self, project: str, clip_id: str = "") -> Path:
+        project_path = self.settings.studio_root / "projects" / project
+        if clip_id:
+            return project_path / "clips" / clip_id / "chat.jsonl"
+        return project_path / "chat.jsonl"
 
-    def _export_chat(self, project: str) -> None:
+    @staticmethod
+    def _scope_clip_id(job: Job) -> str:
+        return job.clip_id if job.chat_scope == "clip" else ""
+
+    def _export_job_chat(self, job: Job) -> None:
+        self._export_chat(job.project, self._scope_clip_id(job))
+
+    def _export_chat(self, project: str, clip_id: str = "") -> None:
         try:
-            self.store.export_chat(project, self._chat_path(project))
+            self.store.export_chat(
+                project, self._chat_path(project, clip_id), clip_id=clip_id)
         except Exception:
             log.exception("Could not export chat for project %s", project)
 
@@ -424,7 +466,7 @@ class StudioJobManager:
         self.store.fail(
             job.id, "Studio worker lease expired during execution",
             self.owner_id)
-        self._export_chat(job.project)
+        self._export_job_chat(job)
 
     def _communicate(self, process: subprocess.Popen,
                      bridge: HermesSessionEventBridge) -> tuple[str, str]:

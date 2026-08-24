@@ -123,6 +123,7 @@ class JobStore:
             id=row["id"],
             project=row["project"],
             clip_id=row["clip_id"],
+            chat_scope=row["chat_scope"],
             kind=row["kind"],
             profile=row["profile"],
             status=JobStatus(row["status"]),
@@ -163,16 +164,23 @@ class JobStore:
         )
 
     def _create_job(self, project: str, message: str, profile: str, *,
-                    clip_id: str, kind: str, chat_content: str) -> Job:
-        try:
-            clip_id = validate_clip_id(clip_id)
-        except ValueError as exc:
-            raise JobStoreError(str(exc)) from exc
+                    clip_id: str, chat_scope: str, kind: str,
+                    chat_content: str) -> Job:
+        if chat_scope == "clip":
+            try:
+                clip_id = validate_clip_id(clip_id)
+            except ValueError as exc:
+                raise JobStoreError(str(exc)) from exc
+        elif chat_scope == "project" and kind == "chat" and not clip_id:
+            pass
+        else:
+            raise JobStoreError("invalid active job chat scope")
         now = utc_now()
         job = Job(
             id=uuid.uuid4().hex,
             project=project,
             clip_id=clip_id,
+            chat_scope=chat_scope,
             kind=kind,
             profile=profile,
             status=JobStatus.QUEUED,
@@ -189,13 +197,14 @@ class JobStore:
             with self._transaction() as connection:
                 connection.execute(
                     "INSERT INTO jobs "
-                    "(id, project, clip_id, kind, profile, status, message, error, "
+                    "(id, project, clip_id, chat_scope, kind, profile, status, "
+                    "message, error, "
                     "created_at, started_at, finished_at, owner_id, pid, "
                     "pid_start_time) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
-                        job.id, job.project, job.clip_id, job.kind, job.profile,
-                        job.status.value,
+                        job.id, job.project, job.clip_id, job.chat_scope,
+                        job.kind, job.profile, job.status.value,
                         job.message, job.error, job.created_at, job.started_at,
                         job.finished_at, job.owner_id, job.pid,
                         job.pid_start_time,
@@ -203,9 +212,15 @@ class JobStore:
                 )
                 connection.execute(
                     "INSERT INTO chat_events "
-                    "(project, job_id, role, content, created_at) "
-                    "VALUES (?, ?, 'user', ?, ?)",
-                    (job.project, job.id, chat_content, now),
+                    "(project, clip_id, job_id, role, content, created_at) "
+                    "VALUES (?, ?, ?, 'user', ?, ?)",
+                    (
+                        job.project,
+                        job.clip_id if job.chat_scope == "clip" else "",
+                        job.id,
+                        chat_content,
+                        now,
+                    ),
                 )
                 self._append_job_event(
                     connection,
@@ -227,13 +242,21 @@ class JobStore:
     def create_chat_job(self, project: str, message: str,
                         profile: str = "studio", *, clip_id: str) -> Job:
         return self._create_job(
-            project, message, profile, clip_id=clip_id, kind="chat",
+            project, message, profile, clip_id=clip_id, chat_scope="clip",
+            kind="chat",
             chat_content=message)
+
+    def create_project_chat_job(self, project: str, message: str,
+                                profile: str = "studio") -> Job:
+        return self._create_job(
+            project, message, profile, clip_id="", chat_scope="project",
+            kind="chat", chat_content=message)
 
     def create_generation_job(self, project: str, request: str,
                               profile: str = "studio", *, clip_id: str) -> Job:
         return self._create_job(
-            project, request, profile, clip_id=clip_id, kind="generate",
+            project, request, profile, clip_id=clip_id, chat_scope="clip",
+            kind="generate",
             chat_content="Generate with this prompt")
 
     def get_job(self, job_id: str) -> Job:
@@ -245,12 +268,34 @@ class JobStore:
                 raise JobNotFoundError(job_id)
             return self._job_from_row(row, self._reply(connection, job_id))
 
-    def list_jobs(self, project: str, limit: int = 20) -> list[Job]:
+    def list_jobs(self, project: str, limit: int = 20, *,
+                  clip_id: str | None = None) -> list[Job]:
+        if clip_id:
+            try:
+                clip_id = validate_clip_id(clip_id)
+            except ValueError as exc:
+                raise JobStoreError(str(exc)) from exc
         with self._connection() as connection:
-            rows = connection.execute(
-                "SELECT * FROM jobs WHERE project = ? "
-                "ORDER BY created_at DESC LIMIT ?", (project, limit)
-            ).fetchall()
+            if clip_id is None:
+                rows = connection.execute(
+                    "SELECT * FROM jobs WHERE project = ? "
+                    "ORDER BY created_at DESC LIMIT ?", (project, limit)
+                ).fetchall()
+            else:
+                if clip_id:
+                    rows = connection.execute(
+                        "SELECT * FROM jobs WHERE project = ? "
+                        "AND chat_scope = 'clip' AND clip_id = ? "
+                        "ORDER BY created_at DESC LIMIT ?",
+                        (project, clip_id, limit),
+                    ).fetchall()
+                else:
+                    rows = connection.execute(
+                        "SELECT * FROM jobs WHERE project = ? "
+                        "AND chat_scope = 'project' "
+                        "ORDER BY created_at DESC LIMIT ?",
+                        (project, limit),
+                    ).fetchall()
             return [
                 self._job_from_row(row, self._reply(connection, row["id"]))
                 for row in rows
@@ -381,19 +426,21 @@ class JobStore:
             if not row:
                 raise InvalidTransitionError(
                     f"job {job_id} is not running for {owner_id}")
+            scope_clip_id = (
+                row["clip_id"] if row["chat_scope"] == "clip" else "")
             self._insert_turn(
-                connection, row["project"], job_id, row["message"],
+                connection, row["project"], scope_clip_id, job_id, row["message"],
                 "assistant", reply, now,
             )
             if session_id:
                 connection.execute(
                     "INSERT INTO profile_sessions "
-                    "(project, profile, session_id, updated_at) "
-                    "VALUES (?, ?, ?, ?) "
-                    "ON CONFLICT(project, profile) DO UPDATE SET "
+                    "(project, clip_id, profile, session_id, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?) "
+                    "ON CONFLICT(project, clip_id, profile) DO UPDATE SET "
                     "session_id = excluded.session_id, "
                     "updated_at = excluded.updated_at",
-                    (row["project"], row["profile"], session_id, now),
+                    (row["project"], scope_clip_id, row["profile"], session_id, now),
                 )
             connection.execute(
                 "UPDATE jobs SET status = 'completed', finished_at = ?, "
@@ -423,8 +470,10 @@ class JobStore:
             row = connection.execute(query, params).fetchone()
             if not row:
                 return self.get_job(job_id)
+            scope_clip_id = (
+                row["clip_id"] if row["chat_scope"] == "clip" else "")
             self._insert_turn(
-                connection, row["project"], job_id, row["message"],
+                connection, row["project"], scope_clip_id, job_id, row["message"],
                 "system", f"Studio job failed: {error}", now,
             )
             connection.execute(
@@ -446,30 +495,43 @@ class JobStore:
 
     @staticmethod
     def _insert_turn(connection: sqlite3.Connection, project: str,
-                     job_id: str, message: str, response_role: str,
+                     clip_id: str, job_id: str, message: str, response_role: str,
                      response: str, created_at: str) -> None:
         connection.execute(
             "INSERT OR IGNORE INTO chat_events "
-            "(project, job_id, role, content, created_at) "
-            "VALUES (?, ?, 'user', ?, ?)",
-            (project, job_id, message, created_at),
+            "(project, clip_id, job_id, role, content, created_at) "
+            "VALUES (?, ?, ?, 'user', ?, ?)",
+            (project, clip_id, job_id, message, created_at),
         )
         connection.execute(
             "INSERT OR IGNORE INTO chat_events "
-            "(project, job_id, role, content, created_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (project, job_id, response_role, response, created_at),
+            "(project, clip_id, job_id, role, content, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (project, clip_id, job_id, response_role, response, created_at),
         )
 
-    def get_session(self, project: str, profile: str = "studio") -> str | None:
+    def get_session(self, project: str, profile: str = "studio", *,
+                    clip_id: str = "") -> str | None:
+        if clip_id:
+            try:
+                clip_id = validate_clip_id(clip_id)
+            except ValueError as exc:
+                raise JobStoreError(str(exc)) from exc
         with self._connection() as connection:
             row = connection.execute(
                 "SELECT session_id FROM profile_sessions "
-                "WHERE project = ? AND profile = ?", (project, profile)
+                "WHERE project = ? AND clip_id = ? AND profile = ?",
+                (project, clip_id, profile),
             ).fetchone()
             return row["session_id"] if row else None
 
-    def import_chat_if_empty(self, project: str, chat_path: Path) -> None:
+    def import_chat_if_empty(self, project: str, chat_path: Path, *,
+                             clip_id: str = "") -> None:
+        if clip_id:
+            try:
+                clip_id = validate_clip_id(clip_id)
+            except ValueError as exc:
+                raise JobStoreError(str(exc)) from exc
         try:
             with open_regular_file(chat_path):
                 pass
@@ -494,7 +556,8 @@ class JobStore:
                         with self._transaction() as connection:
                             count = connection.execute(
                                 "SELECT COUNT(*) AS n FROM chat_events "
-                                "WHERE project = ?", (project,),
+                                "WHERE project = ? AND clip_id = ?",
+                                (project, clip_id),
                             ).fetchone()["n"]
                             if count:
                                 return
@@ -513,9 +576,9 @@ class JobStore:
                                     continue
                                 connection.execute(
                                     "INSERT INTO chat_events "
-                                    "(project, job_id, role, content, created_at) "
-                                    "VALUES (?, NULL, ?, ?, ?)",
-                                    (project, role, content,
+                                    "(project, clip_id, job_id, role, content, "
+                                    "created_at) VALUES (?, ?, NULL, ?, ?, ?)",
+                                    (project, clip_id, role, content,
                                      item.get("ts") or utc_now()),
                                 )
                     finally:
@@ -524,24 +587,29 @@ class JobStore:
             raise ValueError("chat export is unsafe") from exc
 
     def append_external_event(self, project: str, role: str,
-                              content: str) -> None:
+                              content: str, *, clip_id: str = "") -> None:
         if role not in {"user", "assistant", "system"}:
             raise ValueError(f"invalid chat role: {role!r}")
+        if clip_id:
+            try:
+                clip_id = validate_clip_id(clip_id)
+            except ValueError as exc:
+                raise JobStoreError(str(exc)) from exc
         with self._transaction() as connection:
             if role == "user" and connection.execute(
                 "SELECT 1 FROM chat_events "
                 "JOIN jobs ON jobs.id = chat_events.job_id "
                 "WHERE chat_events.project = ? AND chat_events.role = 'user' "
-                "AND chat_events.content = ? "
+                "AND chat_events.clip_id = ? AND chat_events.content = ? "
                 "AND jobs.status IN ('queued', 'running') LIMIT 1",
-                (project, content),
+                (project, clip_id, content),
             ).fetchone():
                 return
             connection.execute(
                 "INSERT INTO chat_events "
-                "(project, job_id, role, content, created_at) "
-                "VALUES (?, NULL, ?, ?, ?)",
-                (project, role, content, utc_now()),
+                "(project, clip_id, job_id, role, content, created_at) "
+                "VALUES (?, ?, NULL, ?, ?, ?)",
+                (project, clip_id, role, content, utc_now()),
             )
 
     def append_job_event(self, job_id: str, profile: str, event_type: str,
@@ -564,12 +632,38 @@ class JobStore:
                 detail=detail,
             )
 
-    def job_events(self, project: str, after: int = 0) -> tuple[int, list[JobEvent]]:
+    def job_events(self, project: str, after: int = 0, *,
+                   clip_id: str | None = None) -> tuple[int, list[JobEvent]]:
+        if clip_id:
+            try:
+                clip_id = validate_clip_id(clip_id)
+            except ValueError as exc:
+                raise JobStoreError(str(exc)) from exc
         with self._connection() as connection:
-            rows = connection.execute(
-                "SELECT * FROM job_events WHERE project = ? AND id > ? "
-                "ORDER BY id", (project, after)
-            ).fetchall()
+            if clip_id is None:
+                rows = connection.execute(
+                    "SELECT * FROM job_events WHERE project = ? AND id > ? "
+                    "ORDER BY id", (project, after)
+                ).fetchall()
+            else:
+                if clip_id:
+                    rows = connection.execute(
+                        "SELECT job_events.* FROM job_events "
+                        "JOIN jobs ON jobs.id = job_events.job_id "
+                        "WHERE job_events.project = ? "
+                        "AND jobs.chat_scope = 'clip' AND jobs.clip_id = ? "
+                        "AND job_events.id > ? ORDER BY job_events.id",
+                        (project, clip_id, after),
+                    ).fetchall()
+                else:
+                    rows = connection.execute(
+                        "SELECT job_events.* FROM job_events "
+                        "JOIN jobs ON jobs.id = job_events.job_id "
+                        "WHERE job_events.project = ? "
+                        "AND jobs.chat_scope = 'project' "
+                        "AND job_events.id > ? ORDER BY job_events.id",
+                        (project, after),
+                    ).fetchall()
             events = []
             for row in rows:
                 try:
@@ -589,17 +683,25 @@ class JobStore:
                 ))
             return rows[-1]["id"] if rows else after, events
 
-    def chat_events(self, project: str, after: int = 0) -> tuple[int, list[ChatEvent]]:
+    def chat_events(self, project: str, after: int = 0, *,
+                    clip_id: str = "") -> tuple[int, list[ChatEvent]]:
+        if clip_id:
+            try:
+                clip_id = validate_clip_id(clip_id)
+            except ValueError as exc:
+                raise JobStoreError(str(exc)) from exc
         with self._connection() as connection:
             rows = connection.execute(
                 "SELECT chat_events.*, COALESCE(jobs.profile, '') AS profile "
                 "FROM chat_events LEFT JOIN jobs ON jobs.id = chat_events.job_id "
-                "WHERE chat_events.project = ? AND chat_events.id > ? "
-                "ORDER BY chat_events.id", (project, after)
+                "WHERE chat_events.project = ? AND chat_events.clip_id = ? "
+                "AND chat_events.id > ? ORDER BY chat_events.id",
+                (project, clip_id, after),
             ).fetchall()
             events = [
                 ChatEvent(
                     id=row["id"], project=row["project"],
+                    clip_id=row["clip_id"],
                     job_id=row["job_id"], role=row["role"],
                     content=row["content"], created_at=row["created_at"],
                     profile=row["profile"],
@@ -608,8 +710,9 @@ class JobStore:
             ]
             return rows[-1]["id"] if rows else after, events
 
-    def export_chat(self, project: str, chat_path: Path) -> None:
-        _, events = self.chat_events(project)
+    def export_chat(self, project: str, chat_path: Path, *,
+                    clip_id: str = "") -> None:
+        _, events = self.chat_events(project, clip_id=clip_id)
         data = "".join(
             json.dumps(event.to_dict(), ensure_ascii=False) + "\n"
             for event in events

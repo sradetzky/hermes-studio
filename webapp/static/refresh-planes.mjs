@@ -12,16 +12,23 @@ async function settlePlane(name, load, isCurrent, apply, report) {
 export async function refreshLivePlane({
   requestJson, paths, context, cursors, isCurrent, handlers, report,
 }) {
+  const clipScoped = context.chatScope === 'clip' && context.clipId;
+  const chatPath = clipScoped
+    ? paths.clipChat(context.projectId, context.clipId, cursors.chat)
+    : paths.chat(context.projectId, cursors.chat);
+  const activityPath = clipScoped
+    ? paths.clipEvents(context.projectId, context.clipId, cursors.activity)
+    : paths.events(context.projectId, cursors.activity);
   await Promise.all([
     settlePlane(
-      'chat', () => requestJson(paths.chat(context.projectId, cursors.chat)),
+      'chat', () => requestJson(chatPath),
       isCurrent, handlers.chat, report),
     settlePlane(
       'jobs', () => requestJson(paths.jobs(context.projectId)),
       isCurrent, handlers.jobs, report),
     settlePlane(
       'activity',
-      () => requestJson(paths.events(context.projectId, cursors.activity)),
+      () => requestJson(activityPath),
       isCurrent, handlers.activity, report),
   ]);
 }

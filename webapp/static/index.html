@@ -51,6 +51,17 @@
     </aside>
 
     <section class="flex flex-col gap-3 min-h-0">
+      <div class="panel chat-scope-bar">
+        <div class="chat-scope-tabs" role="tablist" aria-label="Conversation scope">
+          <button class="chat-scope-tab active" id="clip-chat-scope" type="button"
+                  role="tab" aria-selected="true">Clip</button>
+          <button class="chat-scope-tab" id="project-chat-scope" type="button"
+                  role="tab" aria-selected="false">Project</button>
+        </div>
+        <span class="chat-scope-help" id="chat-scope-help">
+          Independent conversation for this clip
+        </span>
+      </div>
       <div class="panel flex-1 p-3 overflow-auto min-h-0" id="chatlog"></div>
       <div class="panel p-3">
         <div class="generation-readiness" id="generation-readiness">
