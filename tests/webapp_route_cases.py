@@ -1151,6 +1151,48 @@ class AppFactoryTests(WebAppTestCase):
             self.assertTrue(media["video.mp4"]["promoted"])
             self.assertTrue(media["still.png"]["reference"])
 
+    def test_promote_retry_republishes_when_content_identity_changes(self):
+        for changed_side in ("source", "target"):
+            with self.subTest(changed_side=changed_side), TestClient(
+                    self.app()) as client:
+                project = self.create_project(
+                    client, f"review-content-{changed_side}")
+                root = self.settings.studio_root / "projects" / project
+                generation = (
+                    root / "clips" / "clip-001" / "generations" / "001")
+                generation.mkdir()
+                source = generation / "video.mp4"
+                source.write_bytes(b"original")
+                endpoint = (
+                    f"/api/project/{project}/clips/clip-001/"
+                    "generations/001/promote")
+
+                first = client.post(
+                    endpoint, json={"filename": "video.mp4"}).json()["result"]
+                first_target = root / "final" / first["target"]
+                if changed_side == "source":
+                    source.write_bytes(b"replacement source")
+                else:
+                    first_target.write_bytes(b"replacement target")
+
+                repeated = client.post(
+                    endpoint, json={"filename": "video.mp4"})
+
+                self.assertEqual(repeated.status_code, 200, repeated.text)
+                second = repeated.json()["result"]
+                self.assertNotEqual(second["target"], first["target"])
+                self.assertEqual(
+                    (root / "final" / second["target"]).read_bytes(),
+                    source.read_bytes(),
+                )
+                review = json.loads(
+                    (generation / ".review.json").read_text())
+                self.assertEqual(len(review["actions"]), 2)
+                for action in review["actions"]:
+                    self.assertRegex(action["source_sha256"], r"^[0-9a-f]{64}$")
+                    self.assertEqual(
+                        action["source_sha256"], action["target_sha256"])
+
     def test_delete_take_clears_selection_and_preserves_published_copy(self):
         with TestClient(self.app()) as client:
             project = self.create_project(client, "delete-take")

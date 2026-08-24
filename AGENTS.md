@@ -159,6 +159,8 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
   job into existence between the active-job check and filesystem publication.
 - Selected-take validation and manifest publication now share the canonical
   project lock, preventing concurrent deletion from leaving dangling provenance.
+- Media review idempotency now records and verifies source/target SHA-256 content
+  identities; retries republish changed content without overwriting prior copies.
 
 ## Next steps
 

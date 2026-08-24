@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import os
 import stat
@@ -294,6 +295,17 @@ class MediaReviewStore:
             label="generation review manifest")
 
     @staticmethod
+    def _sha256(opened: OpenedRegularFile) -> str:
+        digest = hashlib.sha256()
+        offset = 0
+        while True:
+            chunk = os.pread(opened.descriptor, 1024 * 1024, offset)
+            if not chunk:
+                return digest.hexdigest()
+            digest.update(chunk)
+            offset += len(chunk)
+
+    @staticmethod
     def _saved_action(project: Path, area: str, action: str,
                       source_name: str, target_name: str, size: int,
                       created_at: str) -> SavedMediaAction:
@@ -362,6 +374,7 @@ class MediaReviewStore:
             project_fd: int, directory_fd: int, action: str,
     ) -> SavedMediaAction:
         review = self._review(generation_fd)
+        source_sha256 = self._sha256(source)
         for existing in review["actions"]:
             if (existing.get("action") == action
                     and existing.get("source") == source.name):
@@ -370,10 +383,16 @@ class MediaReviewStore:
                 try:
                     with open_regular_file_at(
                             directory_fd, target_name) as target:
-                        return self._saved_action(
-                            project, area, action, source.name, target_name,
-                            target.stat.st_size,
-                            str(existing.get("created_at") or ""))
+                        target_sha256 = self._sha256(target)
+                        if (
+                            existing.get("source_sha256") == source_sha256
+                            and existing.get("target_sha256") == target_sha256
+                            and source_sha256 == target_sha256
+                        ):
+                            return self._saved_action(
+                                project, area, action, source.name, target_name,
+                                target.stat.st_size,
+                                str(existing.get("created_at") or ""))
                 except FileNotFoundError:
                     pass
 
@@ -385,12 +404,23 @@ class MediaReviewStore:
         try:
             target_name, target_identity = self._publish(
                 directory_fd, temp_name, temp_identity, requested_name)
+            with open_regular_file_at(directory_fd, target_name) as target:
+                target_sha256 = self._sha256(target)
+                if (target.stat.st_size != source.stat.st_size
+                        or target_sha256 != source_sha256):
+                    raise MediaReviewError(
+                        "published media does not match archived source")
+                target_size = target.stat.st_size
+            verify_absolute_directory_identity(
+                project, project_fd, label="media review project")
             created_at = datetime.now(timezone.utc).isoformat()
             review["actions"].append({
                 "action": action,
                 "source": source.name,
                 "target": target_name,
                 "area": area,
+                "source_sha256": source_sha256,
+                "target_sha256": target_sha256,
                 "created_at": created_at,
             })
             try:
@@ -400,11 +430,9 @@ class MediaReviewStore:
                     directory_fd, target_name, target_identity,
                     label="published media rollback")
                 raise
-            verify_absolute_directory_identity(
-                project, project_fd, label="media review project")
             return self._saved_action(
                 project, area, action, source.name, target_name,
-                source.stat.st_size, created_at)
+                target_size, created_at)
         finally:
             if target_identity is None:
                 try:

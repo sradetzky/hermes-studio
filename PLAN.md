@@ -201,7 +201,7 @@ project/clip chat scope and exact IDs.
   authoritative execution metadata; reject disconnected or ambiguous nodes.
 - [x] Prevent active project jobs from racing clip/settings mutations.
 - [x] Validate and publish selected-take provenance under one project lock.
-- [ ] Bind review-action idempotency to source and target content identity rather
+- [x] Bind review-action idempotency to source and target content identity rather
   than filenames alone.
 - [ ] Give project/take dialogs and chat/queue requests immutable request context;
   stale responses must not mutate the current workspace.

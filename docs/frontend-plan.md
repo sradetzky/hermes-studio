@@ -217,6 +217,9 @@ auto-chained, and their result never starts a render without a separate request.
   return `409` once a project job exists and cannot pass a check/enqueue TOCTOU gap.
 - Selected-take media validation and manifest publication run under the same
   project lock, so a concurrent take deletion cannot publish a dangling selection.
+- Promote/reference actions record descriptor-derived SHA-256 identities for the
+  archive source and published target. Retries reuse a target only while both
+  still match; changed content is republished without overwriting the old copy.
 - No auth v1; Uvicorn remains loopback-only, while optional tailnet access relies
   on Tailscale identity/ACLs plus the exact-host and same-origin guards above.
 

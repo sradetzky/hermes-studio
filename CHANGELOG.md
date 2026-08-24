@@ -35,6 +35,8 @@ preview and production releases.
   now return `409` without a check/enqueue race window
 - Made selected-take publication atomic with descriptor-safe source validation
   under the project lock, preventing concurrent deletion from dangling selection
+- Bound promote/reference retry idempotency to recorded source and target SHA-256
+  identities; changed archive or destination bytes now produce a new safe copy
 - Web-triggered H3 archives now recover actual seed, canvas, timing, steps,
   acceleration nodes, ordered references, and prompt hash from authoritative
   ComfyUI history; incomplete or mismatched execution metadata fails closed
