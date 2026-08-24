@@ -41,6 +41,7 @@ export function captureChatContext(state) {
     ...captureProjectContext(state),
     chatScope: clipScoped ? 'clip' : 'project',
     chatRevision: state.chatRevision,
+    requestRevision: state.chatRequestRevision,
     clipId: clipScoped ? state.currentClip : null,
     clipRevision: clipScoped ? state.clipRevision : null,
   };
@@ -70,7 +71,8 @@ export function isGenerationDialogContextCurrent(state, context) {
 export function isChatContextCurrent(state, context) {
   if (!isProjectContextCurrent(state, context) ||
       context.chatScope !== state.chatScope ||
-      context.chatRevision !== state.chatRevision) return false;
+      context.chatRevision !== state.chatRevision ||
+      context.requestRevision !== state.chatRequestRevision) return false;
   if (context.chatScope !== 'clip') return true;
   return context.clipId === state.currentClip &&
     context.clipRevision === state.clipRevision;

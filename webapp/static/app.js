@@ -125,11 +125,16 @@ function renderComfyQueue(snapshot) {
 }
 
 async function refreshComfyQueue() {
+  state.comfyQueueRequestRevision += 1;
+  const requestRevision = state.comfyQueueRequestRevision;
   try {
     const includeRecent = $('#comfy-queue').open ? '?include_recent=true' : '';
-    renderComfyQueue(await requestJson(
-      `${apiPaths.comfyQueue}${includeRecent}`, {cache: 'no-store'}));
+    const snapshot = await requestJson(
+      `${apiPaths.comfyQueue}${includeRecent}`, {cache: 'no-store'});
+    if (requestRevision !== state.comfyQueueRequestRevision) return;
+    renderComfyQueue(snapshot);
   } catch (error) {
+    if (requestRevision !== state.comfyQueueRequestRevision) return;
     renderComfyQueue({
       available: false, running: [], pending: [], error: error.message,
     });
@@ -334,11 +339,13 @@ function renderChatScope() {
 
 function resetChatState() {
   state.chatRevision += 1;
+  state.chatRequestRevision += 1;
   state.chatCursor = 0;
   state.activityCursor = 0;
   state.activityByJob = {};
   $('#chatlog').replaceChildren();
   delete $('#chatlog').dataset.empty;
+  $('#status').textContent = '';
   renderChatScope();
 }
 
@@ -870,18 +877,20 @@ async function sendChat(event) {
     alert(clipScoped ? 'Pick a project and clip first' : 'Pick a project first');
     return;
   }
+  state.chatRequestRevision += 1;
   const context = captureChatContext(state);
   input.value = '';
   $('#status').textContent = 'studio is thinking…';
   try {
     const job = await requestJson(
       clipScoped
-        ? apiPaths.clipChat(state.current, state.currentClip)
-        : apiPaths.projectChat(state.current), {
+        ? apiPaths.clipChat(context.projectId, context.clipId)
+        : apiPaths.projectChat(context.projectId), {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({message, profile: $('#profile-select').value || 'studio'}),
       });
+    if (!isChatContextCurrent(state, context)) return;
     $('#status').textContent = '';
     renderActivity([job, ...state.jobs.filter(item => item.id !== job.id)]);
     await refreshProject();
@@ -889,7 +898,7 @@ async function sendChat(event) {
     if (isChatContextCurrent(state, context)) {
       if (!input.value) input.value = message;
       $('#status').textContent = `error: ${error.message}`;
-    } else $('#status').textContent = '';
+    }
   }
 }
 

@@ -68,6 +68,7 @@ test('chat context rejects scope and active-clip changes independently', () => {
   const state = {
     current: 'project-a', currentClip: 'clip-001', chatScope: 'clip',
     projectRevision: 3, clipRevision: 7, chatRevision: 2,
+    chatRequestRevision: 0,
   };
   const clipChat = captureChatContext(state);
   assert.equal(isChatContextCurrent(state, clipChat), true);
@@ -87,6 +88,12 @@ test('chat context rejects scope and active-clip changes independently', () => {
   state.currentClip = 'clip-003';
   state.clipRevision += 1;
   assert.equal(isChatContextCurrent(state, nextClipChat), false);
+
+  state.currentClip = 'clip-002';
+  state.clipRevision = nextClipChat.clipRevision;
+  const request = captureChatContext(state);
+  state.chatRequestRevision += 1;
+  assert.equal(isChatContextCurrent(state, request), false);
 });
 
 test('dialog contexts reject close-reopen and same-clip take navigation', () => {

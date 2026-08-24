@@ -163,6 +163,8 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
   identities; retries republish changed content without overwriting prior copies.
 - Project metadata and take dialogs now bind asynchronous loads/saves/actions to
   revisioned dialog instances, including same-project or same-clip close/reopen.
+- Chat submissions and ComfyUI queue refreshes now reject out-of-order completion
+  through conversation-bound and latest-request-wins revision checks.
 
 ## Next steps
 

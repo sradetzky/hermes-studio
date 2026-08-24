@@ -223,6 +223,9 @@ auto-chained, and their result never starts a render without a separate request.
 - Project metadata and take detail dialogs own revisioned request contexts.
   Navigation, close/reopen, and same-clip take changes invalidate older loads,
   saves, and actions before they can mutate the current dialog or busy state.
+- Chat submissions include a monotonic request revision in their immutable scope;
+  stale success/failure cannot update another conversation. ComfyUI queue polling
+  is latest-request-wins, preventing slower old snapshots from replacing new state.
 - No auth v1; Uvicorn remains loopback-only, while optional tailnet access relies
   on Tailscale identity/ACLs plus the exact-host and same-origin guards above.
 

@@ -8,6 +8,7 @@ export const state = {
   projectRevision: 0,
   clipRevision: 0,
   chatRevision: 0,
+  chatRequestRevision: 0,
   chatScope: 'clip',
   clips: [],
   projects: [],
@@ -40,6 +41,7 @@ export const state = {
   projectMetadataOpener: null,
   projectMetadataDialogRevision: 0,
   projectMetadataDialogContext: null,
+  comfyQueueRequestRevision: 0,
 };
 
 export function activeClip() {
