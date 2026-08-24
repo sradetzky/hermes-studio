@@ -177,7 +177,10 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
 - Media now shows project-wide readiness/blockers, requires an explicit export
   click, and exposes every completed version with stable video playback and an
   MP4 download. Polling reuses unchanged movie media nodes.
+- Phase 5 passed the complete 211-test Python and 18-test frontend/Chromium suites,
+  compilation, dependency, profile-drift, CSS, clean-archive, live service/API,
+  desktop, and narrow-browser gates.
 
 ## Next steps
 
-- [ ] Run the complete Phase 5 backend/frontend/archive/live-browser release gates
+- [ ] Define the next milestone after Phase 5

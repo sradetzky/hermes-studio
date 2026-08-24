@@ -26,6 +26,9 @@ preview and production releases.
 - Added project-wide Media readiness/blockers, an explicit export control, and
   stable completed-movie playback plus MP4 download; unchanged movie nodes survive
   polling so active playback is not reset
+- Completed Phase 5 release verification across 211 Python tests, 18 frontend/
+  real-Chromium tests, clean-archive execution, dependency/profile/CSS checks, and
+  live service, API, desktop, and narrow-browser readback
 
 ### Fixed
 

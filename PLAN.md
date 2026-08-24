@@ -1,7 +1,7 @@
 # PLAN.md — Hermes Studio
 
-**Status**: `v0.1.0-preview.2` released; Phase 4.7 remediation is complete and
-Phase 5 project movie assembly is in progress.
+**Status**: `v0.1.0-preview.2` released; Phase 4.7 remediation and Phase 5
+project movie assembly are complete.
 **Owner**: Sven (local setup on RTX 5060 Ti 16GB)  
 **Updated**: 2026-08-24
 **Goal**: Fully local, agent-orchestrated creative studio centered on MiniMax H3 + Hermes, with a simple self-hosted web UI.
@@ -211,7 +211,7 @@ project/clip chat scope and exact IDs.
 - [x] Add behavioral Chromium coverage for navigation, dialogs, stale responses,
   queue sequencing, and playback; source-text regex checks remain supplementary.
 
-### Phase 5 – Project movie assembly
+### Phase 5 – Project movie assembly (complete)
 - [x] Add project-level assembly readiness for all enabled clips in manifest order;
   block and identify every enabled clip without one valid selected video take
 - [x] Add an explicit **Export selected takes as movie** project action that runs

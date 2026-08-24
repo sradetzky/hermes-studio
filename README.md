@@ -11,7 +11,8 @@ GPU execution, and the project filesystem remains the media source of truth.
 > server remains loopback-only; optional remote access is tailnet-only through
 > Tailscale Serve, and there is no application auth. Ready clips can be generated
 > through an explicit revision-guarded action, and the real web-to-ComfyUI H3 path
-> is verified end to end. Models and ComfyUI workflows are not bundled.
+> is verified end to end. Enabled clips' selected takes can be exported explicitly
+> as a versioned hard-cut project movie. Models and ComfyUI workflows are not bundled.
 
 ## What works
 
