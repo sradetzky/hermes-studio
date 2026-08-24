@@ -505,6 +505,65 @@ class StudioManagerTests(WebAppTestCase):
         _, chat = store.chat_events(project.name, clip_id="clip-001")
         self.assertEqual(chat[-1].content, "recovered")
 
+    def test_scheduler_contains_unexpected_execution_error_and_runs_next_job(self):
+        project = ds.create_project(self.settings.studio_root, "scheduler-guard")
+        store = JobStore(self.settings.database_path)
+        manager = StudioJobManager(
+            self.settings, store,
+            command_builder=lambda *_: [
+                sys.executable, "-c", "print('recovered')"],
+            cleanup_callback=lambda: None,
+        )
+        real_execute = manager._execute
+        calls = 0
+
+        def fail_once(job):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise RuntimeError("unexpected execution failure")
+            real_execute(job)
+
+        manager._execute = fail_once
+        manager.start()
+        try:
+            first = manager.submit_chat(
+                project.name, "clip-001", "first")
+            with self.assertLogs("webapp.studio_manager", level="ERROR"):
+                first_done = self.wait_for_terminal(store, first.id)
+            second = manager.submit_chat(
+                project.name, "clip-001", "second")
+            second_done = self.wait_for_terminal(store, second.id)
+            assert manager._scheduler is not None
+            self.assertTrue(manager._scheduler.is_alive())
+        finally:
+            manager.stop()
+        self.assertEqual(first_done.status, JobStatus.FAILED)
+        self.assertEqual(second_done.status, JobStatus.COMPLETED)
+
+    def test_heartbeat_unregisters_worker_when_scheduler_dies(self):
+        store = JobStore(self.settings.database_path)
+        manager = StudioJobManager(
+            self.settings, store, cleanup_callback=lambda: None)
+        manager._scheduler_loop = lambda: None
+        with self.assertLogs("webapp.studio_manager", level="CRITICAL"):
+            manager.start()
+            try:
+                assert manager._scheduler is not None
+                assert manager._heartbeat is not None
+                manager._scheduler.join(timeout=5)
+                manager._heartbeat.join(timeout=5)
+                self.assertFalse(manager._heartbeat.is_alive())
+                with closing(sqlite3.connect(
+                        self.settings.database_path)) as connection:
+                    row = connection.execute(
+                        "SELECT 1 FROM workers WHERE owner_id = ?",
+                        (manager.owner_id,),
+                    ).fetchone()
+                self.assertIsNone(row)
+            finally:
+                manager.stop()
+
     def test_specialist_failure_does_not_interrupt_comfyui(self):
         project = ds.create_project(self.settings.studio_root, "specialist-failure")
         store = JobStore(self.settings.database_path)

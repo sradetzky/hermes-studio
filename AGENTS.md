@@ -141,6 +141,9 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
 - Hermes children now enter a parent-death-supervised launcher before execution;
   stale-job recovery finds exact unrecorded job processes through `/proc`, proves
   termination, and keeps the global running-job lease when ownership is uncertain.
+- Scheduler-level fault containment now terminates owned work and persists a
+  failure without killing the queue loop; a dead scheduler unregisters its worker
+  lease instead of receiving false liveness from the heartbeat thread.
 
 ## Next steps
 

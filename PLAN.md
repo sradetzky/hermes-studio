@@ -191,7 +191,7 @@ project/clip chat scope and exact IDs.
 ### Phase 4.7 – Fresh-eyes remediation gate (blocking)
 - [x] Make detached Hermes process ownership crash-safe and never release the
   global GPU lease while a possible job process remains alive.
-- [ ] Couple worker lease renewal to scheduler health and recover unexpected
+- [x] Couple worker lease renewal to scheduler health and recover unexpected
   execution-loop failures instead of leaving permanent running jobs.
 - [ ] Correlate Hermes sessions with exact job identity and retry event baselines
   without replaying prior-session activity.

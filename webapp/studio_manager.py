@@ -21,7 +21,7 @@ from webapp.config import Settings
 from webapp.generation_settings_store import GenerationSettingsStore
 from webapp.hermes_events import HermesSessionEventBridge
 from webapp.job_store import JobStore, JobStoreError
-from webapp.models import Job
+from webapp.models import Job, JobStatus
 
 
 log = logging.getLogger(__name__)
@@ -75,18 +75,18 @@ class StudioJobManager:
         self.store.initialize()
         self.store.register_worker(self.owner_id)
         self._recover_running_jobs()
-        self._heartbeat = threading.Thread(
-            target=self._heartbeat_loop,
-            name=f"studio-heartbeat-{self.owner_id[:8]}",
-            daemon=False,
-        )
-        self._heartbeat.start()
         self._scheduler = threading.Thread(
             target=self._scheduler_loop,
             name=f"studio-scheduler-{self.owner_id[:8]}",
             daemon=False,
         )
         self._scheduler.start()
+        self._heartbeat = threading.Thread(
+            target=self._heartbeat_loop,
+            name=f"studio-heartbeat-{self.owner_id[:8]}",
+            daemon=False,
+        )
+        self._heartbeat.start()
 
     def stop(self) -> None:
         self._stop.set()
@@ -178,14 +178,53 @@ class StudioJobManager:
                 self.store.fail(job.id, "Studio server stopped", self.owner_id)
                 self._export_job_chat(job)
                 break
-            self._execute(job)
+            try:
+                self._execute(job)
+            except Exception as exc:
+                log.exception("Unexpected Studio execution failure for job %s", job.id)
+                if not self._contain_execution_failure(job, exc):
+                    raise
 
     def _heartbeat_loop(self) -> None:
         while not self._heartbeat_stop.wait(1):
+            scheduler = self._scheduler
+            if (scheduler is not None and not scheduler.is_alive()
+                    and not self._stop.is_set()):
+                log.critical(
+                    "Studio scheduler stopped unexpectedly; releasing worker lease %s",
+                    self.owner_id,
+                )
+                try:
+                    self.store.unregister_worker(self.owner_id)
+                except Exception:
+                    log.exception("Could not unregister failed Studio worker")
+                return
             try:
                 self.store.heartbeat_worker(self.owner_id)
             except Exception:
                 log.exception("Could not update Studio worker heartbeat")
+
+    def _contain_execution_failure(self, job: Job, exc: Exception) -> bool:
+        with self._process_lock:
+            process = self._processes.get(job.id)
+        if process is not None:
+            self._terminate_process(process)
+        if job.profile == self.settings.studio_profile:
+            self._cleanup_safely()
+        try:
+            current = self.store.get_job(job.id)
+            if (current.status is JobStatus.RUNNING
+                    and current.owner_id == self.owner_id):
+                self.store.fail(
+                    job.id,
+                    f"Unexpected Studio execution failure: {exc}",
+                    self.owner_id,
+                )
+            self._export_job_chat(job)
+            return True
+        except Exception:
+            log.exception("Could not contain execution failure for job %s", job.id)
+            return False
 
     def _execute(self, job: Job) -> None:
         if job.kind == "generate":
