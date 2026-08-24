@@ -23,6 +23,7 @@ from webapp.generation_settings_store import GenerationSettingsStore
 from webapp.job_store import JobStore
 from webapp.media_review_store import MediaReviewStore
 from webapp.models import Job
+from webapp.movie_store import MovieStore
 from webapp.reference_store import ReferenceStore
 from webapp.routes import router
 from webapp.studio_manager import StudioJobManager
@@ -52,6 +53,7 @@ def create_app(settings: Settings | None = None,
         media_reviews = MediaReviewStore()
         generation_settings = GenerationSettingsStore(settings)
         clips = ClipStore()
+        movies = MovieStore(clips, media_reviews)
         comfy_queue = ComfyQueueClient(settings.comfy_url)
         manager = manager_factory(settings, store)
         application.state.job_store = store
@@ -59,6 +61,7 @@ def create_app(settings: Settings | None = None,
         application.state.media_review_store = media_reviews
         application.state.generation_settings_store = generation_settings
         application.state.clip_store = clips
+        application.state.movie_store = movies
         application.state.comfy_queue = comfy_queue
         application.state.job_manager = manager
         manager.start()

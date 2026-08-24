@@ -1450,3 +1450,62 @@ class AppFactoryTests(WebAppTestCase):
                 path for path in directory.iterdir()
                 if not path.name.startswith(".")
             ], [])
+
+    def test_movie_readiness_reports_every_enabled_clip_in_manifest_order(self):
+        with TestClient(self.app()) as client:
+            project = self.create_project(client, "movie-readiness")
+            root = self.settings.studio_root / "projects" / project
+            created = client.post(
+                f"/api/project/{project}/clips", json={"title": "Ending"})
+            self.assertEqual(created.status_code, 201)
+
+            generation = (
+                root / "clips" / "clip-001" / "generations" / "001")
+            generation.mkdir()
+            (generation / "opening.mp4").write_bytes(b"selected video")
+            selected = client.put(
+                f"/api/project/{project}/clips/clip-001/selected-take",
+                json={"generation": "001", "filename": "opening.mp4"},
+            )
+            self.assertEqual(selected.status_code, 200)
+
+            response = client.get(f"/api/project/{project}/movie")
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json(), {
+                "readiness": {
+                    "ready": False,
+                    "enabled_clip_count": 2,
+                    "clips": [
+                        {
+                            "id": "clip-001",
+                            "title": "Main clip",
+                            "ready": True,
+                            "reason": "",
+                            "selected_take": {
+                                "generation": "001",
+                                "filename": "opening.mp4",
+                            },
+                        },
+                        {
+                            "id": "clip-002",
+                            "title": "Ending",
+                            "ready": False,
+                            "reason": "Select a video take",
+                            "selected_take": None,
+                        },
+                    ],
+                    "blocking": [
+                        {"id": "clip-002", "title": "Ending",
+                         "reason": "Select a video take"},
+                    ],
+                },
+                "movies": [],
+            })
+
+            (generation / "opening.mp4").unlink()
+            stale = client.get(f"/api/project/{project}/movie")
+            self.assertEqual(stale.status_code, 200)
+            self.assertEqual(
+                stale.json()["readiness"]["clips"][0]["reason"],
+                "Selected video is missing or unsafe",
+            )

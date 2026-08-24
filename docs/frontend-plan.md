@@ -107,6 +107,7 @@ instead of rebuilding the DOM or resetting playback.
 | PUT | `/api/project/{id}/clips/{clip}/selected-take` | select/clear one exact video take |
 | POST | `/api/project/{id}/clips/{clip}/generations/{gen}/promote` | copy selected media to shared `final/` |
 | POST | `/api/project/{id}/clips/{clip}/generations/{gen}/use-as-reference` | copy selected media to shared `references/` |
+| GET | `/api/project/{id}/movie` | ordered enabled-clip assembly readiness and completed project movies |
 | GET/POST | `/api/project/{id}/chat?after=N` | project-level chat/session for cross-clip direction |
 | GET/POST | `/api/project/{id}/clips/{clip}/chat?after=N` | independent exact-clip chat/session |
 | GET | `/api/jobs/{id}` | one job's queued/running/completed/failed state |
@@ -230,6 +231,8 @@ auto-chained, and their result never starts a render without a separate request.
   preserving playback through select/promote/reference refreshes. A raw-CDP
   Chromium regression now forces close/reopen and out-of-order dialog, chat, and
   queue completion and asserts media-node identity through a review action.
+- Project movie readiness follows manifest order, ignores disabled clips, and
+  identifies every enabled clip whose selected video is absent or unsafe.
 - No auth v1; Uvicorn remains loopback-only, while optional tailnet access relies
   on Tailscale identity/ACLs plus the exact-host and same-origin guards above.
 

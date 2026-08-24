@@ -27,6 +27,7 @@ from webapp.media_review_store import (
     MediaReviewStore,
     UnsupportedMediaError,
 )
+from webapp.movie_store import MovieStore, MovieStoreError
 from webapp.reference_store import (
     ReferenceStore,
     ReferenceStoreError,
@@ -137,6 +138,10 @@ def _generation_settings(request: Request) -> GenerationSettingsStore:
 
 def _clips(request: Request) -> ClipStore:
     return request.app.state.clip_store
+
+
+def _movies(request: Request) -> MovieStore:
+    return request.app.state.movie_store
 
 
 def _comfy_queue(request: Request) -> ComfyQueueClient:
@@ -254,6 +259,18 @@ def get_project(request: Request, project_id: str):
         "id": project.name,
         **metadata,
     }
+
+
+@router.get("/api/project/{project_id}/movie")
+def get_project_movie(request: Request, project_id: str):
+    project = resolve_project(request, project_id)
+    try:
+        return {
+            "readiness": _movies(request).readiness(project),
+            "movies": _movies(request).list_movies(project),
+        }
+    except MovieStoreError as exc:
+        raise HTTPException(400, str(exc))
 
 
 @router.patch("/api/project/{project_id}")

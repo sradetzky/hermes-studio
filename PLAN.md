@@ -212,7 +212,7 @@ project/clip chat scope and exact IDs.
   queue sequencing, and playback; source-text regex checks remain supplementary.
 
 ### Phase 5 – Project movie assembly
-- [ ] Add project-level assembly readiness for all enabled clips in manifest order;
+- [x] Add project-level assembly readiness for all enabled clips in manifest order;
   block and identify every enabled clip without one valid selected video take
 - [ ] Add an explicit **Export selected takes as movie** project action that runs
   as one visible asynchronous job and never starts implicitly

@@ -13,6 +13,8 @@ preview and production releases.
   assembly, covering process/session/generation ownership, output-bound
   provenance, filesystem transactions, stale browser responses, playback
   stability, and behavioral browser coverage
+- Added ordered project movie readiness with exact blocker reporting for every
+  enabled clip that lacks a safe selected video take
 
 ### Fixed
 

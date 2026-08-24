@@ -167,6 +167,8 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
   through conversation-bound and latest-request-wins revision checks.
 - Stable take media nodes now preserve playback through review updates. Real
   Chromium/CDP tests force deferred dialog/chat/queue responses and close/reopen.
+- Phase 5 assembly readiness now validates every enabled clip's exact selected
+  video in manifest order and reports all blockers before export is available.
 
 ## Next steps
 
