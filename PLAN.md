@@ -1,8 +1,7 @@
 # PLAN.md — Hermes Studio
 
-**Status**: `v0.1.0-preview.1` released; unreleased web M4.2–M4.4 and the
-real clip-bound H3 E2E are complete. Next: basic project metadata, then a
-responsive workspace.
+**Status**: `v0.1.0-preview.1` released; unreleased web M4.2–M4.5 and the
+real clip-bound H3 E2E are complete. Next: responsive workspace navigation.
 **Owner**: Sven (local setup on RTX 5060 Ti 16GB)  
 **Updated**: 2026-08-24
 **Goal**: Fully local, agent-orchestrated creative studio centered on MiniMax H3 + Hermes, with a simple self-hosted web UI.
@@ -61,8 +60,8 @@ Folder structure on disk (source of truth for projects & media)
 <studio-root>/   (repo `studio-root/` or `$DESIGN_STUDIO_ROOT`)
 ├── projects/
 │   └── YYYY-MM-DD_name/
-│       ├── project.json          # ordered immutable clip ids + selected takes
-│       ├── brief.md
+│       ├── project.json          # display title, ordered clip ids + selected takes
+│       ├── brief.md              # editable project brief
 │       ├── chat.jsonl
 │       ├── references/          # uploaded assets (image1_..., video1_..., audio1_...)
 │       ├── research/
@@ -182,7 +181,7 @@ project/clip chat scope and exact IDs.
 - [x] Create/rename/reorder/enable clips and select one video take per enabled clip
 - [x] Explicit Project/Clip conversations with isolated transcripts, activity,
   profile sessions, and filesystem exports
-- [ ] Basic project metadata: edit display title and brief while keeping the
+- [x] Basic project metadata: edit display title and brief while keeping the
   filesystem project ID immutable
 - [ ] Responsive workspace: retain the desktop three-pane layout and provide
   explicit Projects / Chat / Media navigation on narrow screens
@@ -217,8 +216,8 @@ Post-v1 candidates, not current commitments:
 2. Selected-take assembly/export; a timeline UI remains outside v1.
 3. Shared character-library tooling.
 
-No unresolved architecture question blocks the current metadata and responsive
-workspace milestones.
+No unresolved architecture question blocks the current responsive-workspace
+milestone.
 
 ---
 
@@ -235,7 +234,7 @@ Current criteria (met):
 
 Next-preview criteria:
 
-- [ ] Edit a project's display title and brief without renaming its immutable ID.
+- [x] Edit a project's display title and brief without renaming its immutable ID.
 - [ ] Navigate Projects, Chat, and Media comfortably at desktop and narrow
   viewports without losing the active project, clip, conversation, or playback.
 

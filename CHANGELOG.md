@@ -21,6 +21,8 @@ preview and production releases.
   elapsed/waiting time, queue order, and exact last-completed execution duration
 - Explicit Clip/Project chat selector with independent transcripts, activity
   cursors, Hermes profile sessions, specialist sessions, and clip-local exports
+- Editable project display titles and Markdown briefs with immutable visible IDs,
+  validated serialized publication, active-job guards, and a project-details dialog
 
 ### Changed
 

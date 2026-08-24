@@ -2,6 +2,7 @@ export const $ = selector => document.querySelector(selector);
 
 export const state = {
   current: null,
+  project: null,
   currentClip: null,
   projectRevision: 0,
   clipRevision: 0,
@@ -32,6 +33,8 @@ export const state = {
   refreshPending: false,
   refreshErrors: {},
   uploading: false,
+  projectMetadataSaving: false,
+  projectMetadataOpener: null,
 };
 
 export function activeClip() {

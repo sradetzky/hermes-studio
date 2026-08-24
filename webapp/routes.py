@@ -41,8 +41,17 @@ MEDIA_AREAS = {"references", "final"}
 
 
 class ProjectIn(BaseModel):
-    name: str
-    brief: str = ""
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=120)
+    brief: str = Field(default="", max_length=100_000)
+
+
+class ProjectUpdateIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1, max_length=120)
+    brief: str = Field(max_length=100_000)
 
 
 class ChatIn(BaseModel):
@@ -167,14 +176,19 @@ def resolve_clip(request: Request, project: Path, clip_id: str) -> Path:
 @router.get("/api/projects")
 def list_projects(request: Request):
     root = _settings(request).studio_root
-    return {"projects": [
-        {
+    projects = []
+    for name in reversed(ds.list_projects(root)):
+        try:
+            metadata = _clips(request).describe_project(
+                root / "projects" / name)
+        except ClipStoreError as exc:
+            _raise_clip_store_error(exc)
+        projects.append({
             "id": name,
-            "brief": ds.read_project_text(
-                root / "projects" / name, "brief.md", limit=200),
-        }
-        for name in reversed(ds.list_projects(root))
-    ]}
+            "title": metadata["title"],
+            "brief": metadata["brief"][:200],
+        })
+    return {"projects": projects}
 
 
 @router.get("/api/profiles")
@@ -215,15 +229,27 @@ def get_project(request: Request, project_id: str):
     store = _store(request)
     store.import_chat_if_empty(project.name, project / "chat.jsonl")
     try:
-        manifest = _clips(request).describe(project)
+        metadata = _clips(request).describe_project(project)
     except ClipStoreError as exc:
         _raise_clip_store_error(exc)
     return {
         "id": project.name,
-        "title": manifest["title"],
-        "brief": ds.read_project_text(project, "brief.md"),
-        "clips": manifest["clips"],
+        **metadata,
     }
+
+
+@router.patch("/api/project/{project_id}")
+def update_project(request: Request, project_id: str, body: ProjectUpdateIn):
+    project = resolve_project(request, project_id)
+    if any(job.project == project.name for job in _store(request).active_jobs()):
+        raise HTTPException(
+            409, "cannot update project metadata while this project has an active job")
+    try:
+        metadata = _clips(request).update_project_metadata(
+            project, title=body.title, brief=body.brief)
+    except ClipStoreError as exc:
+        _raise_clip_store_error(exc)
+    return {"project": {"id": project.name, **metadata}}
 
 
 @router.get("/api/project/{project_id}/clips")

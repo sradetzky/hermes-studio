@@ -101,6 +101,7 @@ test('API paths encode every external identifier once', () => {
   assert.equal(apiPaths.clipEvents('project / one', 'clip #1', 9),
     '/api/project/project%20%2F%20one/clips/clip%20%231/events?after=9');
   assert.equal(apiPaths.comfyQueue, '/api/comfyui/queue');
+  assert.equal(apiPaths.project('project / one'), '/api/project/project%20%2F%20one');
 });
 
 test('take deletion confirmation states irreversible scope and selected cleanup', () => {

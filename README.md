@@ -18,6 +18,8 @@ GPU execution, and the project filesystem remains the media source of truth.
   execution chat, prompts, settings, immutable takes, and selection are clip-local
 - Explicit cross-clip Project chat plus independent per-clip Hermes sessions,
   with serialized global job execution
+- Editable project display titles and Markdown briefs while filesystem project IDs
+  remain immutable
 - Live profile reasoning summaries, tool activity, handoffs, and job status
 - Safe multi-file reference uploads with atomic non-overwriting publication
 - Typed prompt-bound H3 generation settings with readiness/staleness validation

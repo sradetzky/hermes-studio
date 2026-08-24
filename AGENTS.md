@@ -9,7 +9,7 @@ Hermes Studio: fully local, agent-orchestrated creative studio.
 Hermes profiles orchestrate → ComfyUI (`~/ComfyUI`, RTX 5060 Ti 16GB) renders
 video (MiniMax H3) and stills (Krea 2) → filesystem (`studio-root/`) is the
 project/media source of truth → SQLite only coordinates web jobs/chat sessions
-→ thin FastAPI web UI (M1–M4.4 complete; metadata/responsive polish next).
+→ thin FastAPI web UI (M1–M4.5 complete; responsive polish next).
 
 ## Repo map
 
@@ -123,9 +123,11 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
 - Project and clip conversations are now explicitly selectable and isolated end
   to end: transcript/activity cursors, Studio and specialist Hermes sessions,
   and filesystem exports. Legacy shared history migrates intact to Project chat.
+- Project display titles and Markdown briefs are editable through a validated
+  project-details dialog; immutable filesystem IDs remain visible and unchanged,
+  active jobs block writes, and serialized descriptor-safe publication is tested.
 
 ## Next steps
 
-- [ ] Basic project metadata: editable display title and brief; immutable project ID
 - [ ] Responsive workspace navigation while preserving the desktop three-pane layout
 - [ ] Desktop/narrow browser release gate, synchronized docs, and next preview

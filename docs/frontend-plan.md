@@ -24,8 +24,8 @@ no state in the UI that isn't already on disk; minimal dependencies.
   state and ordered SQLite migrations; clip work has a database-enforced exact
   clip id while project chat has an explicit project scope
 - `reference_store.py` — synchronous staging + atomic no-overwrite publication
-- `clip_store.py` — canonical project manifest, exact clip resolution, ordering,
-  enabled state, and selected-take provenance
+- `clip_store.py` — canonical project title/brief publication, exact clip
+  resolution, ordering, enabled state, and selected-take provenance
 - `media_review_store.py` — guarded generation detail, idempotent promotion and
   generation-to-reference publication with filesystem provenance
 - `generation_settings_store.py` — typed `current_generation.json`, strict H3
@@ -54,7 +54,8 @@ active project, clip, chat scope, job activity, open dialogs, and media playback
 └──────────┴──────────────────────────────┴────────────┘
 ```
 
-- Project + ordered clip switcher = left rail; add/rename/reorder/enable controls
+- Project + ordered clip switcher = left rail; editable project title/brief plus
+  clip add/rename/reorder/enable controls
 - Center: explicit Clip/Project chat selector, scoped chat with the studio
   agent, and below it the current structured prompt. Clip chat is the default
   after selecting a clip; Project chat owns cross-clip direction and history.
@@ -83,7 +84,7 @@ active project, clip, chat scope, job activity, open dialogs, and media playback
 | GET | `/api/profiles` | dispatchable Studio profiles |
 | GET | `/api/comfyui/queue` | sanitized global queue details and recent completion timing |
 | POST | `/api/projects` | create project {name, brief} |
-| GET | `/api/project/{id}` | brief, chat count, ordered clip manifest |
+| GET/PATCH | `/api/project/{id}` | title, brief, ordered clip manifest / update editable metadata |
 | GET/POST | `/api/project/{id}/clips` | list/create clips |
 | GET/PATCH | `/api/project/{id}/clips/{clip}` | clip metadata, prompt, readiness / update title or enabled state |
 | PUT | `/api/project/{id}/clips/order` | atomically replace exact clip order |
@@ -178,6 +179,11 @@ auto-chained, and their result never starts a render without a separate request.
   symlinked/unsafe generation directories and active project jobs, quarantines and
   removes only the verified directory identity, and clears selected-take provenance.
   Existing shared `final/` and `references/` copies are deliberately preserved.
+- Project metadata updates require a validated 1–120 character display title and
+  bounded Markdown brief, reject active project jobs and unknown fields (including
+  attempts to change the ID), and serialize readers/writers through the project
+  lock. The brief publishes descriptor-safely before the manifest title; a failed
+  manifest publication restores the exact previous brief before returning failure.
 - Generation settings enforce 0.1–1.1 MP or a ≤1.1MP explicit 32px-grid canvas
   and 1–50 steps. Readiness parses a 4–15 second length and ordered image-only
   `<Picture N> (filename.ext)` references from the prompt, then validates files
@@ -210,8 +216,9 @@ auto-chained, and their result never starts a render without a separate request.
   transcripts/activity/profile sessions, and lossless project-history migration
 - Real E2E checkpoint (done): exact-clip web job → Studio → comfyui-mcp H3
   submission → parameter read-back → clip-local archive → VRAM cleanup
-- M4.5 (next): editable project display title and brief with an immutable
-  filesystem project ID and atomic validated publication
+- M4.5 (done): editable project display title and brief with an immutable
+  filesystem project ID, validated serialized publication, API/storage coverage,
+  and real-browser read-back
 - M4.6 (next): responsive desktop/tablet/phone workspace navigation, followed by
   real-browser desktop and narrow-viewport release gates
 

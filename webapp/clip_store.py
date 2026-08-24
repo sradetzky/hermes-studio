@@ -17,13 +17,16 @@ from webapp.safe_files import (
     open_directory_at,
     open_regular_file,
     open_regular_file_at,
+    read_opened_bytes,
     read_opened_text,
     remove_published_directory_if_same,
 )
 
 
 PROJECT_MANIFEST = "project.json"
+PROJECT_BRIEF = "brief.md"
 PROJECT_SCHEMA_VERSION = 1
+PROJECT_BRIEF_MAX_CHARS = 100_000
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm"}
 
 
@@ -58,13 +61,22 @@ class ClipStore:
         return value
 
     @staticmethod
-    def _title(value: object) -> str:
+    def _title(value: object, label: str = "clip title") -> str:
         if not isinstance(value, str):
-            raise ClipStoreError("clip title must be text")
+            raise ClipStoreError(f"{label} must be text")
         title = value.strip()
         if not title or len(title) > 120:
-            raise ClipStoreError("clip title must contain 1–120 characters")
+            raise ClipStoreError(f"{label} must contain 1–120 characters")
         return title
+
+    @staticmethod
+    def _brief(value: object) -> str:
+        if not isinstance(value, str):
+            raise ClipStoreError("project brief must be text")
+        if len(value) > PROJECT_BRIEF_MAX_CHARS:
+            raise ClipStoreError(
+                f"project brief must not exceed {PROJECT_BRIEF_MAX_CHARS} characters")
+        return value
 
     @classmethod
     def _clip_id(cls, value: object) -> str:
@@ -135,9 +147,7 @@ class ClipStore:
             raise ClipStoreError("project manifest has unsupported fields")
         if value.get("schema_version") != PROJECT_SCHEMA_VERSION:
             raise ClipStoreError("project manifest schema is unsupported")
-        project_title = value.get("title")
-        if not isinstance(project_title, str) or not project_title.strip():
-            raise ClipStoreError("project title is invalid")
+        project_title = self._title(value.get("title"), "project title")
         clips = value.get("clips")
         if not isinstance(clips, list) or not clips:
             raise ClipStoreError("project must contain at least one clip")
@@ -174,7 +184,7 @@ class ClipStore:
             })
         return {
             "schema_version": PROJECT_SCHEMA_VERSION,
-            "title": project_title.strip(),
+            "title": project_title,
             "clips": normalized,
         }
 
@@ -202,6 +212,32 @@ class ClipStore:
             raise ClipStoreError("project manifest publication is unsafe") from exc
 
     @staticmethod
+    def _read_brief_unlocked(project: Path) -> str:
+        try:
+            with open_regular_file(project / PROJECT_BRIEF) as opened:
+                return read_opened_text(opened)
+        except (FileNotFoundError, SafeFilesystemError, OSError,
+                UnicodeDecodeError):
+            return ""
+
+    @staticmethod
+    def _read_brief_bytes_unlocked(project: Path) -> bytes:
+        try:
+            with open_regular_file(project / PROJECT_BRIEF) as opened:
+                return read_opened_bytes(opened)
+        except (FileNotFoundError, SafeFilesystemError, OSError) as exc:
+            raise ClipStoreError("project brief is missing or unsafe") from exc
+
+    @staticmethod
+    def _write_brief_unlocked(project: Path, data: bytes) -> None:
+        try:
+            with open_directory(project) as project_fd:
+                atomic_write_bytes_at(
+                    project_fd, PROJECT_BRIEF, data, label="project brief")
+        except (SafeFilesystemError, OSError) as exc:
+            raise ClipStoreError("project brief publication is unsafe") from exc
+
+    @staticmethod
     def _create_clip_tree(directory: Path) -> None:
         directory.mkdir()
         (directory / "current_prompt.txt").touch()
@@ -210,7 +246,7 @@ class ClipStore:
 
     def initialize(self, project: Path, title: str) -> dict:
         project = self._project(project)
-        title = self._title(title)
+        title = self._title(title, "project title")
         with self._lock(project):
             target_manifest = self._manifest_path(project)
             if os.path.lexists(target_manifest):
@@ -246,12 +282,58 @@ class ClipStore:
                 raise
         return manifest
 
-    def describe(self, project: Path) -> dict:
-        project = self._project(project)
+    def _describe_unlocked(self, project: Path) -> dict:
         manifest = self._read_manifest_unlocked(project)
         for entry in manifest["clips"]:
             self._resolve_clip_directory(project, entry["id"])
         return manifest
+
+    def describe(self, project: Path) -> dict:
+        project = self._project(project)
+        return self._describe_unlocked(project)
+
+    def describe_project(self, project: Path) -> dict:
+        project = self._project(project)
+        with self._lock(project):
+            manifest = self._describe_unlocked(project)
+            brief = self._read_brief_unlocked(project)
+        return {
+            "title": manifest["title"],
+            "brief": brief,
+            "clips": manifest["clips"],
+        }
+
+    def update_project_metadata(
+            self, project: Path, *, title: str, brief: str) -> dict:
+        project = self._project(project)
+        title = self._title(title, "project title")
+        brief = self._brief(brief)
+        brief_data = brief.encode("utf-8")
+        with self._lock(project):
+            manifest = self._describe_unlocked(project)
+            original_brief = self._read_brief_bytes_unlocked(project)
+            title_changed = manifest["title"] != title
+            brief_changed = original_brief != brief_data
+            if brief_changed:
+                self._write_brief_unlocked(project, brief_data)
+            try:
+                if title_changed:
+                    manifest["title"] = title
+                    self._write_manifest_unlocked(project, manifest)
+            except Exception:
+                if brief_changed:
+                    try:
+                        self._write_brief_unlocked(project, original_brief)
+                    except Exception as rollback_exc:
+                        raise ClipStoreError(
+                            "project metadata failed and brief rollback failed"
+                        ) from rollback_exc
+                raise
+        return {
+            "title": manifest["title"],
+            "brief": brief,
+            "clips": manifest["clips"],
+        }
 
     def _resolve_clip_directory(self, project: Path, clip_id: str) -> Path:
         clips = self._clips_directory(project)

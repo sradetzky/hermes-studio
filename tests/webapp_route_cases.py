@@ -256,6 +256,60 @@ class AppFactoryTests(WebAppTestCase):
             settings = Settings.from_environment()
         self.assertEqual(settings.job_timeout_seconds, 10_800)
 
+    def test_project_metadata_update_preserves_id_and_updates_listing(self):
+        with TestClient(self.app()) as client:
+            project_id = self.create_project(client, "metadata")
+            response = client.patch(
+                f"/api/project/{project_id}",
+                json={"title": "Display title", "brief": "Updated brief"},
+            )
+
+            self.assertEqual(response.status_code, 200, response.text)
+            project = response.json()["project"]
+            self.assertEqual(project["id"], project_id)
+            self.assertEqual(project["title"], "Display title")
+            self.assertEqual(project["brief"], "Updated brief")
+            self.assertEqual(project["clips"][0]["id"], "clip-001")
+            project_path = self.settings.studio_root / "projects" / project_id
+            self.assertTrue(project_path.is_dir())
+
+            detail = client.get(f"/api/project/{project_id}").json()
+            listing = client.get("/api/projects").json()["projects"]
+            self.assertEqual(detail, project)
+            self.assertEqual(listing[0]["id"], project_id)
+            self.assertEqual(listing[0]["title"], "Display title")
+            self.assertEqual(listing[0]["brief"], "Updated brief")
+            self.assertEqual(
+                (project_path / "brief.md").read_text(encoding="utf-8"),
+                "Updated brief",
+            )
+
+    def test_project_metadata_update_validates_body_and_rejects_active_job(self):
+        app = self.app()
+        with TestClient(app) as client:
+            project_id = self.create_project(client, "metadata-guards")
+            self.assertEqual(client.patch(
+                f"/api/project/{project_id}",
+                json={"id": "replacement", "title": "Title", "brief": "Brief"},
+            ).status_code, 422)
+            empty = client.patch(
+                f"/api/project/{project_id}",
+                json={"title": "   ", "brief": "Brief"},
+            )
+            self.assertEqual(empty.status_code, 400)
+
+            queued = client.post(
+                f"/api/project/{project_id}/clips/clip-001/chat",
+                json={"message": "Hold this project"},
+            )
+            self.assertEqual(queued.status_code, 202)
+            blocked = client.patch(
+                f"/api/project/{project_id}",
+                json={"title": "Blocked", "brief": "Blocked"},
+            )
+            self.assertEqual(blocked.status_code, 409)
+            self.assertIn("active job", blocked.json()["detail"])
+
     def test_comfy_queue_route_sanitizes_workflows_and_preserves_order(self):
         h3_graph = {
             "cond": {"class_type": "MiniMaxH3ReferenceToVideo", "inputs": {

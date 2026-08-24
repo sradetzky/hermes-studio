@@ -151,9 +151,83 @@ function renderProjects() {
     const item = document.createElement('button');
     item.type = 'button';
     item.className = `proj ${project.id === state.current ? 'active' : ''}`;
-    item.textContent = project.id;
+    const title = document.createElement('span');
+    title.className = 'proj-title';
+    title.textContent = project.title || project.id;
+    const id = document.createElement('span');
+    id.className = 'proj-id';
+    id.textContent = project.id;
+    item.append(title, id);
+    item.title = project.brief || project.title || project.id;
     item.addEventListener('click', () => selectProject(project.id));
     navigation.append(item);
+  }
+  renderProjectMetadataControls();
+}
+
+function renderProjectMetadataControls() {
+  const unavailable = !state.project || state.jobActive || state.projectMetadataSaving;
+  $('#edit-project').disabled = unavailable;
+  $('#project-metadata-display-title').disabled = state.projectMetadataSaving;
+  $('#project-metadata-brief').disabled = state.projectMetadataSaving;
+  $('#project-metadata-save').disabled = unavailable;
+  $('#project-metadata-cancel').disabled = state.projectMetadataSaving;
+  $('#project-metadata-close').disabled = state.projectMetadataSaving;
+}
+
+function openProjectMetadata() {
+  if (!state.project || state.jobActive || state.projectMetadataSaving) return;
+  state.projectMetadataOpener = document.activeElement;
+  $('#project-metadata-id').textContent = state.project.id;
+  $('#project-metadata-display-title').value = state.project.title;
+  $('#project-metadata-brief').value = state.project.brief;
+  $('#project-metadata-status').textContent = '';
+  $('#project-metadata-dialog').showModal();
+  $('#project-metadata-display-title').focus();
+}
+
+function closeProjectMetadata(restoreFocus = true) {
+  const dialog = $('#project-metadata-dialog');
+  if (state.projectMetadataSaving || !dialog.open) return;
+  dialog.close();
+  if (restoreFocus && state.projectMetadataOpener?.isConnected) {
+    state.projectMetadataOpener.focus();
+  }
+  state.projectMetadataOpener = null;
+}
+
+async function saveProjectMetadata(event) {
+  event.preventDefault();
+  if (!state.project || state.jobActive || state.projectMetadataSaving) return;
+  const context = captureProjectContext(state);
+  const title = $('#project-metadata-display-title').value.trim();
+  const brief = $('#project-metadata-brief').value;
+  if (!title) {
+    $('#project-metadata-status').textContent = 'Display title is required';
+    return;
+  }
+  state.projectMetadataSaving = true;
+  $('#project-metadata-status').textContent = 'Saving project…';
+  renderProjectMetadataControls();
+  try {
+    const response = await requestJson(apiPaths.project(context.projectId), {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({title, brief}),
+    });
+    if (!isProjectContextCurrent(state, context)) return;
+    state.project = response.project;
+    state.projectMetadataSaving = false;
+    closeProjectMetadata(false);
+    await loadProjects();
+    await refreshProject();
+  } catch (error) {
+    if (isProjectContextCurrent(state, context)) {
+      $('#project-metadata-status').textContent = error.message;
+    }
+  } finally {
+    state.projectMetadataSaving = false;
+    renderProjectMetadataControls();
   }
 }
 
@@ -348,9 +422,11 @@ async function toggleClip() {
 }
 
 async function selectProject(projectId) {
+  closeProjectMetadata(false);
   closeGenerationDialog(false);
   closeGenerationSettings(false);
   state.current = projectId;
+  state.project = null;
   state.projectRevision += 1;
   state.currentClip = null;
   state.clipRevision += 1;
@@ -388,6 +464,7 @@ function reportRefreshPlane(name, error) {
 
 function applyProjectNavigation(project) {
   const previousClip = state.currentClip;
+  state.project = project;
   state.clips = project.clips || [];
   if (!state.clips.some(clip => clip.id === state.currentClip)) {
     state.currentClip = state.clips[0]?.id || null;
@@ -407,8 +484,9 @@ function applyProjectNavigation(project) {
     resetChatState();
     state.refreshPending = true;
   }
+  renderProjects();
   renderClips();
-  document.title = `${project.id} — Hermes Studio`;
+  document.title = `${project.title} — Hermes Studio`;
 }
 
 function applyGenerations(generations) {
@@ -447,7 +525,7 @@ async function refreshNavigationPlane(context) {
       clip: clip => {
         $('#prompt').textContent = clip.current_prompt || '—';
         renderGenerationReadiness(clip.generation_settings);
-        document.title = `${clip.title} — ${project.id} — Hermes Studio`;
+        document.title = `${clip.title} — ${project.title} — Hermes Studio`;
       },
       generations: applyGenerations,
     },
@@ -717,6 +795,7 @@ function renderActivity(jobs) {
   };
   $('#activity-text').textContent = labels[activityState] || activityState;
   $('#activity').title = latest?.error || latest?.message || 'Studio activity';
+  renderProjectMetadataControls();
   renderClips();
   renderGenerationReadiness(state.generationSettings);
 }
@@ -797,6 +876,7 @@ function uploadReferences(files) {
 const dropzone = $('#dropzone');
 const fileInput = $('#file-input');
 $('#new-project').addEventListener('click', createProject);
+$('#edit-project').addEventListener('click', openProjectMetadata);
 $('#new-clip').addEventListener('click', createClip);
 $('#rename-clip').addEventListener('click', renameClip);
 $('#move-clip-up').addEventListener('click', () => moveClip(-1));
@@ -805,6 +885,18 @@ $('#toggle-clip').addEventListener('click', toggleClip);
 $('#clip-chat-scope').addEventListener('click', () => switchChatScope('clip'));
 $('#project-chat-scope').addEventListener('click', () => switchChatScope('project'));
 $('#chat-form').addEventListener('submit', sendChat);
+$('#project-metadata-form').addEventListener('submit', saveProjectMetadata);
+$('#project-metadata-close').addEventListener(
+  'click', () => closeProjectMetadata());
+$('#project-metadata-cancel').addEventListener(
+  'click', () => closeProjectMetadata());
+$('#project-metadata-dialog').addEventListener('cancel', event => {
+  if (state.projectMetadataSaving) event.preventDefault();
+});
+$('#project-metadata-dialog').addEventListener('close', () => {
+  if (state.projectMetadataOpener?.isConnected) state.projectMetadataOpener.focus();
+  state.projectMetadataOpener = null;
+});
 initializeGenerationSettings(refreshProject);
 initializeMediaReview(refreshProject);
 $('#activity-detail-toggle').addEventListener('click', () => {

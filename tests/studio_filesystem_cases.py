@@ -51,6 +51,73 @@ class ClipStoreTests(unittest.TestCase):
         self.assertEqual(
             json.loads((self.project / "project.json").read_text()), manifest)
 
+    def test_updates_project_title_and_brief_without_changing_identity(self):
+        self.store.initialize(self.project, "Test project")
+        (self.project / "brief.md").write_text(
+            "Original brief", encoding="utf-8")
+
+        metadata = self.store.update_project_metadata(
+            self.project, title="Renamed project", brief="Revised **brief**")
+
+        self.assertEqual(metadata["title"], "Renamed project")
+        self.assertEqual(metadata["brief"], "Revised **brief**")
+        self.assertEqual(metadata["clips"][0]["id"], "clip-001")
+        self.assertEqual(self.project.name, "project")
+        self.assertEqual(
+            json.loads((self.project / "project.json").read_text())["title"],
+            "Renamed project",
+        )
+        self.assertEqual(
+            (self.project / "brief.md").read_text(encoding="utf-8"),
+            "Revised **brief**",
+        )
+
+    def test_project_metadata_validation_rejects_empty_title_and_large_brief(self):
+        self.store.initialize(self.project, "Test project")
+        (self.project / "brief.md").write_text("Original", encoding="utf-8")
+
+        with self.assertRaisesRegex(ClipStoreError, "project title"):
+            self.store.update_project_metadata(
+                self.project, title="   ", brief="Still valid")
+        with self.assertRaisesRegex(ClipStoreError, "project brief"):
+            self.store.update_project_metadata(
+                self.project, title="Valid", brief="x" * 100_001)
+
+    def test_project_metadata_manifest_failure_restores_original_brief(self):
+        self.store.initialize(self.project, "Test project")
+        brief = self.project / "brief.md"
+        brief.write_text("Original brief", encoding="utf-8")
+        original_manifest = (self.project / "project.json").read_bytes()
+
+        with (
+            patch.object(
+                self.store, "_write_manifest_unlocked",
+                side_effect=RuntimeError("injected manifest failure"),
+            ),
+            self.assertRaisesRegex(RuntimeError, "injected manifest failure"),
+        ):
+            self.store.update_project_metadata(
+                self.project, title="Renamed", brief="Replacement brief")
+
+        self.assertEqual(brief.read_text(encoding="utf-8"), "Original brief")
+        self.assertEqual(
+            (self.project / "project.json").read_bytes(), original_manifest)
+
+    def test_project_metadata_rejects_unsafe_brief_without_changing_manifest(self):
+        self.store.initialize(self.project, "Test project")
+        manifest = self.project / "project.json"
+        original_manifest = manifest.read_bytes()
+        outside = Path(self.temp.name) / "outside-brief.md"
+        outside.write_text("Outside", encoding="utf-8")
+        (self.project / "brief.md").symlink_to(outside)
+
+        with self.assertRaisesRegex(ClipStoreError, "brief"):
+            self.store.update_project_metadata(
+                self.project, title="Renamed", brief="Replacement brief")
+
+        self.assertEqual(manifest.read_bytes(), original_manifest)
+        self.assertEqual(outside.read_text(encoding="utf-8"), "Outside")
+
     def test_creates_updates_and_reorders_clips(self):
         self.store.initialize(self.project, "Test project")
         second = self.store.create_clip(self.project, "Second scene")

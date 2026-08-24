@@ -34,7 +34,10 @@
     <aside class="panel p-2 overflow-auto">
       <div class="flex justify-between items-center mb-2 px-1">
         <span class="text-xs uppercase tracking-wider text-gray-500">Projects</span>
-        <button class="btn" id="new-project" type="button">+</button>
+        <div class="project-heading-actions">
+          <button class="btn" id="edit-project" type="button" disabled>Edit</button>
+          <button class="btn" id="new-project" type="button">+</button>
+        </div>
       </div>
       <nav id="projects"></nav>
       <div class="clip-heading">
@@ -136,6 +139,41 @@
       <div id="refs" class="grid grid-cols-3 gap-2"></div>
     </aside>
   </main>
+
+  <dialog class="project-metadata-dialog" id="project-metadata-dialog"
+          aria-labelledby="project-metadata-title">
+    <form class="project-metadata-shell" id="project-metadata-form">
+      <header class="media-dialog-header">
+        <div>
+          <div class="media-dialog-kicker">Project metadata</div>
+          <h2 id="project-metadata-title">Edit project</h2>
+        </div>
+        <button class="dialog-close" id="project-metadata-close" type="button"
+                aria-label="Close project metadata">×</button>
+      </header>
+      <div class="project-metadata-body">
+        <div class="project-id-block">
+          <span>Immutable project ID</span>
+          <code id="project-metadata-id">—</code>
+        </div>
+        <label>Display title
+          <input id="project-metadata-display-title" name="title" type="text"
+                 minlength="1" maxlength="120" required>
+        </label>
+        <label>Brief <span class="setting-hint">Markdown</span>
+          <textarea id="project-metadata-brief" name="brief"
+                    maxlength="100000" rows="12"></textarea>
+        </label>
+      </div>
+      <footer class="generation-settings-footer">
+        <div class="settings-status" id="project-metadata-status"
+             role="status" aria-live="polite"></div>
+        <button class="btn" id="project-metadata-cancel" type="button">Cancel</button>
+        <button class="btn primary" id="project-metadata-save"
+                type="submit">Save project</button>
+      </footer>
+    </form>
+  </dialog>
 
   <dialog class="media-dialog" id="generation-dialog" aria-labelledby="generation-title">
     <div class="media-dialog-shell">
