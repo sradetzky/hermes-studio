@@ -121,17 +121,20 @@ class MediaReviewStore:
         filename = self._component(filename, "generation filename")
         self.media_kind(filename)
         with self._open_generation(clip, generation_id) as (generation, generation_fd):
+            media_context = open_regular_file_at(
+                generation_fd, filename, path=generation / filename)
             try:
-                with open_regular_file_at(
-                        generation_fd, filename,
-                        path=generation / filename) as opened:
-                    yield opened
+                opened = media_context.__enter__()
             except FileNotFoundError as exc:
                 raise MediaNotFoundError(
                     f"generation media not found: {filename}") from exc
             except (SafeFilesystemError, OSError) as exc:
                 raise MediaNotFoundError(
                     f"generation media is unsafe: {filename}") from exc
+            try:
+                yield opened
+            finally:
+                media_context.__exit__(None, None, None)
 
     @staticmethod
     def _read_json(generation_fd: int, name: str) -> dict:

@@ -273,6 +273,17 @@ def get_project_movie(request: Request, project_id: str):
         raise HTTPException(400, str(exc))
 
 
+@router.post("/api/project/{project_id}/movie", status_code=202)
+def export_project_movie(request: Request, project_id: str):
+    project = resolve_project(request, project_id)
+    try:
+        return _manager(request).submit_movie_export(project.name).to_dict()
+    except (ActiveJobError, ProjectJobGuardError) as exc:
+        raise HTTPException(409, str(exc))
+    except MovieStoreError as exc:
+        raise HTTPException(409, str(exc))
+
+
 @router.patch("/api/project/{project_id}")
 def update_project(request: Request, project_id: str, body: ProjectUpdateIn):
     project = resolve_project(request, project_id)
@@ -350,11 +361,12 @@ def update_clip(request: Request, project_id: str, clip_id: str,
 def select_clip_take(request: Request, project_id: str, clip_id: str,
                      body: SelectedTakeIn):
     project = resolve_project(request, project_id)
-    try:
-        return {"clip": _clips(request).select_take(
-            project, clip_id, body.generation, body.filename)}
-    except ClipStoreError as exc:
-        _raise_clip_store_error(exc)
+    with _inactive_project_write(request, project, "change the selected take"):
+        try:
+            return {"clip": _clips(request).select_take(
+                project, clip_id, body.generation, body.filename)}
+        except ClipStoreError as exc:
+            _raise_clip_store_error(exc)
 
 
 @router.get("/api/project/{project_id}/clips/{clip_id}/generation-settings")

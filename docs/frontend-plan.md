@@ -108,6 +108,7 @@ instead of rebuilding the DOM or resetting playback.
 | POST | `/api/project/{id}/clips/{clip}/generations/{gen}/promote` | copy selected media to shared `final/` |
 | POST | `/api/project/{id}/clips/{clip}/generations/{gen}/use-as-reference` | copy selected media to shared `references/` |
 | GET | `/api/project/{id}/movie` | ordered enabled-clip assembly readiness and completed project movies |
+| POST | `/api/project/{id}/movie` | enqueue one explicit immutable selected-take movie export job |
 | GET/POST | `/api/project/{id}/chat?after=N` | project-level chat/session for cross-clip direction |
 | GET/POST | `/api/project/{id}/clips/{clip}/chat?after=N` | independent exact-clip chat/session |
 | GET | `/api/jobs/{id}` | one job's queued/running/completed/failed state |
@@ -233,6 +234,11 @@ auto-chained, and their result never starts a render without a separate request.
   queue completion and asserts media-node identity through a review action.
 - Project movie readiness follows manifest order, ignores disabled clips, and
   identifies every enabled clip whose selected video is absent or unsafe.
+- Movie export jobs persist ordered source hashes and media specs, preserve
+  compatible MP4/MOV streams, normalize mismatches deterministically, and publish
+  `final/movie-NNN/{movie.mp4,provenance.json}` atomically without overwrite.
+  Export workers are process-group supervised but CPU-only, so their failures and
+  recovery never issue ComfyUI cancellation or VRAM cleanup.
 - No auth v1; Uvicorn remains loopback-only, while optional tailnet access relies
   on Tailscale identity/ACLs plus the exact-host and same-origin guards above.
 

@@ -5,7 +5,7 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 
 
-CURRENT_SCHEMA_VERSION = 4
+CURRENT_SCHEMA_VERSION = 5
 LEGACY_CLIP_ERROR = "Legacy active job lacked an exact clip binding"
 
 
@@ -272,12 +272,45 @@ def _migration_4_chat_and_session_scopes(connection: sqlite3.Connection) -> None
     """)
 
 
+def _migration_5_project_movie_jobs(connection: sqlite3.Connection) -> None:
+    connection.execute("DROP TRIGGER IF EXISTS jobs_require_active_clip_on_insert")
+    connection.execute("DROP TRIGGER IF EXISTS jobs_require_active_clip_on_update")
+    condition = """
+        NEW.status IN ('queued', 'running')
+        AND (
+            NEW.chat_scope NOT IN ('project', 'clip')
+            OR (NEW.chat_scope = 'clip' AND trim(NEW.clip_id) = '')
+            OR (
+                NEW.chat_scope = 'project'
+                AND (trim(NEW.clip_id) <> '' OR NEW.kind NOT IN ('chat', 'export_movie'))
+            )
+        )
+    """
+    connection.execute(f"""
+        CREATE TRIGGER jobs_require_active_clip_on_insert
+        BEFORE INSERT ON jobs
+        WHEN {condition}
+        BEGIN
+            SELECT RAISE(ABORT, 'active job has an invalid chat scope');
+        END
+    """)
+    connection.execute(f"""
+        CREATE TRIGGER jobs_require_active_clip_on_update
+        BEFORE UPDATE OF status, clip_id, kind, chat_scope ON jobs
+        WHEN {condition}
+        BEGIN
+            SELECT RAISE(ABORT, 'active job has an invalid chat scope');
+        END
+    """)
+
+
 Migration = Callable[[sqlite3.Connection], None]
 MIGRATIONS: tuple[Migration, ...] = (
     _migration_1_job_columns,
     _migration_2_event_and_session_backfill,
     _migration_3_exact_active_clips,
     _migration_4_chat_and_session_scopes,
+    _migration_5_project_movie_jobs,
 )
 
 

@@ -1,7 +1,7 @@
 # PLAN.md — Hermes Studio
 
-**Status**: `v0.1.0-preview.2` released with web M4.2–M4.6 and the real
-clip-bound H3 E2E complete. A fresh-eyes remediation gate now blocks Phase 5.
+**Status**: `v0.1.0-preview.2` released; Phase 4.7 remediation is complete and
+Phase 5 project movie assembly is in progress.
 **Owner**: Sven (local setup on RTX 5060 Ti 16GB)  
 **Updated**: 2026-08-24
 **Goal**: Fully local, agent-orchestrated creative studio centered on MiniMax H3 + Hermes, with a simple self-hosted web UI.
@@ -214,11 +214,11 @@ project/clip chat scope and exact IDs.
 ### Phase 5 – Project movie assembly
 - [x] Add project-level assembly readiness for all enabled clips in manifest order;
   block and identify every enabled clip without one valid selected video take
-- [ ] Add an explicit **Export selected takes as movie** project action that runs
+- [x] Add an explicit **Export selected takes as movie** project action that runs
   as one visible asynchronous job and never starts implicitly
-- [ ] Join selected takes with hard cuts into one MP4, preserving compatible
+- [x] Join selected takes with hard cuts into one MP4, preserving compatible
   streams and applying deterministic normalization only when source media differs
-- [ ] Publish every export without overwrite under the project's `final/` area,
+- [x] Publish every export without overwrite under the project's `final/` area,
   together with a provenance manifest containing exact ordered clip/take sources
 - [ ] Expose completed project movies in Media for playback and download
 - [ ] Keep trimming, transitions, timeline editing, and side-by-side take

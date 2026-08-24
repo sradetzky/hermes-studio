@@ -77,6 +77,9 @@ class PassiveManager:
         return self.store.create_generation_job(
             project, request, "studio", clip_id=clip_id)
 
+    def submit_movie_export(self, project):
+        return self.store.create_movie_export_job(project, "{}")
+
 
 class WebAppTestCase(unittest.TestCase):
     def setUp(self):
@@ -1509,3 +1512,33 @@ class AppFactoryTests(WebAppTestCase):
                 stale.json()["readiness"]["clips"][0]["reason"],
                 "Selected video is missing or unsafe",
             )
+
+    def test_movie_export_is_one_visible_project_job_and_freezes_selection(self):
+        with TestClient(self.app()) as client:
+            project = self.create_project(client, "movie-job")
+            root = self.settings.studio_root / "projects" / project
+            generation = (
+                root / "clips" / "clip-001" / "generations" / "001")
+            generation.mkdir()
+            (generation / "take.mp4").write_bytes(b"selected video")
+            selected = client.put(
+                f"/api/project/{project}/clips/clip-001/selected-take",
+                json={"generation": "001", "filename": "take.mp4"},
+            )
+            self.assertEqual(selected.status_code, 200)
+
+            submitted = client.post(f"/api/project/{project}/movie")
+            self.assertEqual(submitted.status_code, 202)
+            job = submitted.json()
+            self.assertEqual(job["kind"], "export_movie")
+            self.assertEqual(job["chat_scope"], "project")
+            self.assertEqual(job["clip_id"], "")
+            self.assertEqual(job["status"], "queued")
+
+            jobs = client.get(f"/api/project/{project}/jobs").json()["jobs"]
+            self.assertEqual([item["id"] for item in jobs], [job["id"]])
+            blocked = client.put(
+                f"/api/project/{project}/clips/clip-001/selected-take",
+                json={"generation": None, "filename": None},
+            )
+            self.assertEqual(blocked.status_code, 409)

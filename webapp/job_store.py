@@ -171,7 +171,8 @@ class JobStore:
                 clip_id = validate_clip_id(clip_id)
             except ValueError as exc:
                 raise JobStoreError(str(exc)) from exc
-        elif chat_scope == "project" and kind == "chat" and not clip_id:
+        elif (chat_scope == "project" and kind in {"chat", "export_movie"}
+              and not clip_id):
             pass
         else:
             raise JobStoreError("invalid active job chat scope")
@@ -231,7 +232,10 @@ class JobStore:
                     status="queued",
                     summary=(
                         f"{job.profile} generation queued"
-                        if kind == "generate" else f"{job.profile} queued"),
+                        if kind == "generate"
+                        else "Project movie export queued"
+                        if kind == "export_movie"
+                        else f"{job.profile} queued"),
                     created_at=now,
                 )
         except sqlite3.IntegrityError as exc:
@@ -258,6 +262,13 @@ class JobStore:
             project, request, profile, clip_id=clip_id, chat_scope="clip",
             kind="generate",
             chat_content="Generate with this prompt")
+
+    def create_movie_export_job(self, project: str, contract: str,
+                                profile: str = "studio") -> Job:
+        return self._create_job(
+            project, contract, profile, clip_id="", chat_scope="project",
+            kind="export_movie",
+            chat_content="Export selected takes as movie")
 
     def get_job(self, job_id: str) -> Job:
         with self._connection() as connection:

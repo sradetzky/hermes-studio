@@ -15,6 +15,14 @@ preview and production releases.
   stability, and behavioral browser coverage
 - Added ordered project movie readiness with exact blocker reporting for every
   enabled clip that lacks a safe selected video take
+- Added explicit asynchronous selected-take movie jobs with immutable ordered
+  SHA-256/media-spec contracts, supervised FFmpeg hard-cut assembly, compatible
+  stream copy, deterministic mismatch normalization, and artifact-bound success
+- Added atomic no-overwrite `final/movie-NNN/` publication containing `movie.mp4`
+  and exact ordered-source/output provenance; changed sources, tampered filter
+  contracts, collisions, or incomplete artifacts fail closed
+- Restricted ComfyUI cancellation/cleanup to Studio jobs that can own GPU work;
+  CPU-only movie exports cannot interrupt rendering
 
 ### Fixed
 
@@ -45,6 +53,8 @@ preview and production releases.
   queue polling latest-request-wins, preventing stale workspace or queue updates
 - Preserved active take media elements across review refreshes and added real
   Chromium coverage for close/reopen, navigation, stale chat/queue, and playback
+- Fixed generation-media descriptor contexts so exceptions from caller-owned
+  publication work are no longer misclassified as unsafe source media
 - Web-triggered H3 archives now recover actual seed, canvas, timing, steps,
   acceleration nodes, ordered references, and prompt hash from authoritative
   ComfyUI history; incomplete or mismatched execution metadata fails closed

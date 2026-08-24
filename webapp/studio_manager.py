@@ -21,9 +21,10 @@ from webapp.config import Settings
 from webapp.generation_contract import parse_generation_job_payload
 from webapp.generation_settings_store import GenerationSettingsStore
 from webapp.hermes_events import HermesSessionEventBridge
-from webapp.job_store import JobStore, JobStoreError
+from webapp.job_store import ActiveJobError, JobStore, JobStoreError
 from webapp.media_review_store import MediaReviewStore
 from webapp.models import Job, JobStatus
+from webapp.movie_store import MOVIE_FILENAME, MovieStore
 from webapp.project_jobs import project_job_guard
 
 
@@ -97,8 +98,7 @@ class StudioJobManager:
         with self._process_lock:
             processes = list(self._processes.values())
         had_gpu_process = any(
-            job.owner_id == self.owner_id
-            and job.profile == self.settings.studio_profile
+            job.owner_id == self.owner_id and self._job_may_own_gpu(job)
             for job in self.store.active_jobs()
         )
         for process in processes:
@@ -158,6 +158,23 @@ class StudioJobManager:
             job = self.store.create_generation_job(
                 project, request, self.settings.studio_profile, clip_id=clip_id)
         self._export_chat(project, clip_id)
+        self._wake.set()
+        return job
+
+    def submit_movie_export(self, project: str) -> Job:
+        project_path = ds.project_path(self.settings.studio_root, project)
+        with project_job_guard(project_path):
+            if any(job.project == project for job in self.store.active_jobs()):
+                raise ActiveJobError("project already has an active Studio job")
+            contract = MovieStore().build_contract(project_path)
+            job = self.store.create_movie_export_job(
+                project,
+                json.dumps(
+                    contract, sort_keys=True, separators=(",", ":"),
+                    ensure_ascii=False),
+                self.settings.studio_profile,
+            )
+        self._export_chat(project)
         self._wake.set()
         return job
 
@@ -263,7 +280,7 @@ class StudioJobManager:
             process = self._processes.get(job.id)
         if process is not None:
             self._terminate_process(process)
-        if job.profile == self.settings.studio_profile:
+        if self._job_may_own_gpu(job):
             self._cleanup_safely()
         try:
             current = self.store.get_job(job.id)
@@ -281,6 +298,9 @@ class StudioJobManager:
             return False
 
     def _execute(self, job: Job) -> None:
+        if job.kind == "export_movie":
+            self._execute_movie(job)
+            return
         if job.kind == "generate":
             try:
                 self._validate_generation_job(job)
@@ -364,7 +384,7 @@ class StudioJobManager:
                     f"Exceeded the {self.settings.job_timeout_seconds}s job limit",
                     status="failed",
                 )
-                if job.profile == self.settings.studio_profile:
+                if self._job_may_own_gpu(job):
                     self.store.append_job_event(
                         job.id,
                         job.profile,
@@ -389,7 +409,7 @@ class StudioJobManager:
                     "Studio agent failed (%d): %s",
                     process.returncode, stderr.strip(),
                 )
-                if job.profile == self.settings.studio_profile:
+                if self._job_may_own_gpu(job):
                     self._cleanup_safely()
                 self.store.fail(
                     job.id, error, self.owner_id,
@@ -398,7 +418,7 @@ class StudioJobManager:
                 return
             reply = stdout.strip()
             if not reply:
-                if job.profile == self.settings.studio_profile:
+                if self._job_may_own_gpu(job):
                     self._cleanup_safely()
                 self.store.fail(
                     job.id, "Studio agent returned an empty reply", self.owner_id)
@@ -416,13 +436,101 @@ class StudioJobManager:
             log.exception("Studio job %s failed", job.id)
             if process:
                 self._terminate_process(process)
-            if job.profile == self.settings.studio_profile:
+            if self._job_may_own_gpu(job):
                 self._cleanup_safely()
             try:
                 self.store.fail(job.id, str(exc), self.owner_id)
                 self._export_job_chat(job)
             except Exception:
                 log.exception("Could not persist failure for job %s", job.id)
+        finally:
+            with self._process_lock:
+                self._processes.pop(job.id, None)
+
+    def _execute_movie(self, job: Job) -> None:
+        project = ds.project_path(self.settings.studio_root, job.project)
+        try:
+            contract = json.loads(job.message)
+            MovieStore._validate_contract(contract)
+        except (json.JSONDecodeError, ValueError) as exc:
+            self.store.fail(
+                job.id, f"Movie export contract is invalid: {exc}", self.owner_id)
+            self._export_job_chat(job)
+            return
+        command = [
+            sys.executable,
+            str(self.settings.repo / "scripts" / "assemble_movie.py"),
+            "--project", str(project),
+            "--job-id", job.id,
+            "--contract", job.message,
+        ]
+        self.store.append_job_event(
+            job.id, job.profile, "movie.export",
+            f"Assembling {len(contract['sources'])} selected takes with hard cuts",
+            status="running",
+            detail={"mode": contract["assembly"]["mode"]},
+        )
+        process: subprocess.Popen | None = None
+        try:
+            with self._process_lock:
+                if self._stop.is_set():
+                    self.store.fail(
+                        job.id, "Studio server stopped", self.owner_id)
+                    self._export_job_chat(job)
+                    return
+                process = subprocess.Popen(
+                    self._supervised_command(command),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    start_new_session=True,
+                    env=self._job_environment(job),
+                )
+                self.store.set_process(
+                    job.id, self.owner_id, process.pid,
+                    process_start_time(process.pid))
+                self._processes[job.id] = process
+            try:
+                stdout, stderr = self._communicate(process, None)
+            except subprocess.TimeoutExpired:
+                self._terminate_process(process)
+                process.communicate()
+                self.store.fail(
+                    job.id,
+                    f"Movie export timed out after "
+                    f"{self.settings.job_timeout_seconds}s",
+                    self.owner_id,
+                )
+                self._export_job_chat(job)
+                return
+            if process.returncode:
+                detail = stderr.strip().splitlines()[-1] if stderr.strip() else ""
+                error = f"Movie export failed ({process.returncode})"
+                if detail:
+                    error += f": {detail}"
+                self.store.fail(job.id, error, self.owner_id)
+                self._export_job_chat(job)
+                return
+            try:
+                result = json.loads(stdout)
+            except json.JSONDecodeError as exc:
+                raise ValueError("movie exporter returned invalid output") from exc
+            verified = MovieStore().verify_export(project, contract, job.id)
+            if result.get("id") != verified["id"]:
+                raise ValueError("movie exporter result does not match publication")
+            self.store.complete(
+                job.id,
+                self.owner_id,
+                f"Movie export completed: {verified['id']}/{MOVIE_FILENAME}",
+                None,
+            )
+            self._export_job_chat(job)
+        except Exception as exc:
+            log.exception("Movie export job %s failed", job.id)
+            if process:
+                self._terminate_process(process)
+            self.store.fail(job.id, str(exc), self.owner_id)
+            self._export_job_chat(job)
         finally:
             with self._process_lock:
                 self._processes.pop(job.id, None)
@@ -653,7 +761,7 @@ class StudioJobManager:
             except Exception:
                 log.exception("Could not record blocked recovery for job %s", job.id)
             return False
-        if job.profile == self.settings.studio_profile:
+        if self._job_may_own_gpu(job):
             self._cleanup_safely()
         self.store.fail(
             job.id, "Studio worker lease expired during execution",
@@ -662,20 +770,28 @@ class StudioJobManager:
         return True
 
     def _communicate(self, process: subprocess.Popen,
-                     bridge: HermesSessionEventBridge) -> tuple[str, str]:
+                     bridge: HermesSessionEventBridge | None) -> tuple[str, str]:
         deadline = time.monotonic() + self.settings.job_timeout_seconds
         while True:
-            bridge.poll()
+            if bridge is not None:
+                bridge.poll()
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise subprocess.TimeoutExpired(
                     process.args, self.settings.job_timeout_seconds)
             try:
                 output = process.communicate(timeout=min(1.0, remaining))
-                bridge.poll()
+                if bridge is not None:
+                    bridge.poll()
                 return output
             except subprocess.TimeoutExpired:
                 self.store.heartbeat_worker(self.owner_id)
+
+    def _job_may_own_gpu(self, job: Job) -> bool:
+        return (
+            job.profile == self.settings.studio_profile
+            and job.kind != "export_movie"
+        )
 
     @staticmethod
     def _terminate_process(process: subprocess.Popen) -> None:

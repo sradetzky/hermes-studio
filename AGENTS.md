@@ -169,6 +169,11 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
   Chromium/CDP tests force deferred dialog/chat/queue responses and close/reopen.
 - Phase 5 assembly readiness now validates every enabled clip's exact selected
   video in manifest order and reports all blockers before export is available.
+- Project movie export is an explicit project-scoped asynchronous job with an
+  immutable ordered source/hash/spec contract. Compatible streams use hard-cut
+  stream copy; mismatches normalize deterministically, and versioned movie plus
+  exact provenance publish together as one no-overwrite `final/movie-NNN/`
+  directory. CPU-only export jobs never invoke ComfyUI cleanup.
 
 ## Next steps
 

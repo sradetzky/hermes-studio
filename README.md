@@ -52,6 +52,7 @@ map and contributor contract; detailed operational docs live under `docs/`.
 - Linux (the launcher uses `flock` and `/proc`)
 - Python 3.11+ and `venv`
 - Hermes Agent with the Studio profiles configured
+- FFmpeg and FFprobe for project movie assembly
 - The external `minimax-h3-run` Hermes skill installed for legacy/manual H3 runs
 - Node.js/npm only when rebuilding the committed CSS bundle
 - A running local ComfyUI installation with the required H3/Krea models
