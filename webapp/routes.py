@@ -7,7 +7,12 @@ from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel, ConfigDict
 
 from scripts import design_studio as ds
-from webapp.clip_store import ClipNotFoundError, ClipStore, ClipStoreError
+from webapp.clip_store import (
+    ClipNotFoundError,
+    ClipStore,
+    ClipStoreError,
+    TakeNotFoundError,
+)
 from webapp.comfy_queue import ComfyQueueClient
 from webapp.config import Settings
 from webapp.generation_settings_store import (
@@ -129,7 +134,7 @@ def _raise_media_review_error(exc: MediaReviewError) -> NoReturn:
 
 
 def _raise_clip_store_error(exc: ClipStoreError) -> NoReturn:
-    if isinstance(exc, ClipNotFoundError):
+    if isinstance(exc, (ClipNotFoundError, TakeNotFoundError)):
         raise HTTPException(404, str(exc))
     raise HTTPException(400, str(exc))
 
@@ -338,6 +343,21 @@ def get_generation(request: Request, project_id: str, clip_id: str,
             project, clip, generation_id, include_prompt=True)
     except MediaReviewError as exc:
         _raise_media_review_error(exc)
+
+
+@router.delete(
+    "/api/project/{project_id}/clips/{clip_id}/generations/{generation_id}")
+def delete_generation(request: Request, project_id: str, clip_id: str,
+                      generation_id: str):
+    project = resolve_project(request, project_id)
+    if any(job.project == project.name for job in _store(request).active_jobs()):
+        raise HTTPException(
+            409, "cannot delete a take while this project has an active job")
+    try:
+        clip = _clips(request).delete_take(project, clip_id, generation_id)
+    except ClipStoreError as exc:
+        _raise_clip_store_error(exc)
+    return {"ok": True, "deleted": generation_id, "clip": clip}
 
 
 @router.post(

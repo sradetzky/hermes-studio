@@ -107,6 +107,8 @@ select:disabled { opacity:.5; cursor:not-allowed; }
 .media-state-badge.selected { color:#9fc6f2; background:#5e8fc31c; border:1px solid #5e8fc344; }
 .btn.primary { color:#b8d9ff; border-color:#4776a8; background:#1b3653; }
 .btn.primary:hover { background:#24486d; }
+.btn.danger { margin-left:auto; color:#ef9a9a; border-color:#713b42; background:#321b20; }
+.btn.danger:hover { color:#ffd0d0; border-color:#a14c57; background:#4a2229; }
 .media-dialog { width:min(74rem,calc(100vw - 2rem)); max-width:none; height:min(48rem,calc(100vh - 2rem)); max-height:none; padding:0; border:1px solid #303846; border-radius:.8rem; background:#101318; color:#e6e8eb; box-shadow:0 1.5rem 5rem #000b; }
 .media-dialog::backdrop { background:#050608c9; backdrop-filter:blur(3px); }
 .media-dialog-shell { height:100%; display:flex; flex-direction:column; min-height:0; }

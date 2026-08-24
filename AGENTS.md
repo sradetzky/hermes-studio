@@ -107,6 +107,11 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
   without widening Uvicorn beyond loopback; exact tailnet host/origin checks
   preserve the trusted-access boundary and coexist with the existing port 443 app
 
+### 2026-08-24
+- Take management now supports confirmed whole-take deletion with selected-take
+  cleanup, active-job and symlink guards, identity-checked filesystem removal,
+  and preservation of shared final/reference copies
+
 ## Next steps
 
 - [x] Real end-to-end H3 video generation through comfyui-mcp

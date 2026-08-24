@@ -7,6 +7,14 @@ import {
 
 let refreshProject = async () => {};
 
+export function takeDeletionMessage(generationId, selected) {
+  const selectedWarning = selected
+    ? ' This is the selected take; its selection will be cleared.' : '';
+  return `Delete take ${generationId} and all of its archived files?` +
+    `${selectedWarning} Promoted final and reference copies are kept. ` +
+    'This cannot be undone.';
+}
+
 function isSelectedTake(generationId, filename) {
   const selected = activeClip()?.selected_take;
   return selected?.generation === generationId && selected?.filename === filename;
@@ -131,6 +139,7 @@ function showGenerationLoading(generationId) {
   $('#select-generation').disabled = true;
   $('#promote-generation').disabled = true;
   $('#reference-generation').disabled = true;
+  $('#delete-generation').disabled = true;
 }
 
 async function openGeneration(generationId, opener = null) {
@@ -199,6 +208,7 @@ function selectedGenerationMedia() {
 
 function renderSelectedGenerationMedia() {
   const item = selectedGenerationMedia();
+  $('#delete-generation').disabled = !state.generationDetail || state.mediaActioning;
   const stage = $('#generation-media');
   stage.replaceChildren();
   if (!item) {
@@ -331,6 +341,43 @@ async function selectTake() {
   }
 }
 
+async function deleteTake() {
+  const detail = state.generationDetail;
+  const clip = activeClip();
+  if (!detail || state.mediaActioning) return;
+  if (!globalThis.confirm(
+    takeDeletionMessage(
+      detail.gen, clip?.selected_take?.generation === detail.gen),
+  )) return;
+
+  state.mediaActioning = true;
+  renderSelectedGenerationMedia();
+  const status = $('#media-action-status');
+  status.textContent = 'Deleting take…';
+  const context = captureClipContext(state);
+  try {
+    const response = await requestJson(
+      apiPaths.generation(context.projectId, context.clipId, detail.gen),
+      {method: 'DELETE'},
+    );
+    if (!isClipContextCurrent(state, context)) return;
+    state.clips = state.clips.map(entry =>
+      entry.id === context.clipId ? response.clip : entry);
+    state.generationSignature = '';
+    closeGenerationDialog(false);
+    await refreshProject();
+  } catch (error) {
+    if (!isClipContextCurrent(state, context)) return;
+    status.textContent = `Delete failed: ${error.message}`;
+  } finally {
+    if (isClipContextCurrent(state, context)
+        && state.generationDetail?.gen === detail.gen) {
+      state.mediaActioning = false;
+      renderSelectedGenerationMedia();
+    }
+  }
+}
+
 function updateGenerationNavigation() {
   const current = state.generationDetail?.gen;
   const index = state.filteredGenerations.findIndex(item => item.gen === current);
@@ -375,6 +422,7 @@ export function initializeMediaReview(refresh) {
   $('#select-generation').addEventListener('click', selectTake);
   $('#promote-generation').addEventListener('click', () => performMediaAction('promote'));
   $('#reference-generation').addEventListener('click', () => performMediaAction('reference'));
+  $('#delete-generation').addEventListener('click', deleteTake);
   dialog.addEventListener('close', () => closeGenerationDialog());
   dialog.addEventListener('click', event => {
     if (event.target === dialog) closeGenerationDialog();

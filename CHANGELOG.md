@@ -40,6 +40,8 @@ preview and production releases.
   reference, W4A8, and SeedVR2 controls
 - Generation filters, detail viewer, archived prompt/metadata display, and
   promote-to-final/use-as-reference review actions
+- Confirmed exact-take deletion with selected-take cleanup, active-job blocking,
+  symlink rejection, and preservation of promoted final/reference copies
 - Studio specialist profiles, Krea 2 tooling, and optional Grok backup profile
 - Single-instance launcher, status command, and graceful process cleanup
 

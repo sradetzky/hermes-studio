@@ -752,6 +752,94 @@ class AppFactoryTests(WebAppTestCase):
             self.assertTrue(media["video.mp4"]["promoted"])
             self.assertTrue(media["still.png"]["reference"])
 
+    def test_delete_take_clears_selection_and_preserves_published_copy(self):
+        with TestClient(self.app()) as client:
+            project = self.create_project(client, "delete-take")
+            root = self.settings.studio_root / "projects" / project
+            generation = root / "clips" / "clip-001" / "generations" / "001"
+            generation.mkdir()
+            (generation / "video.mp4").write_bytes(b"video")
+            (generation / "prompt.txt").write_text("prompt")
+
+            selected = client.put(
+                f"/api/project/{project}/clips/clip-001/selected-take",
+                json={"generation": "001", "filename": "video.mp4"},
+            )
+            self.assertEqual(selected.status_code, 200)
+            promoted = client.post(
+                f"/api/project/{project}/clips/clip-001/generations/001/promote",
+                json={"filename": "video.mp4"},
+            )
+            promoted_name = promoted.json()["result"]["target"]
+
+            deleted = client.delete(
+                f"/api/project/{project}/clips/clip-001/generations/001")
+
+            self.assertEqual(deleted.status_code, 200)
+            self.assertEqual(deleted.json()["deleted"], "001")
+            self.assertIsNone(deleted.json()["clip"]["selected_take"])
+            self.assertFalse(generation.exists())
+            self.assertEqual(
+                (root / "final" / promoted_name).read_bytes(), b"video")
+            self.assertEqual(client.get(
+                f"/api/project/{project}/clips/clip-001/generations"
+            ).json()["generations"], [])
+            self.assertEqual(client.delete(
+                f"/api/project/{project}/clips/clip-001/generations/001"
+            ).status_code, 404)
+
+    def test_delete_take_rejects_unsafe_generation_and_active_project_job(self):
+        with TestClient(self.app()) as client:
+            project = self.create_project(client, "delete-take-safety")
+            root = self.settings.studio_root / "projects" / project
+            generations = root / "clips" / "clip-001" / "generations"
+            outside = Path(self.temp.name) / "outside-take"
+            outside.mkdir()
+            (outside / "secret.mp4").write_bytes(b"secret")
+            (generations / "unsafe").symlink_to(outside, target_is_directory=True)
+
+            unsafe = client.delete(
+                f"/api/project/{project}/clips/clip-001/generations/unsafe")
+            self.assertEqual(unsafe.status_code, 400)
+            self.assertEqual((outside / "secret.mp4").read_bytes(), b"secret")
+
+            generation = generations / "001"
+            generation.mkdir()
+            (generation / "video.mp4").write_bytes(b"video")
+            queued = client.post(
+                f"/api/project/{project}/clips/clip-001/chat",
+                json={"message": "working"},
+            )
+            self.assertEqual(queued.status_code, 202)
+            active = client.delete(
+                f"/api/project/{project}/clips/clip-001/generations/001")
+            self.assertEqual(active.status_code, 409)
+            self.assertTrue(generation.is_dir())
+
+    def test_failed_delete_restores_selected_take(self):
+        with TestClient(self.app()) as client:
+            project = self.create_project(client, "delete-take-rollback")
+            root = self.settings.studio_root / "projects" / project
+            generation = root / "clips" / "clip-001" / "generations" / "001"
+            generation.mkdir()
+            (generation / "video.mp4").write_bytes(b"video")
+            client.put(
+                f"/api/project/{project}/clips/clip-001/selected-take",
+                json={"generation": "001", "filename": "video.mp4"},
+            )
+
+            with patch(
+                    "webapp.clip_store.remove_published_directory_if_same",
+                    return_value=False):
+                response = client.delete(
+                    f"/api/project/{project}/clips/clip-001/generations/001")
+
+            self.assertEqual(response.status_code, 400)
+            self.assertTrue(generation.is_dir())
+            clip = client.get(f"/api/project/{project}").json()["clips"][0]
+            self.assertEqual(clip["selected_take"], {
+                "generation": "001", "filename": "video.mp4"})
+
     def test_generation_review_actions_never_overwrite_and_reject_bad_sources(self):
         with TestClient(self.app()) as client:
             project = self.create_project(client, "review-safety")

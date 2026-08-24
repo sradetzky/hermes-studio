@@ -54,7 +54,8 @@ no state in the UI that isn't already on disk; minimal dependencies.
   clip length and ordered references come from the prompt itself
 - Right: shared reference thumbnails, active-clip take gallery (newest first), HTML5 video
   player for clips, media/recipe/review filters, and a keyboard-accessible detail
-  dialog with every archived asset, prompt, metadata and review action
+  dialog with every archived asset, prompt, metadata, review action, and confirmed
+  whole-take deletion
 - Header: global ComfyUI queue summary with an expandable ordered prompt-id view
 - Polling every 2s runs project navigation, chat/jobs/activity, references, and
   clip/generation requests as independently failing planes. Project and clip revision
@@ -76,6 +77,7 @@ no state in the UI that isn't already on disk; minimal dependencies.
 | GET/PUT | `/api/project/{id}/clips/{clip}/generation-settings` | inspect/save the clip's prompt-bound run contract |
 | GET | `/api/project/{id}/clips/{clip}/generations` | active clip take listing w/ metadata |
 | GET | `/api/project/{id}/clips/{clip}/generations/{gen}` | complete take media/prompt/meta/review detail |
+| DELETE | `/api/project/{id}/clips/{clip}/generations/{gen}` | delete one exact archived take and clear its selection |
 | PUT | `/api/project/{id}/clips/{clip}/selected-take` | select/clear one exact video take |
 | POST | `/api/project/{id}/clips/{clip}/generations/{gen}/promote` | copy selected media to shared `final/` |
 | POST | `/api/project/{id}/clips/{clip}/generations/{gen}/use-as-reference` | copy selected media to shared `references/` |
@@ -129,7 +131,7 @@ auto-chained, and their result never starts a render without a separate request.
 
 - Backend writes only through project creation, transactional chat events plus
   derived `chat.jsonl` export, validated reference uploads, and explicit M4
-  promote/use-as-reference actions. Generation stays agent-side.
+  promote/use-as-reference/delete actions. Generation stays agent-side.
 - Queue observability is a read-only `GET /queue` exception to MCP-only control;
   responses expose prompt IDs and order only, never workflow payloads or controls.
 - Uvicorn stays loopback-only. Optional remote access uses Tailscale Serve HTTPS
@@ -147,6 +149,10 @@ auto-chained, and their result never starts a render without a separate request.
   project/clip/take, copy rather than move, serialize through a project lock, publish
   atomically without overwrite, and record idempotent provenance in the hidden
   generation `.review.json`. Symlink/path escapes are rejected.
+- Take deletion requires an explicit irreversible browser confirmation, rejects
+  symlinked/unsafe generation directories and active project jobs, quarantines and
+  removes only the verified directory identity, and clears selected-take provenance.
+  Existing shared `final/` and `references/` copies are deliberately preserved.
 - Generation settings enforce 0.1–1.1 MP or a ≤1.1MP explicit 32px-grid canvas
   and 1–50 steps. Readiness parses a 4–15 second length and ordered image-only
   `<Picture N> (filename.ext)` references from the prompt, then validates files
@@ -162,7 +168,8 @@ auto-chained, and their result never starts a render without a separate request.
 - M2 (done): create-project + prompt viewer + drag/drop references
 - M3 (done): persistent asynchronous chat round-trip + activity status
 - M3.5 (done): live per-profile reasoning/tool timeline + specialist dispatch
-- M4 (done): media detail viewer, filters, promote-to-final and use-as-reference
+- M4 (done): media detail viewer, filters, promote-to-final, use-as-reference,
+  and safe confirmed take deletion
 - M4.1 (done): typed generation manifest, readiness summary and settings editor
 - M4.2 (done): clip-local prompts/settings/takes, exact clip jobs and nested media,
   ordered clip controls, selected-take provenance, and clip-safe polling

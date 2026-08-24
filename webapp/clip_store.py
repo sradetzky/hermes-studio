@@ -35,6 +35,10 @@ class ClipNotFoundError(ClipStoreError):
     pass
 
 
+class TakeNotFoundError(ClipStoreError):
+    pass
+
+
 class ClipStore:
     @staticmethod
     def _project(project: Path) -> Path:
@@ -384,4 +388,57 @@ class ClipStore:
                 raise ClipStoreError("cannot select a take for a disabled clip")
             entry["selected_take"] = selected
             self._write_manifest_unlocked(project, manifest)
+        return entry
+
+    def delete_take(self, project: Path, clip_id: str,
+                    generation_id: str) -> dict:
+        project = self._project(project)
+        clip_id = self._clip_id(clip_id)
+        generation_id = self._component(generation_id, "generation id")
+        with self._lock(project):
+            manifest = self._read_manifest_unlocked(project)
+            entry = next((item for item in manifest["clips"]
+                          if item["id"] == clip_id), None)
+            if entry is None:
+                raise ClipNotFoundError(f"clip not found: {clip_id}")
+            clip = self._resolve_clip_directory(project, clip_id)
+            generations = clip / "generations"
+            generation = generations / generation_id
+            try:
+                with open_directory(generations) as generations_fd:
+                    with open_directory_at(
+                            generations_fd, generation_id) as generation_fd:
+                        details = os.fstat(generation_fd)
+                        identity = (details.st_dev, details.st_ino)
+            except FileNotFoundError as exc:
+                raise TakeNotFoundError(
+                    f"generation not found: {generation_id}") from exc
+            except (SafeFilesystemError, OSError) as exc:
+                raise ClipStoreError(
+                    f"generation is unsafe: {generation_id}") from exc
+
+            previous_selection = entry["selected_take"]
+            cleared_selection = bool(
+                previous_selection
+                and previous_selection["generation"] == generation_id)
+            if cleared_selection:
+                entry["selected_take"] = None
+                self._write_manifest_unlocked(project, manifest)
+            try:
+                if not remove_published_directory_if_same(generation, identity):
+                    raise ClipStoreError(
+                        f"generation could not be safely deleted: {generation_id}")
+            except Exception as exc:
+                if cleared_selection:
+                    entry["selected_take"] = previous_selection
+                    try:
+                        self._write_manifest_unlocked(project, manifest)
+                    except Exception as restore_exc:
+                        raise ClipStoreError(
+                            "take deletion failed and selected take could not "
+                            "be restored") from restore_exc
+                if isinstance(exc, ClipStoreError):
+                    raise
+                raise ClipStoreError(
+                    f"generation deletion failed: {generation_id}") from exc
         return entry
