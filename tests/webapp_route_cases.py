@@ -253,7 +253,61 @@ class AppFactoryTests(WebAppTestCase):
         self.assertEqual(settings.job_timeout_seconds, 10_800)
 
     def test_comfy_queue_route_sanitizes_workflows_and_preserves_order(self):
+        h3_graph = {
+            "cond": {"class_type": "MiniMaxH3ReferenceToVideo", "inputs": {
+                "prompt": "private prompt", "width": 928, "height": 544,
+                "length": 243, "ref_images.ref_image_0": ["ref", 0],
+            }},
+            "ref": {"class_type": "LoadImage", "inputs": {
+                "image": "private-reference.png",
+            }},
+            "scheduler": {"class_type": "BasicScheduler", "inputs": {"steps": 8}},
+            "noise": {"class_type": "RandomNoise", "inputs": {"noise_seed": 42}},
+            "fused": {"class_type": "MiniMaxH3FusedModulation", "inputs": {
+                "enabled": True,
+            }},
+            "chunk": {"class_type": "MiniMaxH3ChunkFeedForward", "inputs": {
+                "enabled": True,
+            }},
+            "video": {"class_type": "CreateVideo", "inputs": {"fps": 24}},
+        }
+        krea_graph = {
+            "clip": {"class_type": "CLIPLoader", "inputs": {
+                "clip_name": "private-model.safetensors", "type": "krea2",
+            }},
+            "latent": {"class_type": "EmptyLatentImage", "inputs": {
+                "width": 1024, "height": 1024,
+            }},
+            "sample": {"class_type": "KSampler", "inputs": {
+                "seed": 43, "steps": 20,
+            }},
+        }
+        payloads = {
+            "http://127.0.0.1:8188/queue": {
+                "queue_running": [[
+                    7, "running-id", h3_graph, {"create_time": 990_000}, ["9"],
+                ]],
+                "queue_pending": [[
+                    8, "next-id", krea_graph, {"create_time": 985_000}, ["9"],
+                ]],
+            },
+            ("http://127.0.0.1:8188/api/jobs?status=completed&sort_by=created_at"
+             "&sort_order=desc&limit=1"): {
+                "jobs": [{
+                    "id": "completed-id", "status": "completed",
+                    "execution_start_time": 100_000,
+                    "execution_end_time": 682_274,
+                }],
+            },
+            "http://127.0.0.1:8188/api/jobs/completed-id": {
+                "workflow": {"prompt": h3_graph},
+            },
+        }
+
         class Response:
+            def __init__(self, payload):
+                self.payload = payload
+
             def __enter__(self):
                 return self
 
@@ -261,31 +315,50 @@ class AppFactoryTests(WebAppTestCase):
                 return False
 
             def read(self):
-                return json.dumps({
-                    "queue_running": [[
-                        7, "running-id", {"secret": "large workflow"}, {}, ["9"],
-                    ]],
-                    "queue_pending": [
-                        [8, "next-id", {"secret": "next workflow"}, {}, ["9"]],
-                        [9, "later-id", {}, {}, ["9"]],
-                    ],
-                }).encode()
+                return json.dumps(self.payload).encode()
 
-        with patch("webapp.comfy_queue.urlopen", return_value=Response()) as fetch:
+        requested = []
+
+        def fetch(request, **_kwargs):
+            requested.append(request.full_url)
+            return Response(payloads[request.full_url])
+
+        with patch("webapp.comfy_queue.urlopen", side_effect=fetch), \
+                patch("webapp.comfy_queue.time.time", return_value=1000), \
+                patch("webapp.comfy_queue.time.monotonic", return_value=100):
             with TestClient(self.app()) as client:
-                response = client.get("/api/comfyui/queue")
+                response = client.get("/api/comfyui/queue?include_recent=true")
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {
             "available": True,
-            "running": [{"prompt_id": "running-id", "position": 0}],
-            "pending": [
-                {"prompt_id": "next-id", "position": 1},
-                {"prompt_id": "later-id", "position": 2},
-            ],
+            "running": [{
+                "prompt_id": "running-id", "position": 0,
+                "recipe": "H3", "mode": "R2V", "kind": "video",
+                "width": 928, "height": 544, "frames": 243,
+                "media_seconds": 10, "steps": 8, "accel": True,
+                "seed": "42", "elapsed_seconds": 0,
+            }],
+            "pending": [{
+                "prompt_id": "next-id", "position": 1,
+                "recipe": "Krea 2", "kind": "image",
+                "width": 1024, "height": 1024, "steps": 20,
+                "seed": "43", "queued_seconds": 15,
+            }],
+            "recent_completed": {
+                "prompt_id": "completed-id", "status": "completed",
+                "execution_seconds": 582.274, "completed_at": 682_274,
+                "recipe": "H3", "mode": "R2V", "kind": "video",
+                "width": 928, "height": 544, "frames": 243,
+                "media_seconds": 10, "steps": 8, "accel": True,
+                "seed": "42",
+            },
         })
-        request = fetch.call_args.args[0]
-        self.assertEqual(request.full_url, "http://127.0.0.1:8188/queue")
+        serialized = response.text
+        for private_value in (
+                "private prompt", "private-reference.png", "private-model.safetensors"):
+            self.assertNotIn(private_value, serialized)
+        self.assertEqual(set(requested), set(payloads))
 
     def test_comfy_queue_route_reports_unavailable_without_failing_refresh(self):
         with patch("webapp.comfy_queue.urlopen", side_effect=OSError("offline")):
@@ -297,8 +370,66 @@ class AppFactoryTests(WebAppTestCase):
             "available": False,
             "running": [],
             "pending": [],
+            "recent_completed": None,
             "error": "ComfyUI queue unavailable",
         })
+
+    def test_comfy_queue_stays_available_when_completed_jobs_api_is_unavailable(self):
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return json.dumps({
+                    "queue_running": [],
+                    "queue_pending": [[4, "queued-id", {}, {}, ["9"]]],
+                }).encode()
+
+        def fetch(request, **_kwargs):
+            if request.full_url.endswith("/queue"):
+                return Response()
+            raise OSError("jobs endpoint unavailable")
+
+        with patch("webapp.comfy_queue.urlopen", side_effect=fetch):
+            with TestClient(self.app()) as client:
+                response = client.get("/api/comfyui/queue?include_recent=true")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {
+            "available": True,
+            "running": [],
+            "pending": [{"prompt_id": "queued-id", "position": 1}],
+            "recent_completed": None,
+        })
+
+    def test_comfy_queue_fetches_completion_history_only_on_demand(self):
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return json.dumps({
+                    "queue_running": [], "queue_pending": [],
+                }).encode()
+
+        with patch("webapp.comfy_queue.urlopen", return_value=Response()) as fetch:
+            with TestClient(self.app()) as client:
+                response = client.get("/api/comfyui/queue")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {
+            "available": True, "running": [], "pending": [],
+            "recent_completed": None,
+        })
+        self.assertEqual(fetch.call_count, 1)
+        self.assertEqual(
+            fetch.call_args.args[0].full_url, "http://127.0.0.1:8188/queue")
 
     def test_app_creation_has_no_runtime_side_effects(self):
         create_app(self.settings, PassiveManager)

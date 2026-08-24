@@ -29,8 +29,9 @@ no state in the UI that isn't already on disk; minimal dependencies.
   generation-to-reference publication with filesystem provenance
 - `generation_settings_store.py` — typed `current_generation.json`, strict H3
   knob validation, prompt-hash staleness, and prompt-derived length/references
-- `comfy_queue.py` — read-only sanitized ComfyUI running/pending projection;
-  workflow payloads never cross the backend boundary
+- `comfy_queue.py` — read-only sanitized ComfyUI running/pending projection plus
+  native completed-job timing; only allowlisted render metadata crosses the
+  backend boundary and workflow payloads remain private
 - `routes.py` — thin HTTP boundary and guarded media serving
 - `run.sh` / `stop.sh` / `status.sh` — single-instance lock, graceful stop,
   stale-PID cleanup and process status
@@ -56,7 +57,10 @@ no state in the UI that isn't already on disk; minimal dependencies.
   player for clips, media/recipe/review filters, and a keyboard-accessible detail
   dialog with every archived asset, prompt, metadata, review action, and confirmed
   whole-take deletion
-- Header: global ComfyUI queue summary with an expandable ordered prompt-id view
+- Header: compact global ComfyUI queue summary with an expandable ordered view
+  of sanitized recipe/mode, canvas, approximate media length, frames, steps,
+  accel, seed, elapsed/waiting time, prompt IDs, and the last exact completed
+  duration
 - Polling every 2s runs project navigation, chat/jobs/activity, references, and
   clip/generation requests as independently failing planes. Project and clip revision
   tokens reject stale responses; media DOM rebuilds only when listing signatures change,
@@ -68,7 +72,7 @@ no state in the UI that isn't already on disk; minimal dependencies.
 |---|---|---|
 | GET | `/api/projects` | list projects |
 | GET | `/api/profiles` | dispatchable Studio profiles |
-| GET | `/api/comfyui/queue` | sanitized global running/pending ComfyUI queue |
+| GET | `/api/comfyui/queue` | sanitized global queue details and recent completion timing |
 | POST | `/api/projects` | create project {name, brief} |
 | GET | `/api/project/{id}` | brief, chat count, ordered clip manifest |
 | GET/POST | `/api/project/{id}/clips` | list/create clips |
@@ -132,8 +136,12 @@ auto-chained, and their result never starts a render without a separate request.
 - Backend writes only through project creation, transactional chat events plus
   derived `chat.jsonl` export, validated reference uploads, and explicit M4
   promote/use-as-reference/delete actions. Generation stays agent-side.
-- Queue observability is a read-only `GET /queue` exception to MCP-only control;
-  responses expose prompt IDs and order only, never workflow payloads or controls.
+- Queue observability is a read-only native ComfyUI exception to MCP-only control.
+  It reads `GET /queue` plus, only while expanded, completed timing from
+  `GET /api/jobs`, but returns
+  only allowlisted render metadata, prompt IDs, and order—never workflow payloads,
+  prompt/reference/model values, or mutation controls. Phase 1 deliberately does
+  not patch or extend ComfyUI and does not claim whole-generation percentage/ETA.
 - Uvicorn stays loopback-only. Optional remote access uses Tailscale Serve HTTPS
   on standard alternate port 8443 and an exact `HERMES_STUDIO_TRUSTED_HOSTS`
   DNS allowlist; Funnel,

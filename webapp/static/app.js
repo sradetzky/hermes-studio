@@ -10,7 +10,12 @@ import {
   updateGenerationRecipeFilter,
 } from './media-review.js';
 import {apiPaths} from './api-paths.mjs';
-import {queuePresentation} from './comfy-queue.mjs';
+import {
+  formatQueueDuration,
+  queueJobSpecs,
+  queueJobTitle,
+  queuePresentation,
+} from './comfy-queue.mjs';
 import {
   captureClipContext,
   captureProjectContext,
@@ -41,14 +46,45 @@ async function loadProfiles() {
 function queueRow(label, job) {
   const row = document.createElement('div');
   row.className = 'comfy-queue-row';
+  const heading = document.createElement('div');
+  heading.className = 'comfy-queue-row-heading';
   const stateLabel = document.createElement('span');
   stateLabel.className = 'comfy-queue-state';
   stateLabel.textContent = label;
+  const title = document.createElement('strong');
+  title.className = 'comfy-queue-title';
+  title.textContent = queueJobTitle(job);
+  heading.append(stateLabel, title);
+
+  const specs = document.createElement('div');
+  specs.className = 'comfy-queue-specs';
+  specs.textContent = queueJobSpecs(job);
+
+  const metadata = document.createElement('div');
+  metadata.className = 'comfy-queue-meta';
+  const timingValue = label === 'Running' ? job.elapsed_seconds
+    : label === 'Last completed' ? job.execution_seconds : job.queued_seconds;
+  const timing = formatQueueDuration(timingValue);
+  if (timing) {
+    const timingLabel = label === 'Running' ? 'Elapsed'
+      : label === 'Last completed' ? 'Completed in' : 'Waiting';
+    const timingText = document.createElement('span');
+    timingText.textContent = `${timingLabel} ${timing}`;
+    metadata.append(timingText);
+  }
+  if (job.seed !== undefined) {
+    const seed = document.createElement('span');
+    seed.textContent = `Seed ${job.seed}`;
+    metadata.append(seed);
+  }
   const promptId = document.createElement('span');
   promptId.className = 'comfy-queue-id';
-  promptId.textContent = job.prompt_id;
+  promptId.textContent = `Prompt ${job.prompt_id}`;
   promptId.title = job.prompt_id;
-  row.append(stateLabel, promptId);
+  metadata.append(promptId);
+  row.append(heading);
+  if (specs.textContent) row.append(specs);
+  row.append(metadata);
   return row;
 }
 
@@ -69,17 +105,22 @@ function renderComfyQueue(snapshot) {
   for (const job of snapshot.pending || []) {
     list.append(queueRow(job.position === 1 ? 'Next' : `Queued ${job.position}`, job));
   }
-  if (!list.children.length) {
+  if (!(snapshot.running?.length || snapshot.pending?.length)) {
     const empty = document.createElement('div');
     empty.className = 'comfy-queue-empty';
     empty.textContent = 'No running or queued jobs';
     list.append(empty);
   }
+  if (snapshot.recent_completed) {
+    list.append(queueRow('Last completed', snapshot.recent_completed));
+  }
 }
 
 async function refreshComfyQueue() {
   try {
-    renderComfyQueue(await requestJson(apiPaths.comfyQueue, {cache: 'no-store'}));
+    const includeRecent = $('#comfy-queue').open ? '?include_recent=true' : '';
+    renderComfyQueue(await requestJson(
+      `${apiPaths.comfyQueue}${includeRecent}`, {cache: 'no-store'}));
   } catch (error) {
     renderComfyQueue({
       available: false, running: [], pending: [], error: error.message,
@@ -722,6 +763,9 @@ for (const eventName of ['dragleave', 'drop']) {
 }
 dropzone.addEventListener('drop', event => uploadReferences(event.dataTransfer.files));
 fileInput.addEventListener('change', () => uploadReferences(fileInput.files));
+$('#comfy-queue').addEventListener('toggle', event => {
+  if (event.currentTarget.open) refreshComfyQueue();
+});
 
 Promise.all([loadProfiles(), loadProjects(), refreshComfyQueue()]).catch(error => {
   $('#status').textContent = `startup error: ${error.message}`;

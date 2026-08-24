@@ -193,8 +193,8 @@ def list_profiles(request: Request):
 
 
 @router.get("/api/comfyui/queue")
-def get_comfy_queue(request: Request):
-    return _comfy_queue(request).snapshot()
+def get_comfy_queue(request: Request, include_recent: bool = False):
+    return _comfy_queue(request).snapshot(include_recent=include_recent)
 
 
 @router.post("/api/projects")

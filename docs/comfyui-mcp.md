@@ -70,9 +70,14 @@ Normal Studio agent work must not use curl or raw `/prompt`, `/history`,
 `/upload`, `/queue`, `/interrupt`, or `/free`. If MCP discovery/calls fail,
 stop and report the MCP error.
 
-The web backend has one narrow exception: it performs a read-only `GET /queue`
-for the header queue viewer, strips workflow payloads, and exposes only ordered
-prompt IDs. It has no mutation path and is not an execution fallback.
+The web backend has one narrow observability exception: it performs read-only
+`GET /queue` and on-demand completed-job `GET /api/jobs` requests for the header
+queue viewer. It reduces workflow graphs to an allowlist of recipe/mode, canvas,
+approximate media length, frames, steps, accel, and seed; prompt text,
+references, model paths, and raw graphs never cross the backend boundary. It has
+no mutation path and is not an execution fallback. Phase 1 uses native ComfyUI
+APIs only—there is no Studio ComfyUI extension and no whole-generation
+percentage or ETA claim.
 
 `design_studio.py generate`, `generate-image`, and standalone
 `krea2_image.py` execution remain manual diagnostic fallbacks. They now clean

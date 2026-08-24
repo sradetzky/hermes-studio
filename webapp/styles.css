@@ -47,11 +47,15 @@ img.thumb, video.thumb { width:100%; border-radius:.5rem; display:block; }
 .comfy-queue-dot.running { background:#65a9ff; box-shadow:0 0 0 .2rem #65a9ff22; }
 .comfy-queue-dot.queued { background:#d9a441; }
 .comfy-queue-dot.offline { background:#ef6c6c; }
-.comfy-queue-list { position:absolute; z-index:20; top:calc(100% + .5rem); right:0; width:min(26rem,calc(100vw - 2rem)); max-height:18rem; overflow:auto; border:1px solid #2b333e; border-radius:.55rem; padding:.35rem; background:#101318; box-shadow:0 .8rem 2.5rem #0009; }
-.comfy-queue-row { display:grid; grid-template-columns:4.5rem minmax(0,1fr); gap:.5rem; padding:.35rem .4rem; border-bottom:1px solid #20262e; }
+.comfy-queue-list { position:absolute; z-index:20; top:calc(100% + .5rem); right:0; width:min(30rem,calc(100vw - 2rem)); max-height:24rem; overflow:auto; border:1px solid #2b333e; border-radius:.55rem; padding:.35rem; background:#101318; box-shadow:0 .8rem 2.5rem #0009; }
+.comfy-queue-row { display:flex; flex-direction:column; gap:.25rem; padding:.55rem .5rem; border-bottom:1px solid #20262e; }
 .comfy-queue-row:last-child { border-bottom:0; }
+.comfy-queue-row-heading { display:flex; align-items:baseline; justify-content:space-between; gap:.75rem; }
 .comfy-queue-state { color:#8eb7e4; }
-.comfy-queue-id { overflow:hidden; color:#7e8996; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; text-overflow:ellipsis; white-space:nowrap; }
+.comfy-queue-title { min-width:0; overflow:hidden; color:#c3cbd5; font-size:.75rem; font-weight:600; text-overflow:ellipsis; white-space:nowrap; }
+.comfy-queue-specs { color:#9ca6b3; font-size:.68rem; }
+.comfy-queue-meta { display:flex; min-width:0; flex-wrap:wrap; gap:.25rem .7rem; color:#717c89; font-size:.64rem; }
+.comfy-queue-id { min-width:8rem; overflow:hidden; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; text-overflow:ellipsis; white-space:nowrap; }
 .comfy-queue-empty { padding:.45rem; color:#687383; }
 .comfy-queue-empty.offline { color:#d98989; }
 .dropzone { border:1px dashed #343d49; border-radius:.6rem; padding:.7rem; text-align:center; color:#737d8a; cursor:pointer; }

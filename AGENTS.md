@@ -100,9 +100,11 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
 - Real clip-bound H3 E2E verified through the web-owned Studio session and
   comfyui-mcp: exact 1280x704 R2V graph parameters, clip-local archive read-back,
   identical source/archive hashes, empty queue, and mandatory VRAM cleanup
-- ComfyUI queue observability added to the web header with sanitized running and
-  pending prompt IDs; Studio render waits now use comfyui-mcp's two-second
-  batch status loop instead of fixed three-minute terminal waits
+- ComfyUI queue observability added to the web header with a compact live render
+  summary and expandable sanitized recipe, mode, canvas, approximate clip
+  length, frames, steps, accel, seed, elapsed/waiting time, and last-completed
+  duration; Studio render waits use comfyui-mcp's two-second batch status loop
+  instead of fixed three-minute terminal waits
 - Persistent user-systemd startup and tailnet-only Tailscale Serve HTTPS added
   without widening Uvicorn beyond loopback; exact tailnet host/origin checks
   preserve the trusted-access boundary and coexist with the existing port 443 app

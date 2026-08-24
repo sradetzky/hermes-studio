@@ -17,6 +17,8 @@ preview and production releases.
   read-back, clip-local archival, and mandatory queue/VRAM cleanup
 - Revision-guarded **Generate with this prompt** action for ready enabled clips,
   with dedicated Studio jobs, worker-start revalidation, and exact typed run packages
+- Compact ComfyUI header status with expandable sanitized render specifications,
+  elapsed/waiting time, queue order, and exact last-completed execution duration
 
 ### Changed
 

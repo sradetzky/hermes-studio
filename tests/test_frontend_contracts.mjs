@@ -10,7 +10,12 @@ import {
   MAX_SAFE_SEED,
 } from '../webapp/static/frontend-contracts.mjs';
 import {apiPaths} from '../webapp/static/api-paths.mjs';
-import {queuePresentation} from '../webapp/static/comfy-queue.mjs';
+import {
+  formatQueueDuration,
+  queueJobSpecs,
+  queueJobTitle,
+  queuePresentation,
+} from '../webapp/static/comfy-queue.mjs';
 import {refreshLivePlane} from '../webapp/static/refresh-planes.mjs';
 import {takeDeletionMessage} from '../webapp/static/media-review.js';
 import {
@@ -99,9 +104,12 @@ test('generation action requires a ready current contract and idle enabled clip'
 test('Comfy queue presentation distinguishes running, queued, idle, and offline', () => {
   assert.deepEqual(queuePresentation({
     available: true,
-    running: [{prompt_id: 'running-id', position: 0}],
+    running: [{
+      prompt_id: 'running-id', position: 0, recipe: 'H3', mode: 'R2V',
+      elapsed_seconds: 368,
+    }],
     pending: [{prompt_id: 'next-id', position: 1}],
-  }), {state: 'running', label: 'Comfy 1 running · 1 queued'});
+  }), {state: 'running', label: 'Comfy · H3 R2V · 6:08 · 1 queued'});
   assert.deepEqual(queuePresentation({
     available: true, running: [], pending: [{prompt_id: 'next-id', position: 1}],
   }), {state: 'queued', label: 'Comfy 1 queued'});
@@ -109,6 +117,19 @@ test('Comfy queue presentation distinguishes running, queued, idle, and offline'
     {state: 'idle', label: 'Comfy idle'});
   assert.deepEqual(queuePresentation({available: false, running: [], pending: []}),
     {state: 'offline', label: 'Comfy unavailable'});
+});
+
+test('Comfy queue details format sanitized render metadata and timing', () => {
+  const h3 = {
+    recipe: 'H3', mode: 'R2V', width: 928, height: 544,
+    media_seconds: 10, frames: 243, steps: 8, accel: true,
+  };
+  assert.equal(queueJobTitle(h3), 'H3 R2V');
+  assert.equal(queueJobSpecs(h3), '928×544 · ~10s / 243f · 8 steps · accel');
+  assert.equal(queueJobTitle({}), 'Comfy workflow');
+  assert.equal(formatQueueDuration(0), '0:00');
+  assert.equal(formatQueueDuration(582.274), '9:42');
+  assert.equal(formatQueueDuration(3661), '1:01:01');
 });
 
 test('live refresh planes fail and apply independently', async () => {
