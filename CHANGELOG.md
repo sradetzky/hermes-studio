@@ -48,7 +48,8 @@ preview and production releases.
 
 - Kept the ComfyUI queue popover inside phone viewports and rebalanced narrow Chat
   with a collapsed-by-default, independently scrollable Prompt & generation panel;
-  the same panel can now be collapsed on desktop for additional transcript space
+  the same panel can now be collapsed on desktop for additional transcript space.
+  Reduced its header to 24px and restored direct scrolling inside long prompts
 
 ## [0.1.0-preview.1] - 2026-08-23
 

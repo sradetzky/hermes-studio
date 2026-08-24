@@ -131,7 +131,8 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
   replacement, preserving project/clip/chat state and active media playback.
 - Mobile queue details are viewport-bounded, and Prompt & generation is a
   desktop-and-mobile collapsible panel that defaults closed on narrow screens;
-  expanded narrow prompts are capped so Chat remains the larger workspace.
+  expanded narrow prompts are capped so Chat remains the larger workspace, with
+  a compact 24px header and direct scrolling for long prompt text.
 
 ## Next steps
 

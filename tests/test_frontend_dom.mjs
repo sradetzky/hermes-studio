@@ -61,7 +61,11 @@ test('responsive workspace exposes one control and panel per pane', () => {
 test('prompt and generation controls live in a desktop-open collapsible panel', () => {
   const html = readFileSync(
     new URL('../webapp/static/index.html', import.meta.url), 'utf8');
+  const css = readFileSync(
+    new URL('../webapp/styles.css', import.meta.url), 'utf8');
   assert.match(html, /<details class="panel prompt-panel" id="prompt-panel" open>/);
   assert.match(html, /<summary class="prompt-panel-summary">Prompt &amp; generation<\/summary>/);
   assert.match(html, /<pre class="prompt" id="prompt">/);
+  assert.match(css, /--prompt-panel-header-height:1\.5rem/);
+  assert.match(css, /\.prompt-panel-body pre\.prompt \{ max-height:12rem; overflow:auto; \}/);
 });
