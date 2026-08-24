@@ -191,6 +191,54 @@ class AppFactoryTests(WebAppTestCase):
             settings = Settings.from_environment()
         self.assertEqual(settings.job_timeout_seconds, 10_800)
 
+    def test_comfy_queue_route_sanitizes_workflows_and_preserves_order(self):
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return json.dumps({
+                    "queue_running": [[
+                        7, "running-id", {"secret": "large workflow"}, {}, ["9"],
+                    ]],
+                    "queue_pending": [
+                        [8, "next-id", {"secret": "next workflow"}, {}, ["9"]],
+                        [9, "later-id", {}, {}, ["9"]],
+                    ],
+                }).encode()
+
+        with patch("webapp.comfy_queue.urlopen", return_value=Response()) as fetch:
+            with TestClient(self.app()) as client:
+                response = client.get("/api/comfyui/queue")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {
+            "available": True,
+            "running": [{"prompt_id": "running-id", "position": 0}],
+            "pending": [
+                {"prompt_id": "next-id", "position": 1},
+                {"prompt_id": "later-id", "position": 2},
+            ],
+        })
+        request = fetch.call_args.args[0]
+        self.assertEqual(request.full_url, "http://127.0.0.1:8188/queue")
+
+    def test_comfy_queue_route_reports_unavailable_without_failing_refresh(self):
+        with patch("webapp.comfy_queue.urlopen", side_effect=OSError("offline")):
+            with TestClient(self.app()) as client:
+                response = client.get("/api/comfyui/queue")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {
+            "available": False,
+            "running": [],
+            "pending": [],
+            "error": "ComfyUI queue unavailable",
+        })
+
     def test_app_creation_has_no_runtime_side_effects(self):
         create_app(self.settings, PassiveManager)
         self.assertFalse(self.settings.runtime_root.exists())

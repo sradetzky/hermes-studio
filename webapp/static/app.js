@@ -10,6 +10,7 @@ import {
   updateGenerationRecipeFilter,
 } from './media-review.js';
 import {apiPaths} from './api-paths.mjs';
+import {queuePresentation} from './comfy-queue.mjs';
 import {
   captureClipContext,
   captureProjectContext,
@@ -34,6 +35,55 @@ async function loadProfiles() {
     option.value = profile.id;
     option.textContent = profile.label;
     select.append(option);
+  }
+}
+
+function queueRow(label, job) {
+  const row = document.createElement('div');
+  row.className = 'comfy-queue-row';
+  const stateLabel = document.createElement('span');
+  stateLabel.className = 'comfy-queue-state';
+  stateLabel.textContent = label;
+  const promptId = document.createElement('span');
+  promptId.className = 'comfy-queue-id';
+  promptId.textContent = job.prompt_id;
+  promptId.title = job.prompt_id;
+  row.append(stateLabel, promptId);
+  return row;
+}
+
+function renderComfyQueue(snapshot) {
+  const presentation = queuePresentation(snapshot);
+  $('#comfy-queue-dot').className = `comfy-queue-dot ${presentation.state}`;
+  $('#comfy-queue-label').textContent = presentation.label;
+  const list = $('#comfy-queue-list');
+  list.replaceChildren();
+  if (!snapshot?.available) {
+    const message = document.createElement('div');
+    message.className = 'comfy-queue-empty offline';
+    message.textContent = snapshot?.error || 'ComfyUI queue unavailable';
+    list.append(message);
+    return;
+  }
+  for (const job of snapshot.running || []) list.append(queueRow('Running', job));
+  for (const job of snapshot.pending || []) {
+    list.append(queueRow(job.position === 1 ? 'Next' : `Queued ${job.position}`, job));
+  }
+  if (!list.children.length) {
+    const empty = document.createElement('div');
+    empty.className = 'comfy-queue-empty';
+    empty.textContent = 'No running or queued jobs';
+    list.append(empty);
+  }
+}
+
+async function refreshComfyQueue() {
+  try {
+    renderComfyQueue(await requestJson(apiPaths.comfyQueue, {cache: 'no-store'}));
+  } catch (error) {
+    renderComfyQueue({
+      available: false, running: [], pending: [], error: error.message,
+    });
   }
 }
 
@@ -671,7 +721,8 @@ for (const eventName of ['dragleave', 'drop']) {
 dropzone.addEventListener('drop', event => uploadReferences(event.dataTransfer.files));
 fileInput.addEventListener('change', () => uploadReferences(fileInput.files));
 
-Promise.all([loadProfiles(), loadProjects()]).catch(error => {
+Promise.all([loadProfiles(), loadProjects(), refreshComfyQueue()]).catch(error => {
   $('#status').textContent = `startup error: ${error.message}`;
 });
 setInterval(refreshProject, 2000);
+setInterval(refreshComfyQueue, 2000);

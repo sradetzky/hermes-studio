@@ -100,6 +100,9 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
 - Real clip-bound H3 E2E verified through the web-owned Studio session and
   comfyui-mcp: exact 1280x704 R2V graph parameters, clip-local archive read-back,
   identical source/archive hashes, empty queue, and mandatory VRAM cleanup
+- ComfyUI queue observability added to the web header with sanitized running and
+  pending prompt IDs; Studio render waits now use comfyui-mcp's two-second
+  batch status loop instead of fixed three-minute terminal waits
 
 ## Next steps
 

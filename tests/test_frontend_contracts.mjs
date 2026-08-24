@@ -10,6 +10,7 @@ import {
   MAX_SAFE_SEED,
 } from '../webapp/static/frontend-contracts.mjs';
 import {apiPaths} from '../webapp/static/api-paths.mjs';
+import {queuePresentation} from '../webapp/static/comfy-queue.mjs';
 import {refreshLivePlane} from '../webapp/static/refresh-planes.mjs';
 
 test('seed text stays inside the exact JSON integer range', () => {
@@ -48,6 +49,22 @@ test('API paths encode every external identifier once', () => {
     '/api/project/project%20%2F%20one/clips/clip-001/generations/take%20%231/promote',
   );
   assert.equal(apiPaths.chat('project', 42), '/api/project/project/chat?after=42');
+  assert.equal(apiPaths.comfyQueue, '/api/comfyui/queue');
+});
+
+test('Comfy queue presentation distinguishes running, queued, idle, and offline', () => {
+  assert.deepEqual(queuePresentation({
+    available: true,
+    running: [{prompt_id: 'running-id', position: 0}],
+    pending: [{prompt_id: 'next-id', position: 1}],
+  }), {state: 'running', label: 'Comfy 1 running · 1 queued'});
+  assert.deepEqual(queuePresentation({
+    available: true, running: [], pending: [{prompt_id: 'next-id', position: 1}],
+  }), {state: 'queued', label: 'Comfy 1 queued'});
+  assert.deepEqual(queuePresentation({available: true, running: [], pending: []}),
+    {state: 'idle', label: 'Comfy idle'});
+  assert.deepEqual(queuePresentation({available: false, running: [], pending: []}),
+    {state: 'offline', label: 'Comfy unavailable'});
 });
 
 test('live refresh planes fail and apply independently', async () => {

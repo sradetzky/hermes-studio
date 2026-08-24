@@ -11,6 +11,7 @@ class Settings:
     studio_root: Path
     comfy_output: Path
     runtime_root: Path
+    comfy_url: str = "http://127.0.0.1:8188"
     hermes_command: str = "hermes"
     studio_profile: str = "studio"
     specialist_profiles: tuple[str, ...] = (
@@ -56,6 +57,8 @@ class Settings:
             studio_root=studio_root,
             comfy_output=(Path.home() / "ComfyUI" / "output").resolve(),
             runtime_root=repo / ".runtime",
+            comfy_url=os.environ.get(
+                "COMFYUI_URL", "http://127.0.0.1:8188").rstrip("/"),
             job_timeout_seconds=int(os.environ.get(
                 "HERMES_STUDIO_JOB_TIMEOUT_SECONDS", "10800")),
         )

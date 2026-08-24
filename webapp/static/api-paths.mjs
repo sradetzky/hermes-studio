@@ -3,6 +3,7 @@ const encode = value => encodeURIComponent(value);
 export const apiPaths = {
   projects: '/api/projects',
   profiles: '/api/profiles',
+  comfyQueue: '/api/comfyui/queue',
   project: project => `/api/project/${encode(project)}`,
   clips: project => `/api/project/${encode(project)}/clips`,
   clip: (project, clip) =>

@@ -22,5 +22,10 @@ mcp_servers:
       COMFYUI_URL: "http://127.0.0.1:8188"
       COMFYUI_PATH: "/home/sven/ComfyUI"
       COMFYUI_PYTHON: "/home/sven/ComfyUI/.venv/bin/python"
+      COMFYUI_JOB_TIMEOUT_S: "10800"
+      COMFYUI_JOB_POLL_INTERVAL_S: "2"
+    # batch(action:"wait") is capped at 600s inside comfyui-mcp. This client
+    # deadline leaves room for the terminal status response and transport.
+    timeout: 660
     connect_timeout: 120
     enabled: true

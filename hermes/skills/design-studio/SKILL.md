@@ -62,9 +62,17 @@ concurrently.
 2. Upload references through `mcp_comfyui_upload_image`; patch the graph with
    the returned server filenames.
 3. Optionally call `mcp_comfyui_clear_vram` before switching model families.
-4. Submit with `mcp_comfyui_enqueue_workflow`; retain the `prompt_id`.
-5. Wait through `mcp_comfyui_queue` / `mcp_comfyui_get_history` until success,
-   error, or timeout. Never start another job while one is running.
+4. Submit exactly one graph through `mcp_comfyui_batch` with
+   `action:"submit"`, `workflows:[graph]`, and `disable_random_seed:true`.
+   Retain the returned `batch_id` and `prompt_id`. The explicit seed guard is
+   mandatory because batch submission otherwise randomizes seed widgets.
+5. Call `mcp_comfyui_batch` with `action:"wait"`, that `batch_id`, and
+   `timeout_s:600`. This is the notification-style wait: it checks status
+   internally every two seconds and returns immediately when the prompt is
+   terminal. If its bounded ten-minute safety cap expires while the job remains
+   pending/running, call the same wait action again. Never approximate waiting
+   with `sleep`, terminal timeout calls, or manually spaced queue/history polls.
+   Never start another job while one is running.
 6. On success, archive output with `design_studio.py archive-output` and the
    same exact project + clip IDs. If the configured ComfyUI root is itself a
    symlink and the safe-filesystem guard rejects it, do not copy manually:
@@ -77,8 +85,10 @@ concurrently.
    stopped, then clear VRAM. Killing a wrapper process does not cancel ComfyUI.
 
 Do not use raw REST, curl, `/prompt`, `/history`, `/upload`, or `/free` during
-normal Studio work. If MCP is unavailable, stop with a clear error; do not
-silently fall back to REST.
+normal Studio work. The web server's sanitized read-only `/queue` projection is
+an observability-only exception; agents do not call it and it cannot mutate
+ComfyUI. If MCP is unavailable, stop with a clear error; do not silently fall
+back to REST.
 
 Each clip's `current_generation.json` is the web UI's compact typed run contract.
 It records mode, canvas/MP, seed, steps, accel, and the SHA-256 of that clip's

@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict
 
 from scripts import design_studio as ds
 from webapp.clip_store import ClipNotFoundError, ClipStore, ClipStoreError
+from webapp.comfy_queue import ComfyQueueClient
 from webapp.config import Settings
 from webapp.generation_settings_store import (
     GenerationSettingsError,
@@ -115,6 +116,10 @@ def _clips(request: Request) -> ClipStore:
     return request.app.state.clip_store
 
 
+def _comfy_queue(request: Request) -> ComfyQueueClient:
+    return request.app.state.comfy_queue
+
+
 def _raise_media_review_error(exc: MediaReviewError) -> NoReturn:
     if isinstance(exc, MediaNotFoundError):
         raise HTTPException(404, str(exc))
@@ -173,6 +178,11 @@ def list_profiles(request: Request):
         {"id": profile, "label": roles.get(profile, profile)}
         for profile in _settings(request).profiles
     ]}
+
+
+@router.get("/api/comfyui/queue")
+def get_comfy_queue(request: Request):
+    return _comfy_queue(request).snapshot()
 
 
 @router.post("/api/projects")

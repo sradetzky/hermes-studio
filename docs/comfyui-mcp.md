@@ -11,6 +11,8 @@ Raw REST remains only inside explicit legacy diagnostic runners.
 - Target: `http://127.0.0.1:8188`
 - ComfyUI root: `/home/sven/ComfyUI`
 - Startup timeout: 120s
+- Tool-call timeout: 660s (covers the server's bounded 600s batch wait)
+- Completion watcher: 10,800s timeout, 2s fallback poll
 
 The source-controlled example is
 `hermes/profiles/studio/config.yaml.example`. Verify the live profile with:
@@ -38,8 +40,14 @@ image handoffs.
 1. Build/inspect an API-format graph locally (`run_h3.py --dry-run` or
    `krea2_image.py --dry-run`).
 2. Upload references with MCP and patch the graph with returned filenames.
-3. Enqueue with MCP; retain `prompt_id`.
-4. Poll MCP queue/history to a terminal state. Never overlap jobs.
+3. Submit one workflow with `mcp_comfyui_batch` `action:"submit"`,
+   `workflows:[graph]`, and `disable_random_seed:true`; retain `batch_id` and
+   `prompt_id`.
+4. Wait with `mcp_comfyui_batch` `action:"wait"`, `timeout_s:600`. The server
+   checks every two seconds and returns as soon as the prompt is terminal, so
+   completion is not delayed by a fixed sleep. Repeat only when the bounded
+   safety cap expires and the returned state is still pending/running. Never
+   overlap jobs.
 5. On success, archive MCP output into the project:
 
    ```bash
@@ -58,9 +66,13 @@ the 16GB GPU.
 
 ## No silent REST fallback
 
-Normal Studio work must not use curl or raw `/prompt`, `/history`, `/upload`,
-`/queue`, `/interrupt`, or `/free`. If MCP discovery/calls fail, stop and
-report the MCP error.
+Normal Studio agent work must not use curl or raw `/prompt`, `/history`,
+`/upload`, `/queue`, `/interrupt`, or `/free`. If MCP discovery/calls fail,
+stop and report the MCP error.
+
+The web backend has one narrow exception: it performs a read-only `GET /queue`
+for the header queue viewer, strips workflow payloads, and exposes only ordered
+prompt IDs. It has no mutation path and is not an execution fallback.
 
 `design_studio.py generate`, `generate-image`, and standalone
 `krea2_image.py` execution remain manual diagnostic fallbacks. They now clean
