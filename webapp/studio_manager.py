@@ -379,7 +379,10 @@ class StudioJobManager:
             "both files and abort without queueing if their prompt SHA-256 or settings "
             "updated_at differs from the request token. Build the exact H3 graph, submit "
             "one workflow through the mandatory comfyui-mcp batch transaction, archive "
-            "the output into this clip, and clear VRAM in finally-style cleanup.\n\n"
+            "the output into this clip with its exact prompt_id, and clear VRAM in "
+            "finally-style cleanup. The web archive boundary reads authoritative "
+            "ComfyUI history and rejects missing, incomplete, or mismatched execution "
+            "metadata.\n\n"
             "Validated generation package:\n" +
             json.dumps(package, indent=2, ensure_ascii=False)
         )

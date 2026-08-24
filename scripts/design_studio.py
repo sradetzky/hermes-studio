@@ -34,6 +34,7 @@ import stat
 import subprocess
 import sys
 import time
+import urllib.parse
 import urllib.request
 import uuid
 from contextlib import ExitStack, closing
@@ -2312,6 +2313,207 @@ def read_project_text(project: Path, filename: str, limit: int | None = None,
     return value[:limit] if limit is not None else value
 
 
+def _history_integer(value: object, field: str, minimum: int,
+                     maximum: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"ComfyUI history {field} is invalid")
+    integer = int(value)
+    if integer != value or not minimum <= integer <= maximum:
+        raise ValueError(f"ComfyUI history {field} is invalid")
+    return integer
+
+
+def _history_node(graph: dict, class_type: str) -> tuple[str, dict] | None:
+    for node_id, node in graph.items():
+        if (isinstance(node_id, str) and isinstance(node, dict)
+                and node.get("class_type") == class_type
+                and isinstance(node.get("inputs"), dict)):
+            return node_id, node["inputs"]
+    return None
+
+
+def _history_reference(graph: dict, link: object) -> str:
+    if (not isinstance(link, list) or len(link) != 2
+            or not isinstance(link[0], str)):
+        raise ValueError("ComfyUI history reference link is invalid")
+    node = graph.get(link[0])
+    if (not isinstance(node, dict) or node.get("class_type") != "LoadImage"
+            or not isinstance(node.get("inputs"), dict)):
+        raise ValueError("ComfyUI history reference node is invalid")
+    image = node["inputs"].get("image")
+    if not isinstance(image, str) or not image or Path(image).name != image:
+        raise ValueError("ComfyUI history reference filename is invalid")
+    return image
+
+
+def _history_output_names(entry: dict) -> set[str]:
+    outputs = entry.get("outputs")
+    if not isinstance(outputs, dict):
+        raise ValueError("ComfyUI history outputs are invalid")
+    names = set()
+    for node_output in outputs.values():
+        if not isinstance(node_output, dict):
+            continue
+        for items in node_output.values():
+            if not isinstance(items, list):
+                continue
+            for item in items:
+                if not isinstance(item, dict) or item.get("type") != "output":
+                    continue
+                filename = item.get("filename")
+                subfolder = item.get("subfolder", "")
+                if (not isinstance(filename, str) or not filename
+                        or "/" in filename or "\\" in filename
+                        or not isinstance(subfolder, str)):
+                    raise ValueError("ComfyUI history output filename is invalid")
+                if (subfolder and ("\\" in subfolder
+                        or subfolder.startswith("/")
+                        or any(part in {"", ".", ".."}
+                               for part in subfolder.split("/")))):
+                    raise ValueError("ComfyUI history output subfolder is invalid")
+                name = f"{subfolder}/{filename}" if subfolder else filename
+                names.add(name)
+    if not names:
+        raise ValueError("ComfyUI history contains no output files")
+    return names
+
+
+def _h3_history_metadata(prompt_id: str, outputs: list[str]) -> dict:
+    base_url = os.environ.get(
+        "COMFYUI_URL", "http://127.0.0.1:8188").rstrip("/")
+    parsed = urllib.parse.urlsplit(base_url)
+    if (parsed.scheme not in {"http", "https"} or not parsed.netloc
+            or parsed.username or parsed.password or parsed.query or parsed.fragment):
+        raise ValueError("COMFYUI_URL must be an http(s) URL without credentials")
+    encoded_id = urllib.parse.quote(prompt_id, safe="")
+    request = urllib.request.Request(
+        f"{base_url}/history/{encoded_id}",
+        headers={"Accept": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            payload = json.load(response)
+    except (OSError, TimeoutError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise ValueError("could not read authoritative ComfyUI history") from exc
+    if not isinstance(payload, dict) or not isinstance(payload.get(prompt_id), dict):
+        raise ValueError("ComfyUI history does not contain the archived prompt")
+    entry = payload[prompt_id]
+    status = entry.get("status")
+    if (not isinstance(status, dict) or status.get("completed") is not True
+            or status.get("status_str") != "success"):
+        raise ValueError("ComfyUI history prompt is not successfully completed")
+    prompt_record = entry.get("prompt")
+    if (not isinstance(prompt_record, list) or len(prompt_record) < 3
+            or prompt_record[1] != prompt_id or not isinstance(prompt_record[2], dict)):
+        raise ValueError("ComfyUI history prompt graph is invalid")
+    graph = prompt_record[2]
+    archived_outputs = set()
+    for output in outputs:
+        if (not isinstance(output, str) or not output or "\\" in output
+                or output.startswith("/")
+                or any(part in {"", ".", ".."} for part in output.split("/"))):
+            raise ValueError("web generation output path is invalid")
+        archived_outputs.add(output)
+    if not archived_outputs <= _history_output_names(entry):
+        raise ValueError("archived output does not belong to the ComfyUI prompt")
+
+    condition = _history_node(graph, "MiniMaxH3ReferenceToVideo")
+    if condition is not None:
+        recipe, mode = "h3-ref2va", "r2v"
+    else:
+        condition = _history_node(graph, "MiniMaxH3ImageToVideo")
+        if condition is None:
+            raise ValueError("ComfyUI history does not contain an H3 graph")
+        inputs = condition[1]
+        if "last_frame" in inputs:
+            recipe, mode = "h3-fl2va", "fl2va"
+        elif "first_frame" in inputs:
+            recipe, mode = "h3-i2va", "i2va"
+        else:
+            recipe, mode = "h3-t2va", "t2va"
+    inputs = condition[1]
+    prompt = inputs.get("prompt")
+    if not isinstance(prompt, str):
+        raise ValueError("ComfyUI history H3 prompt is invalid")
+    width = _history_integer(inputs.get("width"), "width", 1, 16_384)
+    height = _history_integer(inputs.get("height"), "height", 1, 16_384)
+    length = _history_integer(inputs.get("length"), "length", 1, 1_000_000)
+
+    noise = _history_node(graph, "RandomNoise")
+    scheduler = _history_node(graph, "BasicScheduler")
+    video = _history_node(graph, "CreateVideo")
+    if noise is None or scheduler is None or video is None:
+        raise ValueError("ComfyUI history H3 execution nodes are incomplete")
+    seed = _history_integer(
+        noise[1].get("noise_seed"), "seed", 0, 2 ** 64 - 1)
+    steps = _history_integer(scheduler[1].get("steps"), "steps", 1, 10_000)
+    fps = _history_integer(video[1].get("fps"), "fps", 1, 1_000)
+
+    accel_nodes = [
+        class_type for class_type in (
+            "MiniMaxH3FusedModulation", "MiniMaxH3ChunkFeedForward")
+        if ((node := _history_node(graph, class_type)) is not None
+            and node[1].get("enabled") is True)
+    ]
+    references = []
+    if mode == "r2v":
+        prefix = "ref_images.ref_image_"
+        indexed = []
+        for key, link in inputs.items():
+            if key.startswith(prefix) and key[len(prefix):].isdigit():
+                indexed.append((int(key[len(prefix):]), link))
+        references = [
+            _history_reference(graph, link)
+            for _index, link in sorted(indexed)
+        ]
+    else:
+        references = [
+            _history_reference(graph, inputs[key])
+            for key in ("first_frame", "last_frame") if key in inputs
+        ]
+
+    return {
+        "prompt_id": prompt_id,
+        "kind": "video",
+        "recipe": recipe,
+        "mode": mode,
+        "width": width,
+        "height": height,
+        "mp": round(width * height / 1_000_000, 3),
+        "length": length,
+        "duration_sec": round(length / fps, 3),
+        "fps": fps,
+        "seed": seed,
+        "steps": steps,
+        "accel": len(accel_nodes) == 2,
+        "accel_nodes": accel_nodes,
+        "references": references,
+        "upscale": False,
+        "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+    }
+
+
+def _web_generation_metadata(project: str, clip_id: str, outputs: list[str],
+                             metadata: dict) -> dict:
+    if os.environ.get("HERMES_STUDIO_JOB_KIND", "") != "generate":
+        return metadata
+    if (os.environ.get("HERMES_STUDIO_PROJECT") != project
+            or os.environ.get("HERMES_STUDIO_CLIP") != clip_id):
+        raise ValueError("web generation archive target does not match its job")
+    prompt_id = metadata.get("prompt_id")
+    if not isinstance(prompt_id, str) or not prompt_id:
+        raise ValueError("web generation archive requires a prompt_id")
+    job_id = os.environ.get("HERMES_STUDIO_JOB_ID", "")
+    if not job_id:
+        raise ValueError("web generation archive requires a Studio job id")
+    authoritative = _h3_history_metadata(prompt_id, outputs)
+    return {
+        **metadata,
+        **authoritative,
+        "studio_job_id": job_id,
+    }
+
+
 def archive_outputs(root: Path, project: str, clip_id: str,
                     outputs: list[str], metadata: dict | None = None,
                     source_root: Path | None = None,
@@ -2319,6 +2521,8 @@ def archive_outputs(root: Path, project: str, clip_id: str,
                     prompt_text: str | None = None) -> Path:
     """Archive outputs beneath one exact clip from one trusted source root."""
     clip = clip_path(root, project, clip_id)
+    archive_metadata = _web_generation_metadata(
+        project, clip_id, outputs, dict(metadata or {}))
     output_root = Path(os.path.abspath(
         os.path.expanduser(os.fspath(source_root or COMFY_OUTPUT))))
     with ExitStack() as source_descriptors:
@@ -2369,6 +2573,12 @@ def archive_outputs(root: Path, project: str, clip_id: str,
                     read_project_text(clip, "current_prompt.txt", required=True)
                     if prompt_text is None else prompt_text.rstrip() + "\n"
                 )
+                expected_prompt_hash = archive_metadata.get("prompt_sha256")
+                if (expected_prompt_hash is not None
+                        and hashlib.sha256(archived_prompt.encode("utf-8")).hexdigest()
+                        != expected_prompt_hash):
+                    raise ValueError(
+                        "archived prompt does not match the ComfyUI history")
                 (staging / "prompt.txt").write_text(
                     archived_prompt, encoding="utf-8")
                 settings_path = clip / "current_generation.json"
@@ -2384,7 +2594,7 @@ def archive_outputs(root: Path, project: str, clip_id: str,
                         "current generation settings are not a regular clip file"
                     ) from exc
                 meta = {
-                    **(metadata or {}),
+                    **archive_metadata,
                     "generated": _dt.datetime.now().isoformat(timespec="seconds"),
                     "transport": transport,
                     "files": copied,

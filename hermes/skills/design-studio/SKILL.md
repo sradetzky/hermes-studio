@@ -75,8 +75,12 @@ concurrently.
    pending/running, call the same wait action again. Never approximate waiting
    with `sleep`, terminal timeout calls, or manually spaced queue/history polls.
    Never start another job while one is running.
-6. On success, archive output with `design_studio.py archive-output` and the
-   same exact project + clip IDs. If the configured ComfyUI root is itself a
+6. On success, archive output with `design_studio.py archive-output`, the exact
+   `prompt_id`, and the same exact project + clip IDs. Web Generate jobs derive
+   seed, canvas, frames, FPS, steps, acceleration nodes, ordered references, and
+   prompt hash from authoritative ComfyUI history at the archive boundary; an
+   incomplete or mismatched archive must fail rather than publish partial metadata.
+   If the configured ComfyUI root is itself a
    symlink and the safe-filesystem guard rejects it, do not copy manually:
    import `scripts/design_studio.py` and call `archive_outputs(...)` with the
    canonical real output directory as `source_root` plus a relative output

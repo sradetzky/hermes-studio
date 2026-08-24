@@ -354,6 +354,151 @@ class ProjectPathTests(unittest.TestCase):
         self.assertEqual(
             json.loads((generation / "settings.json").read_text()), settings)
 
+    def test_web_generation_archive_uses_authoritative_history_metadata(self):
+        comfy_output = Path(self.temp.name) / "web-comfy-output"
+        (comfy_output / "video").mkdir(parents=True)
+        output = comfy_output / "video" / "result.mp4"
+        output.write_bytes(b"video")
+        clip = self.project / "clips" / "clip-001"
+        prompt = "A complete 10-second prompt"
+        ds.write_prompt(self.root, self.project.name, "clip-001", prompt)
+        archived_prompt = prompt + "\n"
+        (clip / "current_generation.json").write_text(
+            json.dumps({"seed": None, "steps": 8}) + "\n", encoding="utf-8")
+        prompt_id = "prompt-123"
+        graph = {
+            "ref-1": {
+                "class_type": "LoadImage",
+                "inputs": {"image": "first.png"},
+            },
+            "ref-2": {
+                "class_type": "LoadImage",
+                "inputs": {"image": "second.png"},
+            },
+            "cond": {
+                "class_type": "MiniMaxH3ReferenceToVideo",
+                "inputs": {
+                    "prompt": archived_prompt,
+                    "width": 1280,
+                    "height": 704,
+                    "length": 243,
+                    "ref_images.ref_image_0": ["ref-1", 0],
+                    "ref_images.ref_image_1": ["ref-2", 0],
+                },
+            },
+            "noise": {
+                "class_type": "RandomNoise",
+                "inputs": {"noise_seed": 1338023213352416},
+            },
+            "scheduler": {
+                "class_type": "BasicScheduler",
+                "inputs": {"steps": 8},
+            },
+            "fused": {
+                "class_type": "MiniMaxH3FusedModulation",
+                "inputs": {"enabled": True},
+            },
+            "chunk": {
+                "class_type": "MiniMaxH3ChunkFeedForward",
+                "inputs": {"enabled": True},
+            },
+            "video": {
+                "class_type": "CreateVideo",
+                "inputs": {"fps": 24.0},
+            },
+        }
+        history = {
+            prompt_id: {
+                "prompt": [1, prompt_id, graph, {}, ["save"]],
+                "status": {"completed": True, "status_str": "success"},
+                "outputs": {
+                    "save": {"images": [{
+                        "filename": output.name,
+                        "subfolder": "video",
+                        "type": "output",
+                    }]},
+                },
+            },
+        }
+        environment = {
+            "HERMES_STUDIO_JOB_KIND": "generate",
+            "HERMES_STUDIO_JOB_ID": "job-123",
+            "HERMES_STUDIO_PROJECT": self.project.name,
+            "HERMES_STUDIO_CLIP": "clip-001",
+            "COMFYUI_URL": "http://127.0.0.1:8188",
+        }
+        with (
+            patch.dict(os.environ, environment),
+            patch(
+                "scripts.design_studio.urllib.request.urlopen",
+                return_value=closing(StringIO(json.dumps(history))),
+            ) as fetch,
+        ):
+            generation = ds.archive_outputs(
+                self.root,
+                self.project.name,
+                "clip-001",
+                ["video/result.mp4"],
+                {
+                    "prompt_id": prompt_id,
+                    "kind": "video",
+                    "seed": 1,
+                    "width": 32,
+                },
+                source_root=comfy_output,
+            )
+
+        meta = json.loads((generation / "meta.json").read_text())
+        self.assertEqual(
+            fetch.call_args.args[0].full_url,
+            f"http://127.0.0.1:8188/history/{prompt_id}",
+        )
+        self.assertEqual(meta["studio_job_id"], "job-123")
+        self.assertEqual(meta["recipe"], "h3-ref2va")
+        self.assertEqual(meta["mode"], "r2v")
+        self.assertEqual((meta["width"], meta["height"]), (1280, 704))
+        self.assertEqual(meta["mp"], 0.901)
+        self.assertEqual(meta["length"], 243)
+        self.assertEqual(meta["duration_sec"], 10.125)
+        self.assertEqual(meta["fps"], 24)
+        self.assertEqual(meta["seed"], 1338023213352416)
+        self.assertEqual(meta["steps"], 8)
+        self.assertTrue(meta["accel"])
+        self.assertEqual(meta["accel_nodes"], [
+            "MiniMaxH3FusedModulation",
+            "MiniMaxH3ChunkFeedForward",
+        ])
+        self.assertEqual(meta["references"], ["first.png", "second.png"])
+        self.assertEqual(
+            meta["prompt_sha256"],
+            hashlib.sha256(archived_prompt.encode()).hexdigest(),
+        )
+        self.assertFalse(meta["upscale"])
+
+    def test_web_generation_archive_rejects_missing_history_identity(self):
+        comfy_output = Path(self.temp.name) / "web-missing-history"
+        comfy_output.mkdir()
+        (comfy_output / "result.mp4").write_bytes(b"video")
+        environment = {
+            "HERMES_STUDIO_JOB_KIND": "generate",
+            "HERMES_STUDIO_PROJECT": self.project.name,
+            "HERMES_STUDIO_CLIP": "clip-001",
+        }
+        with (
+            patch.dict(os.environ, environment),
+            self.assertRaisesRegex(ValueError, "requires a prompt_id"),
+        ):
+            ds.archive_outputs(
+                self.root,
+                self.project.name,
+                "clip-001",
+                ["result.mp4"],
+                {"kind": "video"},
+                source_root=comfy_output,
+            )
+        generations = self.project / "clips" / "clip-001" / "generations"
+        self.assertEqual(list(generations.iterdir()), [])
+
     def _assert_archive_swap_at_open_is_rejected(self, filename, source, outside):
         real_open = os.open
         swapped = False

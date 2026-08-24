@@ -7,6 +7,13 @@ preview and production releases.
 
 ## [Unreleased]
 
+### Fixed
+
+- Web-triggered H3 archives now recover actual seed, canvas, timing, steps,
+  acceleration nodes, ordered references, and prompt hash from authoritative
+  ComfyUI history; incomplete or mismatched execution metadata fails closed
+  instead of publishing a partial take record
+
 ## [0.1.0-preview.2] - 2026-08-24
 
 ### Added

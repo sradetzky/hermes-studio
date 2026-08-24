@@ -1,7 +1,7 @@
 # PLAN.md — Hermes Studio
 
 **Status**: `v0.1.0-preview.2` released with web M4.2–M4.6 and the real
-clip-bound H3 E2E complete. Next: side-by-side take-comparison design.
+clip-bound H3 E2E complete. Next: project-level selected-take movie assembly.
 **Owner**: Sven (local setup on RTX 5060 Ti 16GB)  
 **Updated**: 2026-08-24
 **Goal**: Fully local, agent-orchestrated creative studio centered on MiniMax H3 + Hermes, with a simple self-hosted web UI.
@@ -188,6 +188,19 @@ project/clip chat scope and exact IDs.
 - [x] Re-run desktop and narrow-browser release gates, synchronize current docs,
   and cut `v0.1.0-preview.2` only after both slices are verified
 
+### Phase 5 – Project movie assembly (next)
+- [ ] Add project-level assembly readiness for all enabled clips in manifest order;
+  block and identify every enabled clip without one valid selected video take
+- [ ] Add an explicit **Export selected takes as movie** project action that runs
+  as one visible asynchronous job and never starts implicitly
+- [ ] Join selected takes with hard cuts into one MP4, preserving compatible
+  streams and applying deterministic normalization only when source media differs
+- [ ] Publish every export without overwrite under the project's `final/` area,
+  together with a provenance manifest containing exact ordered clip/take sources
+- [ ] Expose completed project movies in Media for playback and download
+- [ ] Keep trimming, transitions, timeline editing, and side-by-side take
+  comparison outside this phase
+
 ---
 
 ## 4. Non-Goals (for now)
@@ -199,7 +212,7 @@ project/clip chat scope and exact IDs.
 
 ---
 
-## 5. Resolved Decisions and Post-v1 Roadmap
+## 5. Resolved Decisions and Roadmap
 
 Resolved; these are no longer open questions:
 
@@ -210,11 +223,12 @@ Resolved; these are no longer open questions:
 - The archive path allocates the next exact clip-local `generations/NNN/`
   directory. Agents do not choose or guess generation numbers.
 
-Post-v1 candidates, not current commitments:
+Later candidates, not current commitments:
 
-1. Side-by-side take comparison.
-2. Selected-take assembly/export; a timeline UI remains outside v1.
-3. Shared character-library tooling.
+1. Shared character-library tooling.
+2. Side-by-side take comparison, deferred until real projects routinely need to
+   compare several viable takes.
+3. Timeline editing, trimming, and transitions.
 
 No unresolved architecture question blocks preview release closure.
 

@@ -247,6 +247,8 @@ class StudioManagerTests(WebAppTestCase):
         self.assertIn("Explicit user-authorized web generation", query)
         self.assertIn('"action": "generate-current-prompt"', query)
         self.assertIn('"width": 832', query)
+        self.assertIn("exact prompt_id", query)
+        self.assertIn("authoritative ComfyUI history", query)
         self.assertEqual(
             manager._job_environment(job)["HERMES_STUDIO_JOB_KIND"], "generate")
         (clip / "current_prompt.txt").write_text("changed 5-second prompt\n")

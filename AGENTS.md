@@ -135,7 +135,11 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
   a compact 24px header and direct scrolling for long prompt text.
 - `v0.1.0-preview.2` passed local correctness, dependency, trust-boundary,
   profile-drift, desktop/narrow Chromium, clean-archive, and checksum gates.
+- Web-triggered H3 archives now derive execution metadata from authoritative
+  ComfyUI history, fail closed on incomplete/mismatched history, and preserve
+  actual seed, canvas, timing, steps, acceleration, references, and prompt hash.
 
 ## Next steps
 
-- [ ] Side-by-side take-comparison design and acceptance plan
+- [ ] Phase 5: project-level **Export selected takes as movie** with ordered
+  enabled-clip readiness, hard cuts, versioned publication, and exact provenance
