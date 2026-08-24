@@ -233,6 +233,9 @@ auto-chained, and their result never starts a render without a separate request.
   Media navigation, compact header/composer/dialog layouts, keyboard and inert
   state, and playback-preserving real-browser checks at desktop, tablet, and phone
   viewports
+- Preview.2 release gate (done): synchronized public scope, complete local
+  correctness/security/dependency/profile-drift gates, real Chromium desktop and
+  narrow checks, and a clean extracted-archive verification
 
 ## Out of scope (v1)
 

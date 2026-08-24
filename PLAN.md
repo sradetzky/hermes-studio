@@ -1,7 +1,7 @@
 # PLAN.md — Hermes Studio
 
-**Status**: `v0.1.0-preview.1` released; unreleased web M4.2–M4.6 and the
-real clip-bound H3 E2E are complete. Next: preview release closure.
+**Status**: `v0.1.0-preview.2` released with web M4.2–M4.6 and the real
+clip-bound H3 E2E complete. Next: side-by-side take-comparison design.
 **Owner**: Sven (local setup on RTX 5060 Ti 16GB)  
 **Updated**: 2026-08-24
 **Goal**: Fully local, agent-orchestrated creative studio centered on MiniMax H3 + Hermes, with a simple self-hosted web UI.
@@ -172,7 +172,7 @@ project/clip chat scope and exact IDs.
 - [x] Explicit Project/Clip chat scope with isolated transcripts, activity
   cursors, profile sessions, specialist continuity, and lossless project-history migration.
 
-### Phase 4 – Polish (current)
+### Phase 4 – Polish (complete)
 - [x] Media detail/filter/review actions
 - [x] Typed generation settings manifest + prompt readiness/editor panel
 - [x] “Generate with this prompt” button enabled for a ready, revision-matched
@@ -185,8 +185,8 @@ project/clip chat scope and exact IDs.
   filesystem project ID immutable
 - [x] Responsive workspace: retain the desktop three-pane layout and provide
   explicit Projects / Chat / Media navigation on narrow screens
-- [ ] Re-run desktop and narrow-browser release gates, synchronize current docs,
-  and cut the next preview only after both slices are verified
+- [x] Re-run desktop and narrow-browser release gates, synchronize current docs,
+  and cut `v0.1.0-preview.2` only after both slices are verified
 
 ---
 
@@ -231,11 +231,13 @@ Current criteria (met):
   preserving the deliberately pinned `studio-grok` exception.
 - [x] Keep profile personalities and project/clip conversation scopes isolated.
 
-Next-preview criteria:
+`v0.1.0-preview.2` criteria (met):
 
 - [x] Edit a project's display title and brief without renaming its immutable ID.
 - [x] Navigate Projects, Chat, and Media comfortably at desktop and narrow
   viewports without losing the active project, clip, conversation, or playback.
+- [x] Pass the local correctness, trust-boundary, dependency, profile-drift,
+  browser, clean-archive, and checksum release gates.
 
 ---
 

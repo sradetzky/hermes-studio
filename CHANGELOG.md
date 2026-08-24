@@ -7,6 +7,8 @@ preview and production releases.
 
 ## [Unreleased]
 
+## [0.1.0-preview.2] - 2026-08-24
+
 ### Added
 
 - Ordered Project → Clips → Takes hierarchy with immutable clip IDs, enabled
@@ -50,6 +52,13 @@ preview and production releases.
   with a collapsed-by-default, independently scrollable Prompt & generation panel;
   the same panel can now be collapsed on desktop for additional transcript space.
   Reduced its header to 24px and restored direct scrolling inside long prompts
+
+### Preview limitations
+
+- No application authentication or multi-user isolation; tailnet access relies
+  on Tailscale identity and ACL policy
+- No side-by-side take comparison, selected-take assembly, or timeline editor
+- Linux, Hermes Agent, ComfyUI, models, and workflows must be installed separately
 
 ## [0.1.0-preview.1] - 2026-08-23
 
@@ -96,5 +105,6 @@ preview and production releases.
 - Fixed desktop-first three-pane layout
 - Linux, Hermes Agent, ComfyUI, models, and workflows must be installed separately
 
-[Unreleased]: https://github.com/sradetzky/hermes-studio/compare/v0.1.0-preview.1...HEAD
+[Unreleased]: https://github.com/sradetzky/hermes-studio/compare/v0.1.0-preview.2...HEAD
+[0.1.0-preview.2]: https://github.com/sradetzky/hermes-studio/compare/v0.1.0-preview.1...v0.1.0-preview.2
 [0.1.0-preview.1]: https://github.com/sradetzky/hermes-studio/releases/tag/v0.1.0-preview.1

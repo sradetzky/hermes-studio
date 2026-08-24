@@ -48,7 +48,7 @@ class ClipStore:
         try:
             with open_directory(project):
                 pass
-        except (FileNotFoundError, SafeFilesystemError, OSError) as exc:
+        except (FileNotFoundError, SafeFilesystemError, OSError):
             raise ClipStoreError("project must be a regular directory")
         return Path(os.path.abspath(project))
 
@@ -455,7 +455,7 @@ class ClipStore:
             except FileNotFoundError as exc:
                 raise ClipStoreError(
                     f"generation media not found: {filename}") from exc
-            except (SafeFilesystemError, OSError) as exc:
+            except (SafeFilesystemError, OSError):
                 raise ClipStoreError("generations directory is unsafe")
             selected = {"generation": generation_id, "filename": filename}
         elif filename is not None:

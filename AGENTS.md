@@ -9,7 +9,7 @@ Hermes Studio: fully local, agent-orchestrated creative studio.
 Hermes profiles orchestrate → ComfyUI (`~/ComfyUI`, RTX 5060 Ti 16GB) renders
 video (MiniMax H3) and stills (Krea 2) → filesystem (`studio-root/`) is the
 project/media source of truth → SQLite only coordinates web jobs/chat sessions
-→ thin FastAPI web UI (M1–M4.6 complete; preview closure next).
+→ thin FastAPI web UI (`v0.1.0-preview.2`; M1–M4.6 complete).
 
 ## Repo map
 
@@ -133,7 +133,9 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
   desktop-and-mobile collapsible panel that defaults closed on narrow screens;
   expanded narrow prompts are capped so Chat remains the larger workspace, with
   a compact 24px header and direct scrolling for long prompt text.
+- `v0.1.0-preview.2` passed local correctness, dependency, trust-boundary,
+  profile-drift, desktop/narrow Chromium, clean-archive, and checksum gates.
 
 ## Next steps
 
-- [ ] Desktop/narrow browser release gate, synchronized docs, and next preview
+- [ ] Side-by-side take-comparison design and acceptance plan
