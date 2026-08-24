@@ -157,6 +157,8 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
 - Project job enqueue and contract-affecting web mutations now share a descriptor-
   safe coordination lock. Clip/settings changes and take deletion cannot race a
   job into existence between the active-job check and filesystem publication.
+- Selected-take validation and manifest publication now share the canonical
+  project lock, preventing concurrent deletion from leaving dangling provenance.
 
 ## Next steps
 

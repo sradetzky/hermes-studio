@@ -444,19 +444,6 @@ class ClipStore:
             filename = self._component(filename, "generation filename")
             if Path(filename).suffix.lower() not in VIDEO_EXTENSIONS:
                 raise ClipStoreError("selected take must be a video")
-            clip = self.resolve_clip(project, clip_id)
-            generations = clip / "generations"
-            try:
-                with open_directory(generations) as generations_fd:
-                    with open_directory_at(
-                            generations_fd, generation_id) as generation_fd:
-                        with open_regular_file_at(generation_fd, filename):
-                            pass
-            except FileNotFoundError as exc:
-                raise ClipStoreError(
-                    f"generation media not found: {filename}") from exc
-            except (SafeFilesystemError, OSError):
-                raise ClipStoreError("generations directory is unsafe")
             selected = {"generation": generation_id, "filename": filename}
         elif filename is not None:
             raise ClipStoreError("filename requires a generation id")
@@ -469,6 +456,23 @@ class ClipStore:
                 raise ClipNotFoundError(f"clip not found: {clip_id}")
             if selected is not None and not entry["enabled"]:
                 raise ClipStoreError("cannot select a take for a disabled clip")
+            if selected is not None:
+                clip = self._resolve_clip_directory(project, clip_id)
+                generations = clip / "generations"
+                try:
+                    with open_directory(generations) as generations_fd:
+                        with open_directory_at(
+                                generations_fd,
+                                selected["generation"]) as generation_fd:
+                            with open_regular_file_at(
+                                    generation_fd, selected["filename"]):
+                                pass
+                except FileNotFoundError as exc:
+                    raise ClipStoreError(
+                        "generation media not found: "
+                        f"{selected['filename']}") from exc
+                except (SafeFilesystemError, OSError):
+                    raise ClipStoreError("generations directory is unsafe")
             entry["selected_take"] = selected
             self._write_manifest_unlocked(project, manifest)
         return entry

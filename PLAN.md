@@ -200,7 +200,7 @@ project/clip chat scope and exact IDs.
 - [x] Traverse the exact output-producing ComfyUI graph branch when deriving
   authoritative execution metadata; reject disconnected or ambiguous nodes.
 - [x] Prevent active project jobs from racing clip/settings mutations.
-- [ ] Validate and publish selected-take provenance under one project lock.
+- [x] Validate and publish selected-take provenance under one project lock.
 - [ ] Bind review-action idempotency to source and target content identity rather
   than filenames alone.
 - [ ] Give project/take dialogs and chat/queue requests immutable request context;

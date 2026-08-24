@@ -33,6 +33,8 @@ preview and production releases.
 - Serialized project job enqueue against project metadata, clip creation/order/
   metadata, generation-settings writes, and take deletion; active-job mutations
   now return `409` without a check/enqueue race window
+- Made selected-take publication atomic with descriptor-safe source validation
+  under the project lock, preventing concurrent deletion from dangling selection
 - Web-triggered H3 archives now recover actual seed, canvas, timing, steps,
   acceleration nodes, ordered references, and prompt hash from authoritative
   ComfyUI history; incomplete or mismatched execution metadata fails closed

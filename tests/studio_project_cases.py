@@ -55,6 +55,59 @@ class ProjectPathTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ClipStoreError):
                 ds.clip_path(self.root, self.project.name, value)
 
+    def test_select_take_serializes_media_validation_with_deletion(self):
+        store = ClipStore()
+        generation = (
+            self.project / "clips" / "clip-001" / "generations" / "001")
+        generation.mkdir()
+        (generation / "take.mp4").write_bytes(b"video")
+        validation_started = threading.Event()
+        continue_validation = threading.Event()
+        deletion_finished = threading.Event()
+        errors = []
+        real_open = clip_store.open_regular_file_at
+
+        def pause_validation(*args, **kwargs):
+            validation_started.set()
+            if not continue_validation.wait(timeout=2):
+                raise RuntimeError("selection validation was not released")
+            return real_open(*args, **kwargs)
+
+        def select():
+            try:
+                store.select_take(
+                    self.project, "clip-001", "001", "take.mp4")
+            except Exception as exc:
+                errors.append(exc)
+
+        def delete():
+            try:
+                store.delete_take(self.project, "clip-001", "001")
+            except Exception as exc:
+                errors.append(exc)
+            finally:
+                deletion_finished.set()
+
+        with patch.object(
+                clip_store, "open_regular_file_at",
+                side_effect=pause_validation):
+            selector = threading.Thread(target=select)
+            selector.start()
+            self.assertTrue(validation_started.wait(timeout=1))
+            deleter = threading.Thread(target=delete)
+            deleter.start()
+            self.assertFalse(deletion_finished.wait(timeout=0.1))
+            continue_validation.set()
+            selector.join(timeout=2)
+            deleter.join(timeout=2)
+
+        self.assertFalse(selector.is_alive())
+        self.assertFalse(deleter.is_alive())
+        self.assertEqual(errors, [])
+        self.assertIsNone(
+            store.describe(self.project)["clips"][0]["selected_take"])
+        self.assertFalse(generation.exists())
+
     def test_rejects_path_traversal(self):
         for value in ("../outside", "foo/bar", ".", ".."):
             with self.subTest(value=value), self.assertRaises(ValueError):

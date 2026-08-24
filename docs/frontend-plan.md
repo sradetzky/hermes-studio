@@ -215,6 +215,8 @@ auto-chained, and their result never starts a render without a separate request.
 - Project metadata, clip creation/order/title/enabled state, generation settings,
   and take deletion share a project job-coordination lock with enqueue. Mutations
   return `409` once a project job exists and cannot pass a check/enqueue TOCTOU gap.
+- Selected-take media validation and manifest publication run under the same
+  project lock, so a concurrent take deletion cannot publish a dangling selection.
 - No auth v1; Uvicorn remains loopback-only, while optional tailnet access relies
   on Tailscale identity/ACLs plus the exact-host and same-origin guards above.
 
