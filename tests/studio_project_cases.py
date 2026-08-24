@@ -33,6 +33,43 @@ class ProjectPathTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    def test_runtime_paths_ignore_profile_isolated_home(self):
+        root = Path(self.temp.name)
+        real_home = root / "real-home"
+        profile = root / ".hermes" / "profiles" / "studio"
+        environment = {
+            **os.environ,
+            "HOME": str(profile / "home"),
+            "HERMES_REAL_HOME": str(real_home),
+            "HERMES_HOME": str(profile),
+        }
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import json; from scripts import design_studio as ds; "
+                "print(json.dumps({"
+                "'runner': str(ds.RUN_H3), "
+                "'comfy': str(ds.COMFY_ROOT), "
+                "'grok': str(ds.GROK_IMAGE_OUTPUT)}))",
+            ],
+            cwd=ds.REPO_ROOT,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        paths = json.loads(result.stdout)
+        self.assertEqual(
+            paths["runner"],
+            str(profile / "skills/minimax-h3-run/scripts/run_h3.py"),
+        )
+        self.assertEqual(paths["comfy"], str(real_home / "ComfyUI"))
+        self.assertEqual(
+            paths["grok"],
+            str(root / ".hermes/profiles/studio-grok/cache/images"),
+        )
+
     def test_requires_exact_project_id(self):
         self.assertEqual(ds.project_path(self.root, self.project.name), self.project)
         self.assertTrue((self.project / "research").is_dir())

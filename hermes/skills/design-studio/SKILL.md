@@ -12,14 +12,21 @@ they are not the normal Studio transport.
 
 ## Repo & Paths
 
-- Repo: `~/repos/hermes-studio/` (see `PLAN.md` + `AGENTS.md` there)
-- Core tool: `~/repos/hermes-studio/scripts/design_studio.py` (library + CLI)
-- Studio root: `$DESIGN_STUDIO_ROOT` or `~/repos/hermes-studio/studio-root/`
-- H3 graph builder: `~/.hermes/skills/minimax-h3-run/scripts/run_h3.py`
-  (handoffs fall back to `~/Documents/MinimaxH3/`)
-- Krea 2 graph builder: `~/repos/hermes-studio/scripts/krea2_image.py`
+- `$HERMES_HOME` is the active profile root; use it for Hermes skills and state.
+- `$HERMES_REAL_HOME` is the OS account home; use it for repos, ComfyUI, and
+  Documents. Never derive either root from `$HOME` or `~`, which Hermes may
+  isolate under a profile.
+- Repo: `$HERMES_REAL_HOME/repos/hermes-studio/` (see `PLAN.md` + `AGENTS.md`)
+- Core tool: `$HERMES_REAL_HOME/repos/hermes-studio/scripts/design_studio.py`
+  (library + CLI)
+- Studio root: `$DESIGN_STUDIO_ROOT` or
+  `$HERMES_REAL_HOME/repos/hermes-studio/studio-root/`
+- H3 graph builder: `$HERMES_HOME/skills/minimax-h3-run/scripts/run_h3.py`
+  (handoffs fall back to `$HERMES_REAL_HOME/Documents/MinimaxH3/`)
+- Krea 2 graph builder:
+  `$HERMES_REAL_HOME/repos/hermes-studio/scripts/krea2_image.py`
 - ComfyUI transport: pinned `comfyui-mcp@0.52.61` on the `studio` profile
-- ComfyUI root: `~/ComfyUI`
+- ComfyUI root: `$HERMES_REAL_HOME/ComfyUI`
 
 ## Folder contract (source of truth — never invent structure)
 
@@ -34,17 +41,17 @@ they are not the normal Studio transport.
 ## Filesystem CLI
 
 ```bash
-python3 ~/repos/hermes-studio/scripts/design_studio.py create-project <name> "brief..."
-python3 ~/repos/hermes-studio/scripts/design_studio.py list-projects
-python3 ~/repos/hermes-studio/scripts/design_studio.py list-clips <project-id>
-python3 ~/repos/hermes-studio/scripts/design_studio.py create-clip <project-id> "<title>"
-python3 ~/repos/hermes-studio/scripts/design_studio.py write-prompt \
+python3 "$HERMES_REAL_HOME/repos/hermes-studio/scripts/design_studio.py" create-project <name> "brief..."
+python3 "$HERMES_REAL_HOME/repos/hermes-studio/scripts/design_studio.py" list-projects
+python3 "$HERMES_REAL_HOME/repos/hermes-studio/scripts/design_studio.py" list-clips <project-id>
+python3 "$HERMES_REAL_HOME/repos/hermes-studio/scripts/design_studio.py" create-clip <project-id> "<title>"
+python3 "$HERMES_REAL_HOME/repos/hermes-studio/scripts/design_studio.py" write-prompt \
   <project-id> <clip-id> "<structured prompt>"
-python3 ~/repos/hermes-studio/scripts/design_studio.py append-chat <project-id> user "..."
-python3 ~/repos/hermes-studio/scripts/design_studio.py append-chat \
+python3 "$HERMES_REAL_HOME/repos/hermes-studio/scripts/design_studio.py" append-chat <project-id> user "..."
+python3 "$HERMES_REAL_HOME/repos/hermes-studio/scripts/design_studio.py" append-chat \
   <project-id> user "..." --clip <clip-id>
 # after an MCP job completes:
-python3 ~/repos/hermes-studio/scripts/design_studio.py archive-output \
+python3 "$HERMES_REAL_HOME/repos/hermes-studio/scripts/design_studio.py" archive-output \
   <project-id> <clip-id> <comfy-output-file> \
   --prompt-id <id> --kind image --recipe krea2-edit
 ```
@@ -120,7 +127,7 @@ Use `studio-grok` for xAI-backed current web research, read-only X/Twitter
 search, or Grok Imagine generation/editing:
 
 ```bash
-python3 ~/repos/hermes-studio/scripts/design_studio.py dispatch-grok \
+python3 "$HERMES_REAL_HOME/repos/hermes-studio/scripts/design_studio.py" dispatch-grok \
   <project-id> "<self-contained research or image task>"
 ```
 
@@ -132,7 +139,7 @@ switching and never has comfyui-mcp/GPU ownership.
 If Grok returns an accepted local Imagine cache path, archive it with:
 
 ```bash
-python3 ~/repos/hermes-studio/scripts/design_studio.py archive-grok \
+python3 "$HERMES_REAL_HOME/repos/hermes-studio/scripts/design_studio.py" archive-grok \
   <project-id> <clip-id> <absolute-image-path> --meta-json '{"prompt":"..."}'
 ```
 
@@ -145,9 +152,9 @@ The `studio` orchestrator can run one serialized, persistent handoff to a local
 specialist profile:
 
 ```bash
-python3 ~/repos/hermes-studio/scripts/design_studio.py dispatch-profile \
+python3 "$HERMES_REAL_HOME/repos/hermes-studio/scripts/design_studio.py" dispatch-profile \
   <project-id> studio-storyboarder "<self-contained shot-planning task>"
-python3 ~/repos/hermes-studio/scripts/design_studio.py dispatch-profile \
+python3 "$HERMES_REAL_HOME/repos/hermes-studio/scripts/design_studio.py" dispatch-profile \
   <project-id> studio-prompt-engineer "Convert storyboard.md into the official H3 prompt"
 ```
 

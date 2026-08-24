@@ -173,6 +173,8 @@ class StudioManagerTests(WebAppTestCase):
             "Conversation scope: project chat",
             manager._agent_query(project_job),
         )
+        self.assertIn("use $HERMES_HOME", manager._agent_query(project_job))
+        self.assertIn("use $HERMES_REAL_HOME", manager._agent_query(project_job))
         project_environment = manager._job_environment(project_job)
         self.assertEqual(project_environment["HERMES_STUDIO_CLIP"], "")
         self.assertEqual(project_environment["HERMES_STUDIO_CLIP_PATH"], "")
@@ -188,6 +190,7 @@ class StudioManagerTests(WebAppTestCase):
         self.assertIsNone(
             store.get_session(project.name, clip_id="clip-001"))
         self.assertIn("Active clip ID: clip-001", manager._agent_query(clip_job))
+        self.assertIn("Do not derive either root from $HOME", manager._agent_query(clip_job))
 
         project_rows = [json.loads(line) for line in
                         (project / "chat.jsonl").read_text().splitlines()]

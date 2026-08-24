@@ -577,6 +577,11 @@ class StudioJobManager:
 
     def _agent_query(self, job: Job) -> str:
         project_path = self.settings.studio_root / "projects" / job.project
+        path_context = (
+            "Path roots: use $HERMES_HOME for active-profile Hermes data and "
+            "skills; use $HERMES_REAL_HOME for account files such as ComfyUI, "
+            "Documents, and repos. Do not derive either root from $HOME or `~`.\n"
+        )
         if job.chat_scope == "project":
             target_context = (
                 f"This migrated project-scope job explicitly targets clip "
@@ -584,6 +589,7 @@ class StudioJobManager:
                 if job.clip_id else "There is no active clip.\n")
             return (
                 "Exact Studio context (do not guess or fuzzy-match paths):\n"
+                f"{path_context}"
                 f"Project ID: {job.project}\n"
                 f"Project path: {project_path}\n"
                 f"Conversation scope: project chat. {target_context}"
@@ -595,6 +601,7 @@ class StudioJobManager:
         clip_path = project_path / "clips" / job.clip_id
         context = (
             "Exact Studio context (do not guess or fuzzy-match paths):\n"
+            f"{path_context}"
             f"Project ID: {job.project}\n"
             f"Project path: {project_path}\n"
             f"Active clip ID: {job.clip_id}\n"

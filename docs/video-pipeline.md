@@ -5,10 +5,15 @@ comfyui-mcp.
 
 ## Graph builder
 
-`~/.hermes/skills/minimax-h3-run/scripts/run_h3.py`
+`$HERMES_HOME/skills/minimax-h3-run/scripts/run_h3.py`
 - Modes: t2va / i2va / fl2va / r2v
-- `--handoff` resolves against `~/Documents/MinimaxH3/` archive fallback
+- `--handoff` resolves against
+  `$HERMES_REAL_HOME/Documents/MinimaxH3/` archive fallback
 - Builds the ComfyUI graph itself; `comfyui/workflows/` here is optional
+
+Hermes profile tools may isolate `$HOME`. Studio therefore uses `$HERMES_HOME`
+for active-profile skills and `$HERMES_REAL_HOME` for the account's ComfyUI,
+Documents, and repository paths; raw `~` is not a stable root.
 
 Studio builds with `run_h3.py --dry-run`, uploads refs and enqueues through
 MCP, archives with `design_studio.py archive-output` using exact project + clip

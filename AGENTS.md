@@ -180,6 +180,9 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
 - Phase 5 passed the complete 211-test Python and 18-test frontend/Chromium suites,
   compilation, dependency, profile-drift, CSS, clean-archive, live service/API,
   desktop, and narrow-browser gates.
+- Studio path resolution now survives Hermes profile HOME isolation: profile
+  skills use `HERMES_HOME`, user resources use `HERMES_REAL_HOME`, and Studio
+  terminal jobs use explicit real-home mode.
 
 ## Next steps
 

@@ -40,6 +40,9 @@ Folder structure on disk (source of truth for projects & media)
 - Use official Hermes **Profiles** feature.
 - Main profile remains everyday use.
 - New profile `studio` for the Design Studio agent (own SOUL.md, own memory, own sessions).
+- Studio uses Hermes `terminal.home_mode: real`; profile skills/state resolve
+  from `$HERMES_HOME`, while account repos, ComfyUI, and Documents resolve from
+  `$HERMES_REAL_HOME` rather than the potentially isolated `$HOME`.
 - Specialist profile `studio-grok`: Grok 4.6 backup for xAI web/X research and
   Grok Imagine; excluded from fleet model switching and local GPU ownership.
 - **Model switching strategy**: The local Studio fleet switches together through

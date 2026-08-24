@@ -36,6 +36,11 @@ hermes -p studio-storyboarder chat -q "Plan shots for project X: ..."
 # long work — background via terminal tool, or tmux for interactive
 ```
 
+The local Studio orchestrator is configured with `terminal.home_mode: real` so
+host paths remain stable even when container detection sees unrelated Docker
+mounts. Scripts still use `$HERMES_HOME` for profile data/skills and
+`$HERMES_REAL_HOME` for account files; do not construct either from `~`.
+
 ## Model switching
 
 The local production fleet shares one model/provider and switches together:

@@ -7,6 +7,12 @@ preview and production releases.
 
 ## [Unreleased]
 
+### Fixed
+
+- Made Studio profile jobs and legacy H3 runner paths robust to Hermes profile
+  HOME isolation: active-profile skills use `$HERMES_HOME`, account files use
+  `$HERMES_REAL_HOME`, and the Studio profile forces real-home terminal mode
+
 ## [0.1.0-preview.3] - 2026-08-24
 
 ### Changed

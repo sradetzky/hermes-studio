@@ -67,12 +67,22 @@ from webapp.safe_files import (
     verify_absolute_directory_identity,
 )
 
-RUN_H3 = Path.home() / ".hermes/skills/minimax-h3-run/scripts/run_h3.py"
+REAL_HOME = Path(os.environ.get("HERMES_REAL_HOME", Path.home())).expanduser()
+HERMES_HOME = Path(
+    os.environ.get("HERMES_HOME", REAL_HOME / ".hermes")
+).expanduser()
+HERMES_ROOT = (
+    HERMES_HOME.parent.parent
+    if HERMES_HOME.parent.name == "profiles"
+    else HERMES_HOME
+)
+RUN_H3 = HERMES_HOME / "skills/minimax-h3-run/scripts/run_h3.py"
 KREA2 = Path(__file__).resolve().parent / "krea2_image.py"
-COMFY_ROOT = Path.home() / "ComfyUI"
+COMFY_ROOT = Path(os.environ.get("COMFYUI_PATH", REAL_HOME / "ComfyUI")).expanduser()
 COMFY_OUTPUT = COMFY_ROOT / "output"
-GROK_IMAGE_OUTPUT = (Path.home() / ".hermes" / "profiles" / "studio-grok" /
-                     "cache" / "images")
+GROK_IMAGE_OUTPUT = (
+    HERMES_ROOT / "profiles" / "studio-grok" / "cache" / "images"
+)
 DEFAULT_ROOT = REPO_ROOT / "studio-root"
 DEFAULT_RUNTIME = DEFAULT_ROOT.parent / ".runtime"
 SESSION_ID_RE = re.compile(r"session_id:\s*([A-Za-z0-9_-]+)")
