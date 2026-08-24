@@ -9,9 +9,11 @@
   <script type="module" src="/static/app.js"></script>
 </head>
 <body class="h-screen flex flex-col">
-  <header class="px-4 py-3 border-b border-[#232830] flex items-center gap-3">
-    <span class="font-semibold tracking-wide">Hermes Studio</span>
-    <span class="text-xs text-gray-500" id="status"></span>
+  <header class="app-header px-4 py-3 border-b border-[#232830] flex items-center gap-3">
+    <div class="app-identity">
+      <span class="font-semibold tracking-wide">Hermes Studio</span>
+      <span class="text-xs text-gray-500" id="status"></span>
+    </div>
     <details class="comfy-queue" id="comfy-queue">
       <summary title="ComfyUI execution queue">
         <span class="comfy-queue-dot idle" id="comfy-queue-dot"></span>
@@ -30,8 +32,19 @@
     </div>
   </header>
 
-  <main class="flex-1 grid grid-cols-[220px_1fr_360px] gap-3 p-3 min-h-0">
-    <aside class="panel p-2 overflow-auto">
+  <nav class="workspace-nav" id="workspace-nav" aria-label="Workspace panes">
+    <button class="workspace-nav-button" type="button" data-workspace-pane="projects"
+            aria-controls="workspace-projects" aria-pressed="false">Projects</button>
+    <button class="workspace-nav-button active" type="button" data-workspace-pane="chat"
+            aria-controls="workspace-chat" aria-pressed="true">Chat</button>
+    <button class="workspace-nav-button" type="button" data-workspace-pane="media"
+            aria-controls="workspace-media" aria-pressed="false">Media</button>
+  </nav>
+
+  <main class="workspace flex-1 grid grid-cols-[220px_1fr_360px] gap-3 p-3 min-h-0"
+        id="workspace" data-pane="chat">
+    <aside class="workspace-pane workspace-projects panel p-2 overflow-auto"
+           id="workspace-projects" data-workspace-panel="projects">
       <div class="flex justify-between items-center mb-2 px-1">
         <span class="text-xs uppercase tracking-wider text-gray-500">Projects</span>
         <div class="project-heading-actions">
@@ -53,7 +66,8 @@
       </div>
     </aside>
 
-    <section class="flex flex-col gap-3 min-h-0">
+    <section class="workspace-pane workspace-chat flex flex-col gap-3 min-h-0"
+             id="workspace-chat" data-workspace-panel="chat">
       <div class="panel chat-scope-bar">
         <div class="chat-scope-tabs" role="tablist" aria-label="Conversation scope">
           <button class="chat-scope-tab active" id="clip-chat-scope" type="button"
@@ -102,7 +116,8 @@
       </form>
     </section>
 
-    <aside class="panel p-3 overflow-auto">
+    <aside class="workspace-pane workspace-media panel p-3 overflow-auto"
+           id="workspace-media" data-workspace-panel="media">
       <div class="flex items-center justify-between mb-2">
         <span class="text-xs uppercase tracking-wider text-gray-500">Takes</span>
         <span class="generation-count" id="generation-count"></span>

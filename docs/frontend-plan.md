@@ -39,10 +39,11 @@ no state in the UI that isn't already on disk; minimal dependencies.
 
 ## Layout (single page)
 
-The current implementation is the desktop three-column workspace below. The
-next UI milestone keeps that layout on wide screens and adds explicit
-Projects / Chat / Media pane navigation on narrow screens; it must preserve the
-active project, clip, chat scope, job activity, open dialogs, and media playback.
+Wide screens use the desktop three-column workspace below. At 1099px and below,
+an explicit Projects / Chat / Media selector presents one full-width pane at a
+time, with Chat as the default workspace. Switching panes preserves the active
+project, clip, chat scope, job activity, open dialogs, and media element identity
+instead of rebuilding the DOM or resetting playback.
 
 ```
 ┌──────────┬──────────────────────────────┬────────────┐
@@ -70,6 +71,9 @@ active project, clip, chat scope, job activity, open dialogs, and media playback
   of sanitized recipe/mode, canvas, approximate media length, frames, steps,
   accel, seed, elapsed/waiting time, prompt IDs, and the last exact completed
   duration
+- Narrow workspace selector: pointer and Left/Right/Home/End keyboard navigation,
+  accurate pressed/hidden/inert state, touch-sized controls, and automatic return
+  to Chat after selecting a project or clip
 - Polling every 2s runs project navigation, scoped chat/jobs/activity,
   references, and clip/generation requests as independently failing planes.
   Project, clip, and chat-scope revision tokens reject stale responses; media
@@ -219,8 +223,10 @@ auto-chained, and their result never starts a render without a separate request.
 - M4.5 (done): editable project display title and brief with an immutable
   filesystem project ID, validated serialized publication, API/storage coverage,
   and real-browser read-back
-- M4.6 (next): responsive desktop/tablet/phone workspace navigation, followed by
-  real-browser desktop and narrow-viewport release gates
+- M4.6 (done): desktop three-pane preservation plus responsive Projects / Chat /
+  Media navigation, compact header/composer/dialog layouts, keyboard and inert
+  state, and playback-preserving real-browser checks at desktop, tablet, and phone
+  viewports
 
 ## Out of scope (v1)
 

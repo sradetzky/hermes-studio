@@ -24,6 +24,11 @@ import {
   generationActionState,
   generationRequestPayload,
 } from '../webapp/static/generation-settings.js';
+import {
+  moveWorkspacePane,
+  normalizeWorkspacePane,
+  WORKSPACE_PANES,
+} from '../webapp/static/workspace-panes.mjs';
 
 test('seed text stays inside the exact JSON integer range', () => {
   assert.equal(isSeedWithinRange(''), true);
@@ -78,6 +83,15 @@ test('chat context rejects scope and active-clip changes independently', () => {
   state.currentClip = 'clip-003';
   state.clipRevision += 1;
   assert.equal(isChatContextCurrent(state, nextClipChat), false);
+});
+
+test('responsive workspace navigation defaults to chat and wraps predictably', () => {
+  assert.deepEqual(WORKSPACE_PANES, ['projects', 'chat', 'media']);
+  assert.equal(normalizeWorkspacePane('projects'), 'projects');
+  assert.equal(normalizeWorkspacePane('unknown'), 'chat');
+  assert.equal(moveWorkspacePane('projects', -1), 'media');
+  assert.equal(moveWorkspacePane('media', 1), 'projects');
+  assert.equal(moveWorkspacePane('chat', 1), 'media');
 });
 
 test('API paths encode every external identifier once', () => {

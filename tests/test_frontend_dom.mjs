@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
 import test from 'node:test';
 
 import {showEmpty} from '../webapp/static/shared.js';
@@ -44,4 +45,15 @@ test('refresh status retains independent failures until each recovers', () => {
   assert.equal(status.textContent, 'refresh: references: denied');
   updateRefreshStatus(failures, status, 'references', null);
   assert.equal(status.textContent, '');
+});
+
+test('responsive workspace exposes one control and panel per pane', () => {
+  const html = readFileSync(
+    new URL('../webapp/static/index.html', import.meta.url), 'utf8');
+  assert.match(html, /id="workspace" data-pane="chat"/);
+  for (const pane of ['projects', 'chat', 'media']) {
+    assert.match(html, new RegExp(`data-workspace-pane="${pane}"`));
+    assert.match(html, new RegExp(`data-workspace-panel="${pane}"`));
+    assert.match(html, new RegExp(`aria-controls="workspace-${pane}"`));
+  }
 });

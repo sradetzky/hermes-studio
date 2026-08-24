@@ -4,6 +4,7 @@ export const state = {
   current: null,
   project: null,
   currentClip: null,
+  workspacePane: 'chat',
   projectRevision: 0,
   clipRevision: 0,
   chatRevision: 0,

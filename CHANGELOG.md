@@ -23,6 +23,9 @@ preview and production releases.
   cursors, Hermes profile sessions, specialist sessions, and clip-local exports
 - Editable project display titles and Markdown briefs with immutable visible IDs,
   validated serialized publication, active-job guards, and a project-details dialog
+- Responsive Projects / Chat / Media workspace navigation below 1100px, with the
+  desktop three-pane layout preserved, keyboard controls, narrow dialog/composer
+  layouts, and pane switches that retain state and media playback
 
 ### Changed
 

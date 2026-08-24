@@ -1,7 +1,7 @@
 # PLAN.md — Hermes Studio
 
-**Status**: `v0.1.0-preview.1` released; unreleased web M4.2–M4.5 and the
-real clip-bound H3 E2E are complete. Next: responsive workspace navigation.
+**Status**: `v0.1.0-preview.1` released; unreleased web M4.2–M4.6 and the
+real clip-bound H3 E2E are complete. Next: preview release closure.
 **Owner**: Sven (local setup on RTX 5060 Ti 16GB)  
 **Updated**: 2026-08-24
 **Goal**: Fully local, agent-orchestrated creative studio centered on MiniMax H3 + Hermes, with a simple self-hosted web UI.
@@ -183,7 +183,7 @@ project/clip chat scope and exact IDs.
   profile sessions, and filesystem exports
 - [x] Basic project metadata: edit display title and brief while keeping the
   filesystem project ID immutable
-- [ ] Responsive workspace: retain the desktop three-pane layout and provide
+- [x] Responsive workspace: retain the desktop three-pane layout and provide
   explicit Projects / Chat / Media navigation on narrow screens
 - [ ] Re-run desktop and narrow-browser release gates, synchronize current docs,
   and cut the next preview only after both slices are verified
@@ -216,8 +216,7 @@ Post-v1 candidates, not current commitments:
 2. Selected-take assembly/export; a timeline UI remains outside v1.
 3. Shared character-library tooling.
 
-No unresolved architecture question blocks the current responsive-workspace
-milestone.
+No unresolved architecture question blocks preview release closure.
 
 ---
 
@@ -235,7 +234,7 @@ Current criteria (met):
 Next-preview criteria:
 
 - [x] Edit a project's display title and brief without renaming its immutable ID.
-- [ ] Navigate Projects, Chat, and Media comfortably at desktop and narrow
+- [x] Navigate Projects, Chat, and Media comfortably at desktop and narrow
   viewports without losing the active project, clip, conversation, or playback.
 
 ---

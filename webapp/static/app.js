@@ -31,6 +31,10 @@ import {
 } from './refresh-planes.mjs';
 import {updateRefreshStatus} from './refresh-status.mjs';
 import {$, activeClip, requestJson, showEmpty, state} from './shared.js';
+import {
+  moveWorkspacePane,
+  normalizeWorkspacePane,
+} from './workspace-panes.mjs';
 
 async function loadProfiles() {
   const data = await requestJson(apiPaths.profiles);
@@ -128,6 +132,46 @@ async function refreshComfyQueue() {
       available: false, running: [], pending: [], error: error.message,
     });
   }
+}
+
+const narrowWorkspace = window.matchMedia('(max-width: 1099px)');
+
+function renderWorkspacePane() {
+  const pane = normalizeWorkspacePane(state.workspacePane);
+  state.workspacePane = pane;
+  $('#workspace').dataset.pane = pane;
+  for (const button of document.querySelectorAll('[data-workspace-pane]')) {
+    const active = button.dataset.workspacePane === pane;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', String(active));
+  }
+  for (const panel of document.querySelectorAll('[data-workspace-panel]')) {
+    const hidden = narrowWorkspace.matches && panel.dataset.workspacePanel !== pane;
+    panel.setAttribute('aria-hidden', String(hidden));
+    panel.inert = hidden;
+  }
+}
+
+function setWorkspacePane(value, focus = false) {
+  state.workspacePane = normalizeWorkspacePane(value);
+  renderWorkspacePane();
+  if (focus) {
+    document.querySelector(
+      `[data-workspace-pane="${state.workspacePane}"]`)?.focus();
+  }
+}
+
+function handleWorkspaceNavigation(event) {
+  const pane = event.target.closest('[data-workspace-pane]')?.dataset.workspacePane;
+  if (!pane) return;
+  let next;
+  if (event.key === 'ArrowLeft') next = moveWorkspacePane(pane, -1);
+  else if (event.key === 'ArrowRight') next = moveWorkspacePane(pane, 1);
+  else if (event.key === 'Home') next = 'projects';
+  else if (event.key === 'End') next = 'media';
+  else return;
+  event.preventDefault();
+  setWorkspacePane(next, true);
 }
 
 
@@ -338,6 +382,7 @@ function renderClips() {
 
 async function selectClip(clipId) {
   if (!state.clips.some(clip => clip.id === clipId)) return;
+  setWorkspacePane('chat');
   if (clipId === state.currentClip) {
     await switchChatScope('clip');
     return;
@@ -422,6 +467,7 @@ async function toggleClip() {
 }
 
 async function selectProject(projectId) {
+  setWorkspacePane('chat');
   closeProjectMetadata(false);
   closeGenerationDialog(false);
   closeGenerationSettings(false);
@@ -875,6 +921,12 @@ function uploadReferences(files) {
 
 const dropzone = $('#dropzone');
 const fileInput = $('#file-input');
+for (const button of document.querySelectorAll('[data-workspace-pane]')) {
+  button.addEventListener('click', () => setWorkspacePane(button.dataset.workspacePane));
+}
+$('#workspace-nav').addEventListener('keydown', handleWorkspaceNavigation);
+narrowWorkspace.addEventListener('change', renderWorkspacePane);
+renderWorkspacePane();
 $('#new-project').addEventListener('click', createProject);
 $('#edit-project').addEventListener('click', openProjectMetadata);
 $('#new-clip').addEventListener('click', createClip);

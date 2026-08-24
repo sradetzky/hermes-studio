@@ -20,6 +20,8 @@ GPU execution, and the project filesystem remains the media source of truth.
   with serialized global job execution
 - Editable project display titles and Markdown briefs while filesystem project IDs
   remain immutable
+- Responsive Projects / Chat / Media pane navigation on tablet and phone while
+  wide screens retain the complete three-pane workspace
 - Live profile reasoning summaries, tool activity, handoffs, and job status
 - Safe multi-file reference uploads with atomic non-overwriting publication
 - Typed prompt-bound H3 generation settings with readiness/staleness validation

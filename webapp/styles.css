@@ -4,6 +4,10 @@
 
 [hidden] { display:none !important; }
 body { background:#0b0d10; color:#e6e8eb; }
+.app-identity { display:flex; min-width:0; align-items:baseline; gap:.75rem; }
+.app-identity #status { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.workspace-nav { display:none; }
+.workspace,.workspace-pane { min-width:0; }
 .panel { background:#12151a; border:1px solid #232830; border-radius:.75rem; }
 .btn { background:#1c2129; border:1px solid #2c333e; padding:.35rem .8rem; border-radius:.5rem; font-size:.85rem; }
 .btn:hover { background:#242b35; }
@@ -203,11 +207,62 @@ select:disabled { opacity:.5; cursor:not-allowed; }
 
 .generation-settings-footer { display:flex; align-items:center; gap:.5rem; padding:.7rem .85rem; border-top:1px solid #252c35; }
 .settings-status { flex:1; min-width:0; color:#d79c74; font-size:.68rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+@media (max-width:1099px) {
+  body { height:100dvh; min-height:100dvh; overflow:hidden; }
+  .app-header { flex:0 0 auto; flex-wrap:wrap; padding:.65rem .75rem; }
+  .app-identity { flex:1 1 auto; }
+  .workspace-nav { flex:0 0 auto; display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:.25rem; margin:.5rem .5rem 0; padding:.25rem; border:1px solid #232a33; border-radius:.65rem; background:#101318; }
+  .workspace-nav-button { min-width:0; border-radius:.45rem; padding:.42rem .6rem; color:#737f8d; font-size:.72rem; }
+  .workspace-nav-button:hover { color:#c2ccd8; background:#181d24; }
+  .workspace-nav-button.active { color:#d5e7ff; background:#1e2c3d; box-shadow:inset 0 0 0 1px #304862; }
+  .workspace { display:block; overflow:hidden; padding:.5rem; }
+  .workspace-pane { display:none; width:100%; height:100%; min-height:0; }
+  .workspace[data-pane="projects"] .workspace-projects,
+  .workspace[data-pane="media"] .workspace-media { display:block; }
+  .workspace[data-pane="chat"] .workspace-chat { display:flex; }
+  .workspace-chat { gap:.5rem; }
+}
 @media (max-width:760px) {
+  .app-header { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:.45rem .75rem; }
+  .app-identity { grid-column:1/-1; }
+  .comfy-queue { margin-left:0; }
+  .comfy-queue > summary { max-width:48vw; }
+  #comfy-queue-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #activity { min-width:0; justify-self:end; }
+  #activity-text { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .workspace-nav { margin-top:.4rem; }
+  .workspace-nav-button { min-height:2.5rem; }
+  .workspace { padding:.4rem; }
+  .project-heading-actions .btn,.clip-heading .btn,.clip-actions .btn {
+    min-height:2.25rem;
+  }
+  .project-heading-actions .btn,.clip-heading .btn { min-width:2.25rem; }
+  .clip-actions { grid-template-columns:minmax(0,1fr) 2.25rem 2.25rem; }
+  .chat-scope-bar { flex-wrap:wrap; }
+  .chat-scope-help { flex-basis:100%; padding:0 .25rem .2rem; }
+  #chat-form { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:.4rem; }
+  #chat-form .active-clip-label { max-width:none; }
+  #chat-form .profile-select { width:auto; max-width:45vw; justify-self:end; }
+  #chatinput { min-width:0; width:100%; }
+  .generation-filters { grid-template-columns:1fr; }
+  .generation-filters select { min-height:2.25rem; }
+  #refs { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .project-id-block { align-items:flex-start; flex-direction:column; gap:.25rem; }
+  .project-id-block code { max-width:100%; }
   .generation-readiness { grid-template-columns:1fr; }
   .generation-readiness-actions { justify-self:start; flex-wrap:wrap; }
   .generation-settings-dialog { width:calc(100vw - 1rem); height:calc(100vh - 1rem); }
   .generation-settings-body { grid-template-columns:1fr; }
   .settings-grid { grid-template-columns:1fr; }
   .settings-section-header { flex-direction:column; }
+  .generation-settings-footer { flex-wrap:wrap; }
+  .generation-settings-footer .settings-status { flex:1 0 100%; }
+  .media-dialog-header { align-items:flex-start; padding:.65rem; }
+  .media-dialog-header > div:first-child { min-width:0; }
+  .media-dialog-header h2 { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .media-dialog-nav { gap:.2rem; }
+  .media-dialog-nav .btn { padding:.3rem .45rem; font-size:.7rem; }
+  .media-review-stage { min-height:28rem; padding:.65rem; }
+  .media-actions { flex-wrap:wrap; }
+  .media-actions .btn.danger { margin-left:0; }
 }
