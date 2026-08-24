@@ -1,9 +1,10 @@
 # PLAN.md — Hermes Studio
 
-**Status**: v0.1 preview candidate; web M1–M4.1 + clip/take hierarchy and
-real H3 E2E complete
+**Status**: `v0.1.0-preview.1` released; unreleased web M4.2–M4.4 and the
+real clip-bound H3 E2E are complete. Next: basic project metadata, then a
+responsive workspace.
 **Owner**: Sven (local setup on RTX 5060 Ti 16GB)  
-**Date**: 2026-08-22  
+**Updated**: 2026-08-24
 **Goal**: Fully local, agent-orchestrated creative studio centered on MiniMax H3 + Hermes, with a simple self-hosted web UI.
 
 This document is the single source of truth for architecture decisions and
@@ -18,7 +19,7 @@ User (browser)
     ↓
 Simple Web UI (FastAPI + minimal frontend)
     ↓
-Hermes Profile "studio"  ←→  Local LLM endpoint (shared across profiles)
+Hermes Profile "studio"  ←→  Configured model/provider
     ↓ (comfyui-mcp)
 ComfyUI (native MiniMax H3 nodes)
     ↓
@@ -27,7 +28,9 @@ Folder structure on disk (source of truth for projects & media)
 
 - **Hermes** is the orchestration brain (planning, H3 prompt writing, tool calling).
 - **ComfyUI** is the heavy GPU worker for H3 generation.
-- **Filesystem** is the database (projects, references, generations, chat history).
+- **Filesystem** is the durable source of truth for projects, media, prompts,
+  settings, and scoped chat exports; SQLite coordinates runtime jobs, sessions,
+  and activity.
 - **Web UI** is a thin window onto the chat + media. No complex state in the UI.
 
 ---
@@ -45,15 +48,17 @@ Folder structure on disk (source of truth for projects & media)
   exception and remains pinned to xAI OAuth / `grok-4.6`.
 
 ### 2.2 MiniMax H3
-- Open weights (FL2VA + Ref2VA).
-- Native ComfyUI support since ~2026-08-03.
-- Target: 16GB VRAM → pruned INT8 / NVFP4 / Turbo LoRA + latent upscaler path.
+- Open-weight T2VA / I2VA / FL2VA / Ref2VA modes through native ComfyUI nodes.
+- The proven 16GB path uses a clean single pass at no more than 1.1MP; current
+  preview/final defaults are 0.5MP/8 steps and 0.9MP/20 steps.
+- Acceleration means only Sol fused modulation + ChunkFF. Quantization, model,
+  Turbo, SeedVR2, and upscale controls are not part of the web generation contract.
 - Always generate structured official prompts (see 2.4).
-- Output: 4–15s video + native stereo audio at short-edge ~768p, then optional latent upscale.
+- Output: 4–15s video with native stereo audio, archived at the generated canvas.
 
 ### 2.3 Folder Structure (Source of Truth)
 ```
-~/design-studio/   (or path of choice, set in Hermes skill)
+<studio-root>/   (repo `studio-root/` or `$DESIGN_STUDIO_ROOT`)
 ├── projects/
 │   └── YYYY-MM-DD_name/
 │       ├── project.json          # ordered immutable clip ids + selected takes
@@ -103,12 +108,15 @@ project/clip chat scope and exact IDs.
 - Project switcher (reads folders).
 - Drag-drop upload into current project’s `references/`.
 - Organization stays on disk; UI does not invent structure.
-- Preferred stack: FastAPI backend + single HTML page (Alpine.js or vanilla + Tailwind CDN). No heavy SPA.
+- Stack: FastAPI backend + vanilla ES modules + locally compiled Tailwind CSS.
+  No heavy SPA or runtime CDN.
 
 ### 2.6 Integration Points
 - ComfyUI ↔ Hermes: pinned `comfyui-mcp`; the `studio` profile is the sole GPU
   queue owner. No silent raw-REST fallback in normal operation.
-- Pre-export clean API-format workflows for T2VA, FL2VA, Ref2VA with injectable parameters (prompt, duration, seed, refs, turbo strength, etc.).
+- Build API-format H3 graphs with the proven `run_h3.py --dry-run` builder,
+  upload references through MCP, and submit the resulting graph through the
+  pinned batch tools. Repo workflow JSON files remain optional.
 - Hermes skill must be able to:
   - Create new project folder
   - Write/update one exact clip's `current_prompt.txt` and append to the explicit
@@ -119,25 +127,24 @@ project/clip chat scope and exact IDs.
 
 ---
 
-## 3. Implementation Order (for the implementing agent)
+## 3. Implementation Status and Order
 
-### Phase 0 – Preparation (human or agent)
-- [ ] Ensure ComfyUI ≥ 0.30 with native H3 nodes and suitable quants/Turbo LoRA + latent upscaler.
-- [ ] Have at least one working H3 workflow in API format.
-- [ ] Local LLM server running (OpenAI-compatible).
+### Phase 0 – Preparation (complete)
+- [x] Native H3 ComfyUI stack and proven 16GB recipes are available.
+- [x] A real H3 workflow has been submitted and parameter-verified through
+  `comfyui-mcp`.
+- [x] The Studio Hermes profile and model/provider configuration are operational.
 
-### Phase 1 – Hermes Profile & Skill (highest priority)
-1. Create profile: `hermes profile create studio --clone`
-2. Write solid `SOUL.md` for the studio agent (orchestrator + strict H3 prompt engineer).
-3. Implement `design-studio` skill that understands the folder root and can:
-   - `create_project(name, brief)`
-   - `write_prompt(project, clip, structured_prompt)`
-   - `append_chat(project, role, content)`
-   - `run_generation(project, clip, workflow_name, params)` → archives outputs correctly
-4. Point the studio profile’s model config at the shared local endpoint.
-5. Test from CLI: create project → write prompt → (manual ComfyUI for now) → verify folder layout.
+### Phase 1 – Hermes Profile & Skill (complete)
+- [x] `studio` orchestrator and specialist profiles have repo-owned SOULs and
+  synchronized skills.
+- [x] `design-studio` manages exact projects/clips, scoped prompts/chat, profile
+  handoffs, and generation archival.
+- [x] Fleet model/provider switching and profile drift checks are operational.
+- [x] CLI and web paths are covered by filesystem, route, concurrency, lifecycle,
+  migration, and real integration checks.
 
-### Phase 2 – ComfyUI Wiring
+### Phase 2 – ComfyUI Wiring (complete)
 - [x] Connect the `studio` profile to pinned `comfyui-mcp` and verify tools.
 - [x] Verify a real H3 API-format workflow submission through MCP; always archive output and call
   `clear_vram` after every terminal success/error/cancel/timeout.
@@ -145,15 +152,15 @@ project/clip chat scope and exact IDs.
 - [x] Verify completed media is archived into the selected clip's `generations/`
   before release.
 
-### Phase 3 – Minimal Web UI
-- FastAPI app that:
+### Phase 3 – Minimal Web UI (complete)
+- [x] FastAPI app that:
   - Serves static index.html
   - independently scoped project/clip chat, settings, take, and media APIs
   - project-scoped reference/job APIs plus scope-bound chat/activity APIs
   - guarded media from shared references/final and exact clip take archives
-- Single page with project + clip navigation, chat, take player, prompt viewer,
+- [x] Single page with project + clip navigation, chat, take player, prompt viewer,
   settings, references, and selected-take controls.
-- Stable polling for shared state and the exact active clip.
+- [x] Stable polling for shared state and the exact active clip.
 - [x] Async per-project job state + visible queued/running/completed/failed status.
 - [x] Multi-file drag/drop reference upload with safe non-overwriting storage.
 - [x] Transactional SQLite runtime coordination, lifecycle-managed Hermes
@@ -166,39 +173,71 @@ project/clip chat scope and exact IDs.
 - [x] Explicit Project/Clip chat scope with isolated transcripts, activity
   cursors, profile sessions, specialist continuity, and lossless project-history migration.
 
-### Phase 4 – Polish
+### Phase 4 – Polish (current)
 - [x] Media detail/filter/review actions
 - [x] Typed generation settings manifest + prompt readiness/editor panel
 - [x] “Generate with this prompt” button enabled for a ready, revision-matched
   prompt/settings contract, with worker-start revalidation and exact Studio job dispatch
 - [x] Promote to `final/` and copy selected generation media into references
 - [x] Create/rename/reorder/enable clips and select one video take per enabled clip
-- Basic project metadata
+- [x] Explicit Project/Clip conversations with isolated transcripts, activity,
+  profile sessions, and filesystem exports
+- [ ] Basic project metadata: edit display title and brief while keeping the
+  filesystem project ID immutable
+- [ ] Responsive workspace: retain the desktop three-pane layout and provide
+  explicit Projects / Chat / Media navigation on narrow screens
+- [ ] Re-run desktop and narrow-browser release gates, synchronize current docs,
+  and cut the next preview only after both slices are verified
 
 ---
 
 ## 4. Non-Goals (for now)
-- Full multi-agent parallel workers inside Hermes (keep single studio agent for simplicity).
-- Automatic 2K regeneration (H3-Regenerate-2K is closed; use latent upscaler instead).
+- Parallel agent or GPU workers; specialist handoffs and generation remain serialized.
+- Automatic 2K regeneration or an implicit upscale chain.
 - Complex database or user accounts.
 - Fancy frontend frameworks or design systems.
 - Cloud deployment.
 
 ---
 
-## 5. Open Questions / Future
-- Exact path for studio-root (suggest `~/design-studio` or configurable via env).
-- Whether to keep chat history only in `chat.jsonl` or also mirror into Hermes session DB.
-- How aggressively to auto-create generation folders vs let Hermes decide numbering.
-- Later: side-by-side comparison, selected-take assembly timeline, shared
-  character library tooling.
+## 5. Resolved Decisions and Post-v1 Roadmap
+
+Resolved; these are no longer open questions:
+
+- Studio root defaults to the repo's `studio-root/` and can be overridden with
+  `$DESIGN_STUDIO_ROOT`.
+- SQLite transactionally coordinates scoped web chat/session state; project and
+  clip `chat.jsonl` files remain durable filesystem exports.
+- The archive path allocates the next exact clip-local `generations/NNN/`
+  directory. Agents do not choose or guess generation numbers.
+
+Post-v1 candidates, not current commitments:
+
+1. Side-by-side take comparison.
+2. Selected-take assembly/export; a timeline UI remains outside v1.
+3. Shared character-library tooling.
+
+No unresolved architecture question blocks the current metadata and responsive
+workspace milestones.
 
 ---
 
 ## 6. Success Criteria
-- From the web UI I can chat with the studio agent, get a correct structured H3 prompt, trigger a generation, and play the resulting video — all while the folder structure stays clean and consistent.
-- I can switch the underlying local model and every profile (including studio) immediately uses the new one.
-- Different SOUL.md files give clearly different agent personalities without contaminating each other.
+
+Current criteria (met):
+
+- [x] From the web UI, chat with the Studio agent, produce a structured H3 prompt,
+  trigger a generation, and play the archived result while the folder contract
+  remains clean and exact.
+- [x] Switch the configured model/provider across the local Studio fleet while
+  preserving the deliberately pinned `studio-grok` exception.
+- [x] Keep profile personalities and project/clip conversation scopes isolated.
+
+Next-preview criteria:
+
+- [ ] Edit a project's display title and brief without renaming its immutable ID.
+- [ ] Navigate Projects, Chat, and Media comfortably at desktop and narrow
+  viewports without losing the active project, clip, conversation, or playback.
 
 ---
 

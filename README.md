@@ -7,9 +7,10 @@ GPU execution, and the project filesystem remains the media source of truth.
 
 > **Preview status:** the planning, settings, activity, and media-review workflow
 > is operational and locally tested on Linux with an RTX 5060 Ti 16 GB. The web
-> UI is localhost-only and has no application auth. Ready clips can be generated
-> through an explicit revision-guarded action, and the real web-to-ComfyUI H3
-> path is verified end to end. Models and ComfyUI workflows are not bundled.
+> server remains loopback-only; optional remote access is tailnet-only through
+> Tailscale Serve, and there is no application auth. Ready clips can be generated
+> through an explicit revision-guarded action, and the real web-to-ComfyUI H3 path
+> is verified end to end. Models and ComfyUI workflows are not bundled.
 
 ## What works
 

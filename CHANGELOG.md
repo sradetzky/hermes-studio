@@ -24,6 +24,11 @@ preview and production releases.
 
 ### Changed
 
+- Synchronized roadmap/status documents around M4.4 and the next metadata and
+  responsive-workspace milestones; superseded root, chat, archive-numbering,
+  model-provider, and upscale assumptions are now recorded as resolved
+- Studio guidance now prefers the proven clean single-pass H3 path at no more
+  than 1.1MP instead of recommending implicit quantization or upscale chains
 - Simplified H3 settings to mode, canvas, seed, steps, and acceleration; clip
   length and ordered reference filenames are now parsed from the prompt
 - Removed SeedVR2, turbo, W4A8, model, and reference controls from the dialog

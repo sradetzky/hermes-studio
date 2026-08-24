@@ -37,7 +37,12 @@ no state in the UI that isn't already on disk; minimal dependencies.
 - `run.sh` / `stop.sh` / `status.sh` — single-instance lock, graceful stop,
   stale-PID cleanup and process status
 
-## Layout (single page, three columns)
+## Layout (single page)
+
+The current implementation is the desktop three-column workspace below. The
+next UI milestone keeps that layout on wide screens and adds explicit
+Projects / Chat / Media pane navigation on narrow screens; it must preserve the
+active project, clip, chat scope, job activity, open dialogs, and media playback.
 
 ```
 ┌──────────┬──────────────────────────────┬────────────┐
@@ -205,8 +210,12 @@ auto-chained, and their result never starts a render without a separate request.
   transcripts/activity/profile sessions, and lossless project-history migration
 - Real E2E checkpoint (done): exact-clip web job → Studio → comfyui-mcp H3
   submission → parameter read-back → clip-local archive → VRAM cleanup
+- M4.5 (next): editable project display title and brief with an immutable
+  filesystem project ID and atomic validated publication
+- M4.6 (next): responsive desktop/tablet/phone workspace navigation, followed by
+  real-browser desktop and narrow-viewport release gates
 
 ## Out of scope (v1)
 
-Auth/multi-user, editing files from UI, workflow editors, timelines,
+Auth/multi-user, arbitrary file editing from the UI, workflow editors, timelines,
 model management (use scripts/switch-model.sh).

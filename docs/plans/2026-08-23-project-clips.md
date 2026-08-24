@@ -1,5 +1,8 @@
 # Project Clip Hierarchy Implementation Plan
 
+**Status:** Completed 2026-08-23. This is a historical implementation record;
+current status and priorities live in `PLAN.md` and `AGENTS.md`.
+
 > **For Hermes:** Implement this plan slice-by-slice with focused tests and a verified commit after each completed slice.
 
 **Goal:** Replace the single project-level prompt/generation workflow with an ordered Project → Clips → Takes hierarchy that can later assemble selected video takes into a final product.

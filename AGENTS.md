@@ -9,7 +9,7 @@ Hermes Studio: fully local, agent-orchestrated creative studio.
 Hermes profiles orchestrate → ComfyUI (`~/ComfyUI`, RTX 5060 Ti 16GB) renders
 video (MiniMax H3) and stills (Krea 2) → filesystem (`studio-root/`) is the
 project/media source of truth → SQLite only coordinates web jobs/chat sessions
-→ thin FastAPI web UI (Phase 3 M1–M4 foundation working).
+→ thin FastAPI web UI (M1–M4.4 complete; metadata/responsive polish next).
 
 ## Repo map
 
@@ -45,6 +45,10 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
 - Git author: Sven Radetzky <sven.radetzky@gmx.de>
 - Sequential GPU jobs only — never two ComfyUI jobs at once
 - Automatically commit every completed, verified feature slice; never push
+- When a slice changes scope or status, update `PLAN.md`, this file's **Next
+  steps**, the relevant detailed doc, and `CHANGELOG.md` when user-visible in the
+  same verified commit. Keep completed work in the progress log, not in the
+  active checklist.
 
 ## Progress log
 
@@ -122,6 +126,6 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
 
 ## Next steps
 
-- [x] Real end-to-end H3 video generation through comfyui-mcp
-- [x] “Generate with this prompt” action using the verified H3 path
-- [ ] Basic project metadata and responsive three-pane navigation
+- [ ] Basic project metadata: editable display title and brief; immutable project ID
+- [ ] Responsive workspace navigation while preserving the desktop three-pane layout
+- [ ] Desktop/narrow browser release gate, synchronized docs, and next preview
