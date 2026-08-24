@@ -69,3 +69,12 @@ test('prompt and generation controls live in a desktop-open collapsible panel', 
   assert.match(css, /--prompt-panel-header-height:1\.5rem/);
   assert.match(css, /\.prompt-panel-body pre\.prompt \{ max-height:12rem; overflow:auto; \}/);
 });
+
+test('Media exposes explicit movie readiness, export, playback, and download regions', () => {
+  const html = readFileSync(
+    new URL('../webapp/static/index.html', import.meta.url), 'utf8');
+  for (const id of [
+    'movie-readiness', 'export-movie', 'movie-blockers', 'movies',
+  ]) assert.match(html, new RegExp(`id="${id}"`));
+  assert.match(html, />Export selected takes as movie</);
+});

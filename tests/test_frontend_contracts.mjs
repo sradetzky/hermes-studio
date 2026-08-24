@@ -23,7 +23,10 @@ import {
   queuePresentation,
 } from '../webapp/static/comfy-queue.mjs';
 import {refreshLivePlane} from '../webapp/static/refresh-planes.mjs';
-import {takeDeletionMessage} from '../webapp/static/media-review.js';
+import {
+  movieExportState,
+  takeDeletionMessage,
+} from '../webapp/static/media-review.js';
 import {
   generationActionState,
   generationRequestPayload,
@@ -149,6 +152,32 @@ test('API paths encode every external identifier once', () => {
     '/api/project/project%20%2F%20one/clips/clip%20%231/events?after=9');
   assert.equal(apiPaths.comfyQueue, '/api/comfyui/queue');
   assert.equal(apiPaths.project('project / one'), '/api/project/project%20%2F%20one');
+  assert.equal(apiPaths.movie('project / one'),
+    '/api/project/project%20%2F%20one/movie');
+});
+
+test('movie export action requires readiness and explicit idle ownership', () => {
+  assert.deepEqual(movieExportState(null, false, false), {
+    enabled: false, label: 'Export selected takes as movie',
+    status: 'Movie readiness unavailable',
+  });
+  assert.equal(movieExportState({
+    readiness: {ready: false, enabled_clip_count: 2, blocking: [
+      {title: 'Clip 2', reason: 'Select a video take'},
+    ]}, movies: [],
+  }, false, false).status, 'Blocked: Clip 2 — Select a video take');
+  assert.deepEqual(movieExportState({
+    readiness: {ready: true, enabled_clip_count: 2, blocking: []}, movies: [],
+  }, true, false), {
+    enabled: false, label: 'Export selected takes as movie',
+    status: 'Wait for the active Studio job to finish',
+  });
+  assert.deepEqual(movieExportState({
+    readiness: {ready: true, enabled_clip_count: 2, blocking: []}, movies: [],
+  }, false, false), {
+    enabled: true, label: 'Export selected takes as movie',
+    status: 'Ready · 2 selected clips · hard cuts',
+  });
 });
 
 test('take deletion confirmation states irreversible scope and selected cleanup', () => {

@@ -23,6 +23,9 @@ preview and production releases.
   contracts, collisions, or incomplete artifacts fail closed
 - Restricted ComfyUI cancellation/cleanup to Studio jobs that can own GPU work;
   CPU-only movie exports cannot interrupt rendering
+- Added project-wide Media readiness/blockers, an explicit export control, and
+  stable completed-movie playback plus MP4 download; unchanged movie nodes survive
+  polling so active playback is not reset
 
 ### Fixed
 

@@ -174,8 +174,10 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
   stream copy; mismatches normalize deterministically, and versioned movie plus
   exact provenance publish together as one no-overwrite `final/movie-NNN/`
   directory. CPU-only export jobs never invoke ComfyUI cleanup.
+- Media now shows project-wide readiness/blockers, requires an explicit export
+  click, and exposes every completed version with stable video playback and an
+  MP4 download. Polling reuses unchanged movie media nodes.
 
 ## Next steps
 
-- [ ] Phase 5: project-level **Export selected takes as movie** with ordered
-  enabled-clip readiness, hard cuts, versioned publication, and exact provenance
+- [ ] Run the complete Phase 5 backend/frontend/archive/live-browser release gates

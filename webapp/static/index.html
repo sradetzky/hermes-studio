@@ -117,6 +117,17 @@
 
     <aside class="workspace-pane workspace-media panel p-3 overflow-auto"
            id="workspace-media" data-workspace-panel="media">
+      <section class="movie-export" aria-labelledby="movie-heading">
+        <div class="media-section-heading">
+          <span id="movie-heading">Project movie</span>
+        </div>
+        <div class="movie-readiness" id="movie-readiness"
+             role="status" aria-live="polite">Movie readiness unavailable</div>
+        <ul class="movie-blockers" id="movie-blockers"></ul>
+        <button class="btn primary movie-export-button" id="export-movie"
+                type="button" disabled>Export selected takes as movie</button>
+        <div class="movies" id="movies"></div>
+      </section>
       <div class="flex items-center justify-between mb-2">
         <span class="text-xs uppercase tracking-wider text-gray-500">Takes</span>
         <span class="generation-count" id="generation-count"></span>

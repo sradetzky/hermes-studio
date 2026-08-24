@@ -30,6 +30,8 @@ GPU execution, and the project filesystem remains the media source of truth.
   acceleration settings; prompt text owns clip length and ordered references
 - Media/recipe/review filters and a full generation detail viewer
 - Promote-to-final and use-as-reference actions with provenance
+- Explicit project movie readiness and asynchronous hard-cut export with
+  versioned playback/download, compatible stream preservation, and provenance
 - Guarded media routes, symlink/path traversal protection, lifecycle cleanup,
   stale-worker recovery, and a single-instance launcher
 

@@ -220,8 +220,8 @@ project/clip chat scope and exact IDs.
   streams and applying deterministic normalization only when source media differs
 - [x] Publish every export without overwrite under the project's `final/` area,
   together with a provenance manifest containing exact ordered clip/take sources
-- [ ] Expose completed project movies in Media for playback and download
-- [ ] Keep trimming, transitions, timeline editing, and side-by-side take
+- [x] Expose completed project movies in Media for playback and download
+- [x] Keep trimming, transitions, timeline editing, and side-by-side take
   comparison outside this phase
 
 ---

@@ -6,7 +6,9 @@ import {
 import {
   closeGenerationDialog,
   initializeMediaReview,
+  renderMovieProject,
   renderGenerations,
+  updateMovieExportControls,
   updateGenerationRecipeFilter,
 } from './media-review.js';
 import {apiPaths} from './api-paths.mjs';
@@ -500,11 +502,14 @@ async function selectProject(projectId) {
   state.chatScope = 'clip';
   state.clips = [];
   state.jobs = [];
+  state.movieProject = null;
+  state.movieSubmitting = false;
   state.refreshErrors = {};
   resetChatState();
   resetClipState();
   state.referenceSignature = '';
   $('#refs').replaceChildren();
+  renderMovieProject(null);
   renderActivity([]);
   renderProjects();
   renderClips();
@@ -646,6 +651,13 @@ async function refreshProject() {
           renderReferences(references.references);
         },
         report: reportRefreshPlane,
+      }),
+      requestJson(apiPaths.movie(projectContext.projectId)).then(movieProject => {
+        if (!isProjectCurrent()) return;
+        reportRefreshPlane('movie', null);
+        renderMovieProject(movieProject);
+      }).catch(error => {
+        if (isProjectCurrent()) reportRefreshPlane('movie', error);
       }),
     ]);
   } finally {
@@ -865,6 +877,7 @@ function renderActivity(jobs) {
   renderProjectMetadataControls();
   renderClips();
   renderGenerationReadiness(state.generationSettings);
+  updateMovieExportControls();
 }
 
 

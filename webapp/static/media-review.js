@@ -1,11 +1,140 @@
 import {$, activeClip, requestJson, showEmpty, state} from './shared.js';
 import {apiPaths} from './api-paths.mjs';
 import {
+  captureProjectContext,
   captureGenerationDialogContext,
   isGenerationDialogContextCurrent,
+  isProjectContextCurrent,
 } from './frontend-contracts.mjs';
 
 let refreshProject = async () => {};
+
+export function movieExportState(movieProject, jobActive, submitting) {
+  const label = 'Export selected takes as movie';
+  if (!movieProject) {
+    return {enabled: false, label, status: 'Movie readiness unavailable'};
+  }
+  if (submitting) {
+    return {enabled: false, label, status: 'Preparing immutable movie contract…'};
+  }
+  if (jobActive) {
+    return {enabled: false, label, status: 'Wait for the active Studio job to finish'};
+  }
+  const readiness = movieProject.readiness;
+  if (!readiness?.ready) {
+    const blockers = readiness?.blocking || [];
+    const status = blockers.length
+      ? 'Blocked: ' + blockers.map(
+        item => `${item.title} — ${item.reason}`).join(' · ')
+      : 'Movie readiness unavailable';
+    return {enabled: false, label, status};
+  }
+  return {
+    enabled: true,
+    label,
+    status: `Ready · ${readiness.enabled_clip_count} selected clips · hard cuts`,
+  };
+}
+
+function createMovieCard(movie) {
+  const card = document.createElement('article');
+  card.className = 'movie-card';
+  card.dataset.movieId = movie.id;
+  card.dataset.movieUrl = movie.url;
+  const media = document.createElement('video');
+  media.className = 'movie-media';
+  media.src = movie.url;
+  media.controls = true;
+  media.preload = 'metadata';
+  media.playsInline = true;
+  const details = document.createElement('div');
+  details.className = 'movie-details';
+  const name = document.createElement('strong');
+  name.textContent = movie.id;
+  const meta = document.createElement('span');
+  meta.textContent = `${movie.clip_count} clips · ${movie.assembly_mode} · ` +
+    `${Number(movie.duration_seconds).toFixed(1)}s · ${formatBytes(movie.size)}`;
+  const download = document.createElement('a');
+  download.className = 'btn movie-download';
+  download.href = movie.url;
+  download.download = `${movie.id}.mp4`;
+  download.textContent = 'Download MP4';
+  details.append(name, meta, download);
+  card.append(media, details);
+  return card;
+}
+
+function reconcileMovies(movies) {
+  const container = $('#movies');
+  const existing = new Map(
+    [...container.querySelectorAll('.movie-card')].map(
+      card => [card.dataset.movieId, card]));
+  let cursor = container.firstElementChild;
+  for (const movie of movies) {
+    let card = existing.get(movie.id);
+    if (!card || card.dataset.movieUrl !== movie.url) {
+      card = createMovieCard(movie);
+    }
+    existing.delete(movie.id);
+    if (card === cursor) cursor = cursor.nextElementSibling;
+    else container.insertBefore(card, cursor);
+  }
+  for (const card of existing.values()) card.remove();
+  if (!movies.length) {
+    container.replaceChildren();
+    showEmpty(container, 'No project movies yet');
+  } else {
+    delete container.dataset.empty;
+    container.querySelector('.empty')?.remove();
+  }
+}
+
+export function updateMovieExportControls() {
+  const action = movieExportState(
+    state.movieProject, state.jobActive, state.movieSubmitting);
+  const button = $('#export-movie');
+  button.textContent = action.label;
+  button.disabled = !action.enabled;
+  $('#movie-readiness').textContent = action.status;
+  const blockers = $('#movie-blockers');
+  blockers.replaceChildren();
+  for (const blocker of state.movieProject?.readiness?.blocking || []) {
+    const item = document.createElement('li');
+    item.textContent = `${blocker.title}: ${blocker.reason}`;
+    blockers.append(item);
+  }
+}
+
+export function renderMovieProject(movieProject) {
+  state.movieProject = movieProject;
+  reconcileMovies(movieProject?.movies || []);
+  updateMovieExportControls();
+}
+
+async function exportMovie() {
+  const context = captureProjectContext(state);
+  const action = movieExportState(
+    state.movieProject, state.jobActive, state.movieSubmitting);
+  if (!action.enabled || !context.projectId) return;
+  state.movieSubmitting = true;
+  updateMovieExportControls();
+  let failure = '';
+  try {
+    const job = await requestJson(apiPaths.movie(context.projectId), {method: 'POST'});
+    if (!isProjectContextCurrent(state, context)) return;
+    state.jobs = [job, ...state.jobs.filter(item => item.id !== job.id)];
+    state.jobActive = true;
+    await refreshProject();
+  } catch (error) {
+    failure = `Export failed: ${error.message}`;
+  } finally {
+    if (isProjectContextCurrent(state, context)) {
+      state.movieSubmitting = false;
+      updateMovieExportControls();
+      if (failure) $('#movie-readiness').textContent = failure;
+    }
+  }
+}
 
 export function takeDeletionMessage(generationId, selected) {
   const selectedWarning = selected
@@ -441,6 +570,7 @@ export function initializeMediaReview(refresh) {
   $('#promote-generation').addEventListener('click', () => performMediaAction('promote'));
   $('#reference-generation').addEventListener('click', () => performMediaAction('reference'));
   $('#delete-generation').addEventListener('click', deleteTake);
+  $('#export-movie').addEventListener('click', exportMovie);
   dialog.addEventListener('close', () => {
     if (!dialog.open) closeGenerationDialog();
   });

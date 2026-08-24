@@ -159,6 +159,7 @@ test('Chromium rejects stale UI work and preserves active media', {timeout: 3000
   const detailRequests = [];
   const metadataRequests = [];
   const chatRequests = [];
+  const movieExportRequests = [];
   try {
     await waitForHttp(`http://127.0.0.1:${appPort}/`);
     browser = spawn(chromiumExecutable(), [
@@ -199,6 +200,40 @@ test('Chromium rejects stale UI work and preserves active media', {timeout: 3000
         } else queueRequests.push(params.requestId);
         return;
       }
+      if (method === 'GET' && url.pathname.endsWith('/movie')) {
+        await fulfill(params.requestId, {
+          readiness: {
+            ready: true, enabled_clip_count: 1, blocking: [],
+            clips: [{
+              id: 'clip-001', title: 'Clip 1', ready: true, reason: '',
+              selected_take: {generation: '001', filename: 'video.mp4'},
+            }],
+          },
+          movies: [{
+            id: 'movie-001', filename: 'movie.mp4', size: 1024,
+            url: '/media/browser-fixture-movie.mp4',
+            download_url: '/media/browser-fixture-movie.mp4',
+            created_at: '2026-08-24T10:00:00+00:00', clip_count: 1,
+            duration_seconds: 1.25, assembly_mode: 'stream-copy',
+            sha256: 'a'.repeat(64),
+          }],
+        });
+        return;
+      }
+      if (method === 'POST' && url.pathname.endsWith('/movie')) {
+        movieExportRequests.push(params.requestId);
+        await fulfill(params.requestId, {
+          id: 'movie-export-job', project: 'alpha', clip_id: null,
+          chat_scope: 'project', kind: 'export_movie', message: '{}',
+          profile: 'studio', status: 'queued', reply: '', error: null,
+          session_id: null, owner_id: null, process_pid: null,
+          process_start_time: null,
+          created_at: '2026-08-24T10:00:00+00:00',
+          started_at: null, finished_at: null,
+          updated_at: '2026-08-24T10:00:00+00:00',
+        }, 202);
+        return;
+      }
       if (method === 'GET' && url.pathname.endsWith('/generations/001')) {
         detailRequests.push(params.requestId);
         return;
@@ -231,6 +266,26 @@ test('Chromium rejects stale UI work and preserves active media', {timeout: 3000
       `document.querySelector('.proj.active .proj-title')?.textContent === 'Alpha'`,
       'Alpha project selection');
     await waitExpression(`document.querySelector('.generation-preview')`, 'generation card');
+    await waitExpression(
+      `document.querySelector('#export-movie')?.disabled === false`,
+      'movie export readiness');
+    assert.equal(movieExportRequests.length, 0);
+    assert.equal(await evaluate(
+      `document.querySelector('.movie-download')?.getAttribute('download')`),
+    'movie-001.mp4');
+    await evaluate(`(() => {
+      const media = document.querySelector('.movie-media');
+      media.__playbackSentinel = 23;
+      window.__movieMedia = media;
+      document.querySelector('#export-movie').click();
+    })()`);
+    await waitFor(() => movieExportRequests.length === 1, 'explicit movie export');
+    await waitExpression(
+      `document.querySelector('#export-movie')?.disabled === false`,
+      'movie export refresh');
+    assert.equal(await evaluate(
+      `window.__movieMedia === document.querySelector('.movie-media') && ` +
+      `window.__movieMedia.__playbackSentinel === 23`), true);
 
     await evaluate(`document.querySelector('.generation-preview').click()`);
     await waitFor(() => detailRequests.length === 1, 'first take request');
@@ -354,7 +409,7 @@ test('Chromium rejects stale UI work and preserves active media', {timeout: 3000
     }
     error.message += `\npaused requests: queue=${queueRequests?.length ?? 'n/a'} ` +
       `detail=${detailRequests?.length ?? 'n/a'} metadata=${metadataRequests?.length ?? 'n/a'} ` +
-      `chat=${chatRequests?.length ?? 'n/a'}`;
+      `chat=${chatRequests?.length ?? 'n/a'} movie=${movieExportRequests?.length ?? 'n/a'}`;
     error.message += `\nfixture app log:\n${appLog}`;
     throw error;
   } finally {

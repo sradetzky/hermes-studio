@@ -5,6 +5,7 @@ export const apiPaths = {
   profiles: '/api/profiles',
   comfyQueue: '/api/comfyui/queue',
   project: project => `/api/project/${encode(project)}`,
+  movie: project => `/api/project/${encode(project)}/movie`,
   clips: project => `/api/project/${encode(project)}/clips`,
   clip: (project, clip) =>
     `/api/project/${encode(project)}/clips/${encode(clip)}`,

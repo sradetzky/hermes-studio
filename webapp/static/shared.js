@@ -18,6 +18,8 @@ export const state = {
   activityByJob: {},
   jobs: [],
   jobActive: false,
+  movieProject: null,
+  movieSubmitting: false,
   showActivityDetails: true,
   generations: [],
   filteredGenerations: [],
