@@ -1,6 +1,7 @@
 import json
 import multiprocessing
 import os
+import signal
 import shutil
 import sqlite3
 import subprocess
@@ -295,6 +296,111 @@ class StudioManagerTests(WebAppTestCase):
         self.assertEqual(failed.status, JobStatus.FAILED)
         with self.assertRaises(ProcessLookupError):
             os.kill(child_pid, 0)
+
+    def test_supervised_exec_refuses_command_after_parent_identity_changes(self):
+        marker = Path(self.temp.name) / "command-ran"
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(self.settings.repo / "scripts" / "supervised_exec.py"),
+                str(os.getpid() + 1),
+                sys.executable,
+                "-c",
+                f"from pathlib import Path; Path({str(marker)!r}).touch()",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        self.assertEqual(result.returncode, 70)
+        self.assertFalse(marker.exists())
+
+    def test_supervised_exec_kills_command_when_parent_dies(self):
+        pid_file = Path(self.temp.name) / "supervised-child.pid"
+        wrapper = self.settings.repo / "scripts" / "supervised_exec.py"
+        launcher = (
+            "import os, subprocess, sys, time; from pathlib import Path; "
+            f"child=subprocess.Popen([sys.executable,{str(wrapper)!r},str(os.getpid()),"
+            "sys.executable,'-c','import time; time.sleep(30)'],"
+            "stderr=subprocess.DEVNULL); "
+            f"Path({str(pid_file)!r}).write_text(str(child.pid)); time.sleep(30)"
+        )
+        parent = subprocess.Popen(
+            [sys.executable, "-c", launcher], start_new_session=True)
+        child_pid = None
+        try:
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline and not pid_file.exists():
+                time.sleep(0.02)
+            self.assertTrue(pid_file.exists())
+            child_pid = int(pid_file.read_text())
+            child_start = process_start_time(child_pid)
+            parent.kill()
+            parent.wait(timeout=5)
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                if StudioJobManager._process_stopped(child_pid, child_start):
+                    break
+                time.sleep(0.02)
+            self.assertTrue(
+                StudioJobManager._process_stopped(child_pid, child_start))
+        finally:
+            if parent.poll() is None:
+                parent.kill()
+                parent.wait()
+            if child_pid is not None and Path(f"/proc/{child_pid}").exists():
+                try:
+                    os.kill(child_pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
+    def test_recovery_reaps_unrecorded_exact_job_process_before_failure(self):
+        project = ds.create_project(
+            self.settings.studio_root, "unrecorded-orphan")
+        store = JobStore(self.settings.database_path)
+        store.initialize()
+        job = store.create_chat_job(
+            project.name, "orphaned", clip_id="clip-001")
+        running = store.claim_next("dead-owner")
+        assert running is not None
+        manager = StudioJobManager(
+            self.settings, store, cleanup_callback=lambda: None)
+        child = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            start_new_session=True,
+            env=manager._job_environment(running),
+        )
+        try:
+            claimed = store.claim_stale_running(manager.owner_id, time.time() + 1)
+            assert claimed is not None
+            self.assertIsNone(claimed.pid)
+            manager._recover_claimed_job(claimed)
+            self.assertEqual(
+                store.get_job(job.id).status, JobStatus.FAILED)
+            child.wait(timeout=5)
+        finally:
+            if child.poll() is None:
+                child.kill()
+                child.wait()
+
+    def test_recovery_keeps_global_job_running_when_termination_is_unproven(self):
+        project = ds.create_project(
+            self.settings.studio_root, "unproven-orphan")
+        store = JobStore(self.settings.database_path)
+        store.initialize()
+        job = store.create_chat_job(
+            project.name, "orphaned", clip_id="clip-001")
+        store.claim_next("dead-owner")
+        manager = StudioJobManager(
+            self.settings, store, cleanup_callback=lambda: None)
+        claimed = store.claim_stale_running(manager.owner_id, time.time() + 1)
+        assert claimed is not None
+        with (
+            patch.object(manager, "_terminate_orphan_job", return_value=False),
+            self.assertLogs("webapp.studio_manager", level="CRITICAL"),
+        ):
+            manager._recover_claimed_job(claimed)
+        self.assertEqual(store.get_job(job.id).status, JobStatus.RUNNING)
 
     def test_second_manager_does_not_recover_live_owner_job(self):
         ds.studio_root(str(self.settings.studio_root))

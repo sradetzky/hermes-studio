@@ -138,6 +138,9 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
 - Web-triggered H3 archives now derive execution metadata from authoritative
   ComfyUI history, fail closed on incomplete/mismatched history, and preserve
   actual seed, canvas, timing, steps, acceleration, references, and prompt hash.
+- Hermes children now enter a parent-death-supervised launcher before execution;
+  stale-job recovery finds exact unrecorded job processes through `/proc`, proves
+  termination, and keeps the global running-job lease when ownership is uncertain.
 
 ## Next steps
 

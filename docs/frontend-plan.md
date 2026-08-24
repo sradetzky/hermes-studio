@@ -19,7 +19,8 @@ no state in the UI that isn't already on disk; minimal dependencies.
 - `job_store.py` — typed SQLite jobs, profile sessions, chat and activity events
 - `hermes_events.py` — read-only projection of structured Hermes session rows
   into safe per-job reasoning/tool activity
-- `studio_manager.py` — FIFO scheduler, worker lease, tracked Hermes process
+- `studio_manager.py` — FIFO scheduler, worker lease, parent-death-supervised
+  Hermes process, and exact job-token orphan recovery before lease release
 - `job_store.py` / `runtime_schema.py` — transactional scoped job/chat/event
   state and ordered SQLite migrations; clip work has a database-enforced exact
   clip id while project chat has an explicit project scope

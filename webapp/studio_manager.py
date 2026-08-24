@@ -7,10 +7,12 @@ import re
 import signal
 import sqlite3
 import subprocess
+import sys
 import threading
 import time
 import uuid
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 
 from scripts import design_studio as ds
@@ -235,7 +237,7 @@ class StudioJobManager:
                     self._export_job_chat(job)
                     return
                 process = subprocess.Popen(
-                    command,
+                    self._supervised_command(command),
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
@@ -332,6 +334,14 @@ class StudioJobManager:
             "-q", self._agent_query(job),
         ]
         return command
+
+    def _supervised_command(self, command: list[str]) -> list[str]:
+        return [
+            sys.executable,
+            str(self.settings.repo / "scripts" / "supervised_exec.py"),
+            str(os.getpid()),
+            *command,
+        ]
 
     def _agent_query(self, job: Job) -> str:
         project_path = self.settings.studio_root / "projects" / job.project
@@ -461,15 +471,31 @@ class StudioJobManager:
                 time.time() - self.settings.worker_lease_timeout_seconds):
             self._recover_claimed_job(stale)
 
-    def _recover_claimed_job(self, job: Job) -> None:
-        if job.pid:
-            self._terminate_orphan_process(job)
+    def _recover_claimed_job(self, job: Job) -> bool:
+        if not self._terminate_orphan_job(job):
+            log.critical(
+                "Keeping recovered job %s running because process termination "
+                "could not be proven",
+                job.id,
+            )
+            try:
+                self.store.append_job_event(
+                    job.id,
+                    job.profile,
+                    "job.recovery_blocked",
+                    "Recovery blocked: possible Studio process is still alive",
+                    status="running",
+                )
+            except Exception:
+                log.exception("Could not record blocked recovery for job %s", job.id)
+            return False
         if job.profile == self.settings.studio_profile:
             self._cleanup_safely()
         self.store.fail(
             job.id, "Studio worker lease expired during execution",
             self.owner_id)
         self._export_job_chat(job)
+        return True
 
     def _communicate(self, process: subprocess.Popen,
                      bridge: HermesSessionEventBridge) -> tuple[str, str]:
@@ -535,27 +561,83 @@ class StudioJobManager:
         return True
 
     @classmethod
-    def _terminate_orphan_process(cls, job: Job) -> None:
+    def _terminate_orphan_process(cls, job: Job) -> bool:
         if not cls._orphan_identity_matches(job):
-            return
+            return False
         assert job.pid is not None
         try:
             os.killpg(job.pid, signal.SIGTERM)
         except ProcessLookupError:
-            return
+            return True
         for _ in range(20):
-            try:
-                if process_start_time(job.pid) != job.pid_start_time:
-                    return
-            except (OSError, ValueError):
-                return
+            if cls._process_stopped(job.pid, job.pid_start_time):
+                return True
             time.sleep(0.1)
         if not cls._orphan_identity_matches(job):
-            return
+            return cls._process_stopped(job.pid, job.pid_start_time)
         try:
             os.killpg(job.pid, signal.SIGKILL)
         except ProcessLookupError:
-            pass
+            return True
+        for _ in range(20):
+            if cls._process_stopped(job.pid, job.pid_start_time):
+                return True
+            time.sleep(0.1)
+        return False
+
+    @staticmethod
+    def _process_stopped(pid: int, expected_start_time: int | None) -> bool:
+        try:
+            value = Path(f"/proc/{pid}/stat").read_text(encoding="ascii")
+            command_end = value.rfind(")")
+            if command_end < 0:
+                return True
+            fields = value[command_end + 2:].split()
+            if not fields or fields[0] == "Z":
+                return True
+            return expected_start_time is not None and int(fields[19]) != expected_start_time
+        except (OSError, ValueError, IndexError):
+            return True
+
+    @staticmethod
+    def _job_process_tokens(job: Job) -> set[bytes]:
+        return {
+            f"HERMES_STUDIO_JOB_ID={job.id}".encode(),
+            f"HERMES_STUDIO_PROJECT={job.project}".encode(),
+            f"HERMES_STUDIO_CLIP={job.clip_id}".encode(),
+            f"HERMES_STUDIO_PROFILE={job.profile}".encode(),
+        }
+
+    @classmethod
+    def _matching_job_processes(cls, job: Job) -> list[tuple[int, int]]:
+        expected = cls._job_process_tokens(job)
+        matches: list[tuple[int, int]] = []
+        for entry in Path("/proc").iterdir():
+            if not entry.name.isdigit():
+                continue
+            pid = int(entry.name)
+            try:
+                environment = process_environment(pid)
+                if expected.issubset(environment):
+                    matches.append((pid, process_start_time(pid)))
+            except (OSError, ProcessLookupError, ValueError):
+                continue
+        return matches
+
+    @classmethod
+    def _terminate_orphan_job(cls, job: Job) -> bool:
+        if job.pid is not None and job.pid_start_time is not None:
+            if cls._terminate_orphan_process(job):
+                return True
+
+        matches = cls._matching_job_processes(job)
+        if not matches:
+            return True
+        for pid, start_time in matches:
+            candidate = replace(job, pid=pid, pid_start_time=start_time)
+            if not cls._terminate_orphan_process(candidate):
+                return False
+        return not cls._matching_job_processes(job)
 
     def _cleanup_comfy(self) -> None:
         prompt = (

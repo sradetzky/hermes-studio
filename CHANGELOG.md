@@ -16,6 +16,9 @@ preview and production releases.
 
 ### Fixed
 
+- Closed the detached-process registration crash window with parent-death
+  supervision and exact job-token orphan discovery; recovery now retains the
+  global execution lease unless process termination is proven
 - Web-triggered H3 archives now recover actual seed, canvas, timing, steps,
   acceleration nodes, ordered references, and prompt hash from authoritative
   ComfyUI history; incomplete or mismatched execution metadata fails closed
