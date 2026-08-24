@@ -62,6 +62,18 @@ class PassiveManager:
     def submit_chat(self, project, clip_id, message, profile=None):
         return self.store.create_chat_job(
             project, message, profile or "studio", clip_id=clip_id)
+
+    def submit_generation(self, project, clip_id, prompt_sha256,
+                          settings_updated_at):
+        request = json.dumps({
+            "action": "generate-current-prompt",
+            "prompt_sha256": prompt_sha256,
+            "settings_updated_at": settings_updated_at,
+        }, sort_keys=True, separators=(",", ":"))
+        return self.store.create_generation_job(
+            project, request, "studio", clip_id=clip_id)
+
+
 class WebAppTestCase(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -419,6 +431,99 @@ class AppFactoryTests(WebAppTestCase):
                 stale["generation_settings"]["readiness"]["ready"])
             self.assertEqual(
                 stale["generation_settings"]["readiness"]["status"], "stale")
+
+    def test_generate_current_prompt_queues_exact_validated_studio_job(self):
+        with TestClient(self.app()) as client:
+            project = self.create_project(client, "generate-current")
+            root = self.settings.studio_root / "projects" / project
+            clip = root / "clips" / "clip-001"
+            (clip / "current_prompt.txt").write_text(
+                "A complete 5-second H3 generation prompt\n")
+            contract = client.put(
+                f"/api/project/{project}/clips/clip-001/generation-settings",
+                json=_generation_settings_payload(seed="42", steps=8, accel=True),
+            ).json()
+            token = {
+                "prompt_sha256": contract["manifest"]["prompt_sha256"],
+                "settings_updated_at": contract["manifest"]["updated_at"],
+            }
+
+            queued = client.post(
+                f"/api/project/{project}/clips/clip-001/generate", json=token)
+
+            self.assertEqual(queued.status_code, 202)
+            job = queued.json()
+            self.assertEqual(job["kind"], "generate")
+            self.assertEqual(job["profile"], "studio")
+            self.assertEqual(job["clip_id"], "clip-001")
+            self.assertEqual(job["status"], "queued")
+            self.assertEqual(json.loads(job["message"]), {
+                "action": "generate-current-prompt",
+                **token,
+            })
+            chat = client.get(f"/api/project/{project}/chat").json()["messages"]
+            self.assertEqual(
+                [(entry["role"], entry["content"]) for entry in chat],
+                [("user", "Generate with this prompt")],
+            )
+            duplicate = client.post(
+                f"/api/project/{project}/clips/clip-001/generate", json=token)
+            self.assertEqual(duplicate.status_code, 409)
+
+    def test_generate_current_prompt_rejects_unready_disabled_and_stale_contracts(self):
+        with TestClient(self.app()) as client:
+            unready_project = self.create_project(client, "generate-unready")
+            unready = client.post(
+                f"/api/project/{unready_project}/clips/clip-001/generate",
+                json={"prompt_sha256": "0" * 64, "settings_updated_at": "missing"},
+            )
+            self.assertEqual(unready.status_code, 409)
+
+            disabled_project = self.create_project(client, "generate-disabled")
+            disabled_root = self.settings.studio_root / "projects" / disabled_project
+            disabled_clip = disabled_root / "clips" / "clip-001"
+            (disabled_clip / "current_prompt.txt").write_text(
+                "A complete 5-second H3 generation prompt\n")
+            disabled_contract = client.put(
+                f"/api/project/{disabled_project}/clips/clip-001/generation-settings",
+                json=_generation_settings_payload(),
+            ).json()
+            client.patch(
+                f"/api/project/{disabled_project}/clips/clip-001",
+                json={"enabled": False},
+            )
+            disabled = client.post(
+                f"/api/project/{disabled_project}/clips/clip-001/generate",
+                json={
+                    "prompt_sha256": disabled_contract["manifest"]["prompt_sha256"],
+                    "settings_updated_at": disabled_contract["manifest"]["updated_at"],
+                },
+            )
+            self.assertEqual(disabled.status_code, 409)
+
+            stale_project = self.create_project(client, "generate-stale")
+            stale_root = self.settings.studio_root / "projects" / stale_project
+            stale_clip = stale_root / "clips" / "clip-001"
+            (stale_clip / "current_prompt.txt").write_text(
+                "A complete 5-second H3 generation prompt\n")
+            old_contract = client.put(
+                f"/api/project/{stale_project}/clips/clip-001/generation-settings",
+                json=_generation_settings_payload(),
+            ).json()
+            client.put(
+                f"/api/project/{stale_project}/clips/clip-001/generation-settings",
+                json=_generation_settings_payload(steps=8),
+            )
+            stale = client.post(
+                f"/api/project/{stale_project}/clips/clip-001/generate",
+                json={
+                    "prompt_sha256": old_contract["manifest"]["prompt_sha256"],
+                    "settings_updated_at": old_contract["manifest"]["updated_at"],
+                },
+            )
+            self.assertEqual(stale.status_code, 409)
+            self.assertEqual(
+                client.get(f"/api/project/{stale_project}/jobs").json()["jobs"], [])
 
     def test_generation_settings_mode_references_and_options(self):
         with TestClient(self.app()) as client:

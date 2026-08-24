@@ -1,4 +1,4 @@
-import {$, requestJson, state} from './shared.js';
+import {$, activeClip, requestJson, state} from './shared.js';
 import {apiPaths} from './api-paths.mjs';
 import {
   captureClipContext,
@@ -8,6 +8,68 @@ import {
 } from './frontend-contracts.mjs';
 
 let refreshProject = async () => {};
+
+export function generationActionState(
+  contract, clipEnabled, jobActive, submitting,
+) {
+  if (submitting) {
+    return {enabled: false, label: 'Submitting…', reason: 'Submitting generation request'};
+  }
+  if (jobActive) {
+    return {
+      enabled: false,
+      label: 'Generate with this prompt',
+      reason: 'Wait for the active Studio job to finish',
+    };
+  }
+  if (clipEnabled === null) {
+    return {
+      enabled: false, label: 'Generate with this prompt', reason: 'Pick a clip first',
+    };
+  }
+  if (!clipEnabled) {
+    return {
+      enabled: false,
+      label: 'Generate with this prompt',
+      reason: 'Enable this clip before generating',
+    };
+  }
+  if (!contract?.readiness?.ready) {
+    return {
+      enabled: false,
+      label: 'Generate with this prompt',
+      reason: contract?.readiness?.reasons?.[0] || 'Generation settings are not ready',
+    };
+  }
+  if (!contract.manifest?.prompt_sha256 || !contract.manifest?.updated_at) {
+    return {
+      enabled: false,
+      label: 'Generate with this prompt',
+      reason: 'Generation settings revision is unavailable',
+    };
+  }
+  return {enabled: true, label: 'Generate with this prompt', reason: ''};
+}
+
+export function generationRequestPayload(contract) {
+  return {
+    prompt_sha256: contract.manifest.prompt_sha256,
+    settings_updated_at: contract.manifest.updated_at,
+  };
+}
+
+function renderGenerationAction() {
+  const action = generationActionState(
+    state.generationSettings,
+    activeClip()?.enabled ?? null,
+    state.jobActive,
+    state.generationSubmitting,
+  );
+  const button = $('#generate-current-prompt');
+  button.disabled = !action.enabled;
+  button.textContent = action.label;
+  button.title = action.reason;
+}
 
 function renderGenerationReadiness(contract) {
   state.generationSettings = contract;
@@ -54,6 +116,49 @@ function renderGenerationReadiness(contract) {
     item.className = 'readiness-warning';
     item.textContent = warning;
     details.append(item);
+  }
+  const actionStatus = $('#generation-action-status');
+  if ((!contract && !state.generationSubmitting)
+      || (!state.jobActive && !state.generationSubmitting
+          && actionStatus.textContent === 'Generation queued.')) {
+    actionStatus.textContent = '';
+  }
+  renderGenerationAction();
+}
+
+async function submitGeneration() {
+  const action = generationActionState(
+    state.generationSettings,
+    activeClip()?.enabled ?? null,
+    state.jobActive,
+    state.generationSubmitting,
+  );
+  if (!action.enabled) return;
+  const context = captureClipContext(state);
+  const contract = state.generationSettings;
+  state.generationSubmitting = true;
+  renderGenerationAction();
+  const status = $('#generation-action-status');
+  status.textContent = 'Submitting generation request…';
+  try {
+    await requestJson(apiPaths.generate(context.projectId, context.clipId), {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(generationRequestPayload(contract)),
+    });
+    if (!isClipContextCurrent(state, context)) return;
+    state.jobActive = true;
+    status.textContent = 'Generation queued.';
+    await refreshProject();
+  } catch (error) {
+    if (!isClipContextCurrent(state, context)) return;
+    status.textContent = `Generate failed: ${error.message}`;
+    await refreshProject();
+  } finally {
+    if (isClipContextCurrent(state, context)) {
+      state.generationSubmitting = false;
+      renderGenerationAction();
+    }
   }
 }
 
@@ -173,6 +278,7 @@ async function saveGenerationSettings(event) {
       });
     if (!isClipContextCurrent(state, context)) return;
     renderGenerationReadiness(contract);
+    $('#generation-action-status').textContent = '';
     closeGenerationSettings();
     await refreshProject();
   } catch (error) {
@@ -205,6 +311,7 @@ export {closeGenerationSettings, renderGenerationReadiness};
 export function initializeGenerationSettings(refresh) {
   refreshProject = refresh;
   const dialog = $('#generation-settings-dialog');
+  $('#generate-current-prompt').addEventListener('click', submitGeneration);
   $('#edit-generation-settings').addEventListener('click', event =>
     openGenerationSettings(event.currentTarget));
   $('#generation-settings-form').addEventListener('submit', saveGenerationSettings);

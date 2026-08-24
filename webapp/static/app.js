@@ -122,6 +122,7 @@ function resetClipState() {
   state.mediaActioning = false;
   state.generationSettings = null;
   state.generationSettingsOptions = null;
+  state.generationSubmitting = false;
   state.generationSignature = '';
   $('#prompt').textContent = '—';
   $('#gens').replaceChildren();
@@ -612,6 +613,7 @@ function renderActivity(jobs) {
   $('#send-button').disabled = Boolean(active);
   $('#profile-select').disabled = Boolean(active);
   renderClips();
+  renderGenerationReadiness(state.generationSettings);
 }
 
 

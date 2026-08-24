@@ -15,6 +15,8 @@ preview and production releases.
 - Exact clip context on every new Studio job and nested clip/take APIs/media URLs
 - Verified exact-clip web → Studio → comfyui-mcp H3 generation, graph parameter
   read-back, clip-local archival, and mandatory queue/VRAM cleanup
+- Revision-guarded **Generate with this prompt** action for ready enabled clips,
+  with dedicated Studio jobs, worker-start revalidation, and exact typed run packages
 
 ### Changed
 

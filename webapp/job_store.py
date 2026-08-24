@@ -162,8 +162,8 @@ class JobStore:
             ),
         )
 
-    def create_chat_job(self, project: str, message: str,
-                        profile: str = "studio", *, clip_id: str) -> Job:
+    def _create_job(self, project: str, message: str, profile: str, *,
+                    clip_id: str, kind: str, chat_content: str) -> Job:
         try:
             clip_id = validate_clip_id(clip_id)
         except ValueError as exc:
@@ -173,7 +173,7 @@ class JobStore:
             id=uuid.uuid4().hex,
             project=project,
             clip_id=clip_id,
-            kind="chat",
+            kind=kind,
             profile=profile,
             status=JobStatus.QUEUED,
             message=message,
@@ -205,7 +205,7 @@ class JobStore:
                     "INSERT INTO chat_events "
                     "(project, job_id, role, content, created_at) "
                     "VALUES (?, ?, 'user', ?, ?)",
-                    (job.project, job.id, job.message, now),
+                    (job.project, job.id, chat_content, now),
                 )
                 self._append_job_event(
                     connection,
@@ -214,13 +214,27 @@ class JobStore:
                     profile=job.profile,
                     event_type="job.queued",
                     status="queued",
-                    summary=f"{job.profile} queued",
+                    summary=(
+                        f"{job.profile} generation queued"
+                        if kind == "generate" else f"{job.profile} queued"),
                     created_at=now,
                 )
         except sqlite3.IntegrityError as exc:
             raise ActiveJobError(
                 "project already has an active Studio job") from exc
         return job
+
+    def create_chat_job(self, project: str, message: str,
+                        profile: str = "studio", *, clip_id: str) -> Job:
+        return self._create_job(
+            project, message, profile, clip_id=clip_id, kind="chat",
+            chat_content=message)
+
+    def create_generation_job(self, project: str, request: str,
+                              profile: str = "studio", *, clip_id: str) -> Job:
+        return self._create_job(
+            project, request, profile, clip_id=clip_id, kind="generate",
+            chat_content="Generate with this prompt")
 
     def get_job(self, job_id: str) -> Job:
         with self._connection() as connection:

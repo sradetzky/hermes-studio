@@ -111,9 +111,12 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
 - Take management now supports confirmed whole-take deletion with selected-take
   cleanup, active-job and symlink guards, identity-checked filesystem removal,
   and preservation of shared final/reference copies
+- Prompt-ready enabled clips now expose **Generate with this prompt**. The typed
+  request is revision-guarded at enqueue and worker start, creates a dedicated
+  Studio generation job, and uses the verified comfyui-mcp archive/cleanup path
 
 ## Next steps
 
 - [x] Real end-to-end H3 video generation through comfyui-mcp
-- [ ] “Generate with this prompt” action using the verified H3 path
+- [x] “Generate with this prompt” action using the verified H3 path
 - [ ] Basic project metadata and responsive three-pane navigation

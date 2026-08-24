@@ -19,6 +19,8 @@ export const apiPaths = {
     `/api/project/${encode(project)}/events?after=${encode(after)}`,
   generationSettings: (project, clip) =>
     `/api/project/${encode(project)}/clips/${encode(clip)}/generation-settings`,
+  generate: (project, clip) =>
+    `/api/project/${encode(project)}/clips/${encode(clip)}/generate`,
   generations: (project, clip) =>
     `/api/project/${encode(project)}/clips/${encode(clip)}/generations`,
   selectedTake: (project, clip) =>

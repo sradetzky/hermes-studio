@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import NoReturn
 
 from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from scripts import design_studio as ds
 from webapp.clip_store import (
@@ -91,6 +91,13 @@ class GenerationSettingsIn(BaseModel):
     seed: str | int | None
     steps: int
     accel: bool
+
+
+class GenerateIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    prompt_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    settings_updated_at: str = Field(min_length=1, max_length=64)
 
 
 def _settings(request: Request) -> Settings:
@@ -309,6 +316,36 @@ def put_generation_settings(request: Request, project_id: str, clip_id: str,
             project, clip, body.model_dump())
     except GenerationSettingsError as exc:
         raise HTTPException(400, str(exc))
+
+
+@router.post(
+    "/api/project/{project_id}/clips/{clip_id}/generate", status_code=202)
+def generate_current_prompt(request: Request, project_id: str, clip_id: str,
+                            body: GenerateIn):
+    project = resolve_project(request, project_id)
+    clip = resolve_clip(request, project, clip_id)
+    try:
+        manifest = _clips(request).describe(project)
+    except ClipStoreError as exc:
+        _raise_clip_store_error(exc)
+    entry = next(item for item in manifest["clips"] if item["id"] == clip_id)
+    if not entry["enabled"]:
+        raise HTTPException(409, "enable this clip before generating")
+    try:
+        _generation_settings(request).validate_generation_request(
+            project, clip, body.prompt_sha256, body.settings_updated_at)
+    except GenerationSettingsError as exc:
+        raise HTTPException(409, str(exc))
+    try:
+        job = _manager(request).submit_generation(
+            project.name,
+            clip_id,
+            body.prompt_sha256,
+            body.settings_updated_at,
+        )
+    except ActiveJobError as exc:
+        raise HTTPException(409, str(exc))
+    return job.to_dict()
 
 
 @router.get("/api/project/{project_id}/chat")

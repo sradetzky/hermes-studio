@@ -379,6 +379,23 @@ class GenerationSettingsStore:
             }
         return result
 
+    def validate_generation_request(
+            self, project: Path, clip: Path, prompt_sha256: str,
+            settings_updated_at: str) -> dict:
+        contract = self.describe(project, clip)
+        manifest = contract["manifest"]
+        if manifest is None:
+            reason = contract["readiness"]["reasons"][0]
+            raise GenerationSettingsError(reason)
+        if (manifest["prompt_sha256"] != prompt_sha256
+                or manifest["updated_at"] != settings_updated_at):
+            raise GenerationSettingsError(
+                "Generation request is stale; refresh the current prompt settings")
+        if not contract["readiness"]["ready"]:
+            reason = contract["readiness"]["reasons"][0]
+            raise GenerationSettingsError(reason)
+        return contract
+
     def save(self, project: Path, clip: Path, payload: dict) -> dict:
         normalized = self.normalize(payload)
         prompt = self._prompt(clip)

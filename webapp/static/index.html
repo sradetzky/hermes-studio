@@ -59,9 +59,15 @@
             <span class="generation-readiness-summary"
                   id="generation-readiness-summary">Save settings for this prompt</span>
           </div>
-          <button class="btn" id="edit-generation-settings" type="button">
-            Generation settings
-          </button>
+          <div class="generation-readiness-actions">
+            <button class="btn primary" id="generate-current-prompt" type="button"
+                    disabled>Generate with this prompt</button>
+            <button class="btn" id="edit-generation-settings" type="button">
+              Generation settings
+            </button>
+          </div>
+          <div class="generation-action-status" id="generation-action-status"
+               role="status" aria-live="polite"></div>
           <div class="generation-readiness-details" id="generation-readiness-details"></div>
         </div>
         <details open>

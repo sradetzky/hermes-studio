@@ -21,6 +21,7 @@ export const state = {
   mediaActioning: false,
   generationSettings: null,
   generationSettingsOptions: null,
+  generationSubmitting: false,
   settingsOpener: null,
   generationSignature: '',
   referenceSignature: '',

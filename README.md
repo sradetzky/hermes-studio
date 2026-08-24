@@ -194,6 +194,9 @@ reference images.
 - Only the `studio` profile owns the ComfyUI queue and GPU execution.
 - One job runs globally at a time; specialist handoffs are serialized.
 - Generation settings are prompt-hash-bound and must be re-approved after edits.
+- **Generate with this prompt** submits a dedicated Studio generation job only
+  for an enabled, ready clip; prompt and settings revisions are checked again
+  when queued work starts before any ComfyUI submission.
 - Upload, media, promotion, and reference paths reject traversal and symlink escapes.
 - Trusted-host and origin checks allow localhost plus only explicitly configured
   exact Tailscale DNS names; wildcard tailnet hosts and host:port values are rejected.
@@ -207,7 +210,6 @@ reference images.
 
 - No application authentication or multi-user isolation; tailnet access relies
   on Tailscale identity and ACL policy
-- No direct typed **Generate with this prompt** button yet
 - No mobile-first replacement for the fixed three-pane workspace
 - No packaged installer or model/workflow downloader
 - No guarantee outside the documented local Linux/ComfyUI setup

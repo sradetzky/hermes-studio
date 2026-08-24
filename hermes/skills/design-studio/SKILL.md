@@ -97,8 +97,12 @@ The prompt itself owns the 4–15 second length and ordered
 `<Picture N> (filename.ext)` mapping. Accel means Sol fused modulation + ChunkFF
 only—never Sage, sparse Sol attention, or EasyCache. Do not silently rewrite the
 manifest from agent prose. A prompt edit intentionally makes the UI show stale
-settings; the user must review and save the panel again before the future
-Generate action is allowed.
+settings; the user must review and save the panel again before the web Generate
+action is allowed. A Generate click is explicit render authorization. Its Studio
+job carries the validated prompt hash, manifest revision, resolved timing,
+references, canvas, and execution knobs. Re-read both clip files immediately
+before submission and abort without queueing on any token mismatch; never rewrite
+the prompt or settings to make a stale request pass.
 
 The legacy `generate` and `generate-image` CLI commands remain for manual
 diagnostics only. They explicitly clean VRAM, and timeout paths interrupt the

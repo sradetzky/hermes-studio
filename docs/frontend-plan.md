@@ -160,7 +160,13 @@ auto-chained, and their result never starts a render without a separate request.
   range (`0..9007199254740991`), round-trip as decimal strings in the API, and
   remain integers on disk. Any prompt edit invalidates readiness until
   settings are deliberately re-saved against the new hash.
-- No auth v1 (localhost bind only)
+- **Generate with this prompt** is enabled only for an enabled clip with a ready
+  prompt-bound manifest and no active project job. The request carries the exact
+  prompt hash and settings revision, is rejected if stale at the API boundary,
+  and is revalidated when its dedicated Studio generation job starts. The agent
+  receives a resolved typed package and explicit one-render authorization.
+- No auth v1; Uvicorn remains loopback-only, while optional tailnet access relies
+  on Tailscale identity/ACLs plus the exact-host and same-origin guards above.
 
 ## Milestones
 
@@ -173,6 +179,8 @@ auto-chained, and their result never starts a render without a separate request.
 - M4.1 (done): typed generation manifest, readiness summary and settings editor
 - M4.2 (done): clip-local prompts/settings/takes, exact clip jobs and nested media,
   ordered clip controls, selected-take provenance, and clip-safe polling
+- M4.3 (done): revision-guarded **Generate with this prompt** action, dedicated
+  generation jobs, worker-start revalidation, and queued/active browser feedback
 - Real E2E checkpoint (done): exact-clip web job → Studio → comfyui-mcp H3
   submission → parameter read-back → clip-local archive → VRAM cleanup
 

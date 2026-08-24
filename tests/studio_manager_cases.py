@@ -20,6 +20,7 @@ from fastapi.testclient import TestClient
 from scripts import design_studio as ds
 from webapp.app import create_app
 from webapp.config import Settings
+from webapp.generation_settings_store import GenerationSettingsStore
 from webapp.hermes_events import HermesSessionEventBridge
 from webapp.job_store import ActiveJobError, JobStore, JobStoreError
 from webapp.models import JobStatus
@@ -98,6 +99,30 @@ class StudioManagerTests(WebAppTestCase):
             time.sleep(0.05)
         self.fail("job did not reach a terminal state")
 
+    def test_command_preparation_failure_marks_job_failed(self):
+        ds.studio_root(str(self.settings.studio_root))
+        project = ds.create_project(self.settings.studio_root, "prepare-failure")
+        store = JobStore(self.settings.database_path)
+        store.initialize()
+
+        def broken_command(_job, _session_id):
+            raise RuntimeError("builder broke")
+
+        manager = StudioJobManager(
+            self.settings, store, command_builder=broken_command,
+            cleanup_callback=lambda: None,
+        )
+        job = manager.submit_chat(project.name, "clip-001", "hello")
+        claimed = store.claim_next(manager.owner_id)
+        if claimed is None:
+            self.fail("chat job was not claimable")
+
+        manager._execute(claimed)
+
+        failed = store.get_job(job.id)
+        self.assertEqual(failed.status, JobStatus.FAILED)
+        self.assertIn("Could not prepare Studio job: builder broke", failed.error)
+
     def test_real_subprocess_completes_and_exports_chat(self):
         ds.studio_root(str(self.settings.studio_root))
         project = ds.create_project(self.settings.studio_root, "manager")
@@ -147,6 +172,48 @@ class StudioManagerTests(WebAppTestCase):
         self.assertEqual(environment["HERMES_STUDIO_CLIP"], "clip-002")
         self.assertTrue(environment["HERMES_STUDIO_CLIP_PATH"].endswith(
             "/projects/project/clips/clip-002"))
+
+    def test_queued_generation_is_revalidated_before_agent_execution(self):
+        ds.studio_root(str(self.settings.studio_root))
+        project = ds.create_project(self.settings.studio_root, "generation-revalidate")
+        clip = project / "clips" / "clip-001"
+        (clip / "current_prompt.txt").write_text(
+            "A complete 5-second H3 generation prompt\n")
+        contract = GenerationSettingsStore(self.settings).save(
+            project, clip, _generation_settings_payload())
+        store = JobStore(self.settings.database_path)
+        store.initialize()
+        commands = []
+        manager = StudioJobManager(
+            self.settings,
+            store,
+            command_builder=lambda *_: commands.append(True) or [
+                sys.executable, "-c", "print('should not run')"],
+            cleanup_callback=lambda: None,
+        )
+        job = manager.submit_generation(
+            project.name,
+            "clip-001",
+            contract["manifest"]["prompt_sha256"],
+            contract["manifest"]["updated_at"],
+        )
+        query = manager._agent_query(job)
+        self.assertIn("Explicit user-authorized web generation", query)
+        self.assertIn('"action": "generate-current-prompt"', query)
+        self.assertIn('"width": 832', query)
+        self.assertEqual(
+            manager._job_environment(job)["HERMES_STUDIO_JOB_KIND"], "generate")
+        (clip / "current_prompt.txt").write_text("changed 5-second prompt\n")
+        claimed = store.claim_next(manager.owner_id)
+        if claimed is None:
+            self.fail("generation job was not claimable")
+
+        manager._execute(claimed)
+
+        failed = store.get_job(job.id)
+        self.assertEqual(failed.status, JobStatus.FAILED)
+        self.assertIn("changed", failed.error.lower())
+        self.assertEqual(commands, [])
 
     def test_shutdown_terminates_tracked_child(self):
         ds.studio_root(str(self.settings.studio_root))

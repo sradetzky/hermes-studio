@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -12,7 +13,10 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 
+from scripts import design_studio as ds
+from webapp.clip_store import ClipStore
 from webapp.config import Settings
+from webapp.generation_settings_store import GenerationSettingsStore
 from webapp.hermes_events import HermesSessionEventBridge
 from webapp.job_store import JobStore, JobStoreError
 from webapp.models import Job
@@ -120,6 +124,22 @@ class StudioJobManager:
         self._wake.set()
         return job
 
+    def submit_generation(self, project: str, clip_id: str,
+                          prompt_sha256: str,
+                          settings_updated_at: str) -> Job:
+        request = json.dumps({
+            "action": "generate-current-prompt",
+            "prompt_sha256": prompt_sha256,
+            "settings_updated_at": settings_updated_at,
+        }, sort_keys=True, separators=(",", ":"))
+        chat_path = self._chat_path(project)
+        self.store.import_chat_if_empty(project, chat_path)
+        job = self.store.create_generation_job(
+            project, request, self.settings.studio_profile, clip_id=clip_id)
+        self._export_chat(project)
+        self._wake.set()
+        return job
+
     def _scheduler_loop(self) -> None:
         while not self._stop.is_set():
             try:
@@ -154,8 +174,36 @@ class StudioJobManager:
                 log.exception("Could not update Studio worker heartbeat")
 
     def _execute(self, job: Job) -> None:
-        session_id = self.store.get_session(job.project, job.profile)
-        command = self.command_builder(job, session_id)
+        if job.kind == "generate":
+            try:
+                self._validate_generation_job(job)
+            except Exception as exc:
+                error = f"Generation request validation failed: {exc}"
+                self.store.append_job_event(
+                    job.id,
+                    job.profile,
+                    "generation.validation",
+                    error,
+                    status="failed",
+                )
+                self.store.fail(job.id, error, self.owner_id)
+                self._export_chat(job.project)
+                return
+        try:
+            session_id = self.store.get_session(job.project, job.profile)
+            command = self.command_builder(job, session_id)
+        except Exception as exc:
+            error = f"Could not prepare Studio job: {exc}"
+            self.store.append_job_event(
+                job.id,
+                job.profile,
+                "job.prepare",
+                error,
+                status="failed",
+            )
+            self.store.fail(job.id, error, self.owner_id)
+            self._export_chat(job.project)
+            return
         bridge = HermesSessionEventBridge(
             self.store,
             self.settings,
@@ -275,7 +323,7 @@ class StudioJobManager:
     def _agent_query(self, job: Job) -> str:
         project_path = self.settings.studio_root / "projects" / job.project
         clip_path = project_path / "clips" / job.clip_id
-        return (
+        context = (
             "Exact Studio context (do not guess or fuzzy-match paths):\n"
             f"Project ID: {job.project}\n"
             f"Project path: {project_path}\n"
@@ -283,7 +331,58 @@ class StudioJobManager:
             f"Active clip path: {clip_path}\n"
             "Project chat and references are shared. Read or write prompt, settings, "
             "and generation files only under the active clip path.\n\n"
-            f"User request:\n{job.message}"
+        )
+        if job.kind != "generate":
+            return context + f"User request:\n{job.message}"
+
+        request = json.loads(job.message)
+        contract = self._validate_generation_job(job)
+        package = {
+            "request": request,
+            "settings": contract["settings"],
+            "resolution": contract["readiness"]["resolution"],
+            "timing": contract["readiness"]["timing"],
+            "references": contract["readiness"]["references"],
+        }
+        return context + (
+            "Explicit user-authorized web generation. Do not ask for confirmation, "
+            "do not rewrite current_prompt.txt or current_generation.json, and do not "
+            "change any validated knob. Immediately before ComfyUI submission, re-read "
+            "both files and abort without queueing if their prompt SHA-256 or settings "
+            "updated_at differs from the request token. Build the exact H3 graph, submit "
+            "one workflow through the mandatory comfyui-mcp batch transaction, archive "
+            "the output into this clip, and clear VRAM in finally-style cleanup.\n\n"
+            "Validated generation package:\n" +
+            json.dumps(package, indent=2, ensure_ascii=False)
+        )
+
+    def _validate_generation_job(self, job: Job) -> dict:
+        try:
+            request = json.loads(job.message)
+        except json.JSONDecodeError as exc:
+            raise ValueError("generation request payload is invalid") from exc
+        if (not isinstance(request, dict)
+                or set(request) != {
+                    "action", "prompt_sha256", "settings_updated_at"}
+                or request.get("action") != "generate-current-prompt"
+                or not isinstance(request.get("prompt_sha256"), str)
+                or not isinstance(request.get("settings_updated_at"), str)):
+            raise ValueError("generation request payload is invalid")
+        project = ds.project_path(self.settings.studio_root, job.project)
+        clip_store = ClipStore()
+        manifest = clip_store.describe(project)
+        entry = next(
+            (item for item in manifest["clips"] if item["id"] == job.clip_id), None)
+        if entry is None:
+            raise ValueError(f"clip not found: {job.clip_id}")
+        if not entry["enabled"]:
+            raise ValueError("clip is disabled")
+        clip = clip_store.resolve_clip(project, job.clip_id)
+        return GenerationSettingsStore(self.settings).validate_generation_request(
+            project,
+            clip,
+            request["prompt_sha256"],
+            request["settings_updated_at"],
         )
 
     def _job_environment(self, job: Job) -> dict[str, str]:
@@ -298,6 +397,7 @@ class StudioJobManager:
                 self.settings.studio_root / "projects" / job.project /
                 "clips" / job.clip_id),
             "HERMES_STUDIO_PROFILE": job.profile,
+            "HERMES_STUDIO_JOB_KIND": job.kind,
         })
         return environment
 

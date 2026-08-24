@@ -163,7 +163,8 @@ Hermes and the web UI always carry exact project and clip IDs.
 ### Phase 4 – Polish
 - [x] Media detail/filter/review actions
 - [x] Typed generation settings manifest + prompt readiness/editor panel
-- “Generate with this prompt” button that appears when Hermes outputs a structured prompt
+- [x] “Generate with this prompt” button enabled for a ready, revision-matched
+  prompt/settings contract, with worker-start revalidation and exact Studio job dispatch
 - [x] Promote to `final/` and copy selected generation media into references
 - [x] Create/rename/reorder/enable clips and select one video take per enabled clip
 - Basic project metadata

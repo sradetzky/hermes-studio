@@ -13,6 +13,10 @@ import {apiPaths} from '../webapp/static/api-paths.mjs';
 import {queuePresentation} from '../webapp/static/comfy-queue.mjs';
 import {refreshLivePlane} from '../webapp/static/refresh-planes.mjs';
 import {takeDeletionMessage} from '../webapp/static/media-review.js';
+import {
+  generationActionState,
+  generationRequestPayload,
+} from '../webapp/static/generation-settings.js';
 
 test('seed text stays inside the exact JSON integer range', () => {
   assert.equal(isSeedWithinRange(''), true);
@@ -53,6 +57,10 @@ test('API paths encode every external identifier once', () => {
     apiPaths.generation('project / one', 'clip-001', 'take #1'),
     '/api/project/project%20%2F%20one/clips/clip-001/generations/take%20%231',
   );
+  assert.equal(
+    apiPaths.generate('project / one', 'clip #1'),
+    '/api/project/project%20%2F%20one/clips/clip%20%231/generate',
+  );
   assert.equal(apiPaths.chat('project', 42), '/api/project/project/chat?after=42');
   assert.equal(apiPaths.comfyQueue, '/api/comfyui/queue');
 });
@@ -65,6 +73,27 @@ test('take deletion confirmation states irreversible scope and selected cleanup'
     'This cannot be undone.',
   );
   assert.doesNotMatch(takeDeletionMessage('take-8', false), /selection will be cleared/);
+});
+
+test('generation action requires a ready current contract and idle enabled clip', () => {
+  const contract = {
+    readiness: {ready: true, reasons: []},
+    manifest: {prompt_sha256: 'abc', updated_at: 'revision-1'},
+  };
+  assert.deepEqual(generationActionState(contract, true, false, false), {
+    enabled: true, label: 'Generate with this prompt', reason: '',
+  });
+  assert.equal(generationActionState(contract, false, false, false).reason,
+    'Enable this clip before generating');
+  assert.equal(generationActionState(contract, true, true, false).reason,
+    'Wait for the active Studio job to finish');
+  assert.equal(generationActionState({
+    readiness: {ready: false, reasons: ['Current prompt changed']},
+    manifest: contract.manifest,
+  }, true, false, false).reason, 'Current prompt changed');
+  assert.deepEqual(generationRequestPayload(contract), {
+    prompt_sha256: 'abc', settings_updated_at: 'revision-1',
+  });
 });
 
 test('Comfy queue presentation distinguishes running, queued, idle, and offline', () => {
