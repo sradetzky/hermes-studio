@@ -71,14 +71,18 @@ concurrently.
    For a web generation request, the job query already contains the exact
    shell-quoted dry-run command and output JSON path in its mandatory execution
    tail. Keep that tail as the active task after every tool result. Run the
-   command exactly once with its stdout suppression intact, then read only the
-   output JSON's `prompt_stage1_h3`. Never read, search, or reverse-engineer
-   `run_h3.py`.
-2. Upload references through `mcp_comfyui_upload_image` one at a time in prompt
-   order—never as parallel tool calls; patch the graph with the returned server
-   filenames.
-3. Optionally call `mcp_comfyui_clear_vram` before switching model families.
-4. Submit exactly one graph through `mcp_comfyui_batch` with
+   command exactly once with its stdout suppression intact. Do not read its graph
+   JSON into model context. Never read, search, or reverse-engineer `run_h3.py`.
+2. For a web generation request, run the exact `submit_h3_graph_mcp.py` command
+   from the mandatory tail. Never call upload or batch-submit tools yourself and
+   never transcribe a graph/prompt into tool arguments. The helper serially
+   uploads refs, revalidates the contract, and submits exact graph bytes through
+   pinned MCP tooling. Read only its compact result JSON.
+3. For a manual/non-web run only, upload references serially in prompt order,
+   patch returned filenames into the graph, and optionally call
+   `mcp_comfyui_clear_vram` before switching model families.
+4. For a manual/non-web run only, submit exactly one graph through
+   `mcp_comfyui_batch` with
    `action:"submit"`, `workflows:[graph]`, and `disable_random_seed:true`.
    Retain the returned `batch_id` and `prompt_id`. The explicit seed guard is
    mandatory because batch submission otherwise randomizes seed widgets.

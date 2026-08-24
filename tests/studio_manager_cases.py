@@ -297,11 +297,14 @@ class StudioManagerTests(WebAppTestCase):
         self.assertIn("authoritative ComfyUI history", query)
         self.assertIn("MANDATORY EXECUTION TAIL", query)
         self.assertIn("read, search, inspect, or reverse-engineer run_h3.py", query)
-        self.assertIn("never with parallel tool calls", query)
+        self.assertIn("never call upload_image or batch submit yourself", query)
         self.assertIn("--mode t2va", query)
         self.assertIn("--width 832 --height 480 --length 124 --steps 20", query)
         self.assertIn("--dry-run --output-json", query)
         self.assertIn(">/dev/null", query)
+        self.assertIn("scripts/submit_h3_graph_mcp.py", query)
+        self.assertIn("--prompt-sha256", query)
+        self.assertIn("--settings-updated-at", query)
         command = manager._default_command(job, None)
         self.assertEqual(
             command[command.index("-t") + 1],
@@ -349,6 +352,7 @@ class StudioManagerTests(WebAppTestCase):
         self.assertIn("--length 362 --steps 8 --seed 42 --accel", query)
         self.assertLess(query.index("one.jpg"), query.index("two.jpg"))
         self.assertIn(f"hermes-studio-{job.id}-h3-graph.json", query)
+        self.assertIn(f"hermes-studio-{job.id}-mcp-submit.json", query)
 
     def test_generation_exit_zero_without_contract_archive_fails(self):
         ds.studio_root(str(self.settings.studio_root))

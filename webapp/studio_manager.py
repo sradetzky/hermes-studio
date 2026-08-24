@@ -610,6 +610,29 @@ class StudioJobManager:
         command.extend(("--dry-run", "--output-json", str(output)))
         return shlex.join(command) + " >/dev/null", output
 
+    def _graph_submit_command(
+            self, job: Job, package: dict, graph_path: Path) -> tuple[str, Path]:
+        project_path = self.settings.studio_root / "projects" / job.project
+        clip_path = project_path / "clips" / job.clip_id
+        result = Path(f"/tmp/hermes-studio-{job.id}-mcp-submit.json")
+        command = [
+            "python3",
+            str(self.settings.repo / "scripts/submit_h3_graph_mcp.py"),
+            "--graph-json", str(graph_path),
+            "--prompt-file", str(clip_path / "current_prompt.txt"),
+            "--settings-file", str(clip_path / "current_generation.json"),
+            "--prompt-sha256", package["prompt_sha256"],
+            "--settings-updated-at", package["settings_updated_at"],
+            "--comfyui-url", self.settings.comfy_url,
+            "--comfyui-path", str(self.settings.comfy_output.parent),
+            "--comfyui-python", str(
+                self.settings.comfy_output.parent / ".venv/bin/python"),
+        ]
+        for filename in package["execution"]["references"]:
+            command.extend(("--image", str(project_path / "references" / filename)))
+        command.extend(("--result-json", str(result)))
+        return shlex.join(command), result
+
     def _agent_query(self, job: Job) -> str:
         project_path = self.settings.studio_root / "projects" / job.project
         path_context = (
@@ -649,22 +672,25 @@ class StudioJobManager:
 
         package = self._validate_generation_job(job)
         graph_command, graph_path = self._graph_builder_command(job, package)
+        submit_command, submit_result = self._graph_submit_command(
+            job, package, graph_path)
         agent_package = {
             key: value for key, value in package.items() if key != "prompt"
         }
         return context + (
             "Explicit user-authorized web generation. Do not ask for confirmation, "
             "do not rewrite current_prompt.txt or current_generation.json, and do not "
-            "change any validated knob. Immediately before ComfyUI submission, re-read "
-            "both files and abort without queueing if their prompt SHA-256 or settings "
-            "updated_at differs from the request token. Build the exact H3 graph, submit "
+            "change any validated knob. The exact submission helper re-reads both files "
+            "immediately before ComfyUI submission and aborts without queueing if their "
+            "prompt SHA-256 or settings updated_at differs from the request token. Build "
+            "the exact H3 graph, submit "
             "one workflow through the mandatory comfyui-mcp batch transaction, archive "
             "the output into this clip with its exact prompt_id, and clear VRAM in "
             "finally-style cleanup. The web archive boundary reads authoritative "
             "ComfyUI history and rejects missing, incomplete, or mismatched execution "
             "metadata.\n\n"
             "Validated generation package (the immutable prompt body is intentionally "
-            "omitted here; read it only from current_prompt.txt):\n" +
+            "omitted here and is read only by the exact helper):\n" +
             json.dumps(agent_package, indent=2, ensure_ascii=False) +
             "\n\nMANDATORY EXECUTION TAIL — retain this as the active task after every "
             "tool result. Do not ask for the request again. Do not inspect directories "
@@ -672,14 +698,19 @@ class StudioJobManager:
             f"graph file {graph_path} does not exist, run this exact terminal command "
             "once; otherwise do not rerun it:\n"
             f"{graph_command}\n"
-            f"Read only {graph_path}; use its prompt_stage1_h3 object as the MCP "
-            "workflow. Upload the ordered references through comfyui-mcp one at a "
-            "time in order, never with parallel tool calls, and "
-            "replace graph LoadImage filenames only when an upload returns a different "
-            "server filename. Immediately before submission, re-read the two exact "
-            "clip contract files and verify their token. Submit exactly one workflow, "
-            "wait in two-second status batches, archive the matching output, then clear "
-            "VRAM in finally-style cleanup. Do not invoke the runner without --dry-run."
+            f"Do not read {graph_path}; it is input only to the exact submission helper "
+            "below. Do not read the graph or prompt body into model context, and never "
+            "call upload_image or "
+            "batch submit yourself. The helper serially uploads references, re-verifies "
+            "the exact prompt/settings token, and passes the graph bytes to pinned "
+            "comfyui-mcp tooling without model transcription. If the job-unique result "
+            f"file {submit_result} does not exist, run this exact command once; otherwise "
+            "do not rerun it:\n"
+            f"{submit_command}\n"
+            f"Read only the compact {submit_result}. Use its batch_id to wait in "
+            "two-second status batches, archive the matching prompt_id output, then "
+            "clear VRAM in finally-style cleanup. Do not invoke the runner without "
+            "--dry-run."
         )
 
     def _validate_generation_job(self, job: Job) -> dict:

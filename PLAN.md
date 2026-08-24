@@ -57,8 +57,9 @@ Folder structure on disk (source of truth for projects & media)
   Turbo, SeedVR2, and upscale controls are not part of the web generation contract.
 - Web generation jobs receive one exact immutable-package-derived
   `run_h3.py --dry-run` command in a compact task-preserving tail and consume its
-  graph JSON with a minimal render toolset; the agent never reverse-engineers or
-  reads the runner source during a render request.
+  graph JSON with a minimal render toolset. A deterministic pinned-MCP helper
+  validates and submits the graph bytes; the agent never reverse-engineers the
+  runner or transcribes workflow/prompt content during a render request.
 - Always generate structured official prompts (see 2.4).
 - Output: 4–15s video with native stereo audio, archived at the generated canvas.
 

@@ -21,6 +21,7 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
 | `hermes/skills/*/SKILL.md` | Skills; deployed into profile skill dirs |
 | `scripts/design_studio.py` | Project/prompt/chat CLI + generation archiving |
 | `scripts/krea2_image.py` | Krea 2 image runner (t2i / style-ref / upscale) |
+| `scripts/submit_h3_graph_mcp.py` | Exact graph/reference submission through pinned MCP tooling |
 | `scripts/sync-profiles.sh` | Deploy/check repo SOULs + skills against live profiles |
 | `scripts/switch-model.sh` | Fleet-wide model/provider switching |
 | `scripts/build-web-css.sh` | Rebuild pinned local Tailwind CSS bundle |
@@ -184,8 +185,9 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
   skills use `HERMES_HOME`, user resources use `HERMES_REAL_HOME`, and Studio
   terminal jobs use explicit real-home mode.
 - Web generation jobs now use a minimal render toolset and provide an exact,
-  compact tail-pinned H3 dry-run command and JSON path, preventing task loss and
-  model loops over the runner's source code.
+  compact tail-pinned H3 dry-run command plus deterministic MCP submission
+  helper, preventing task loss, runner-source loops, and model-transcribed graph
+  or prompt corruption.
 
 ## Next steps
 

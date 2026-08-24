@@ -17,10 +17,14 @@ Documents, and repository paths; raw `~` is not a stable root.
 
 Studio web jobs derive one exact shell-quoted `run_h3.py --dry-run` command from
 the immutable generation package, place it in a compact task-preserving query
-tail, suppress its stdout, and read only the emitted graph JSON. Generation jobs
+tail, suppress its stdout, and keep the emitted graph JSON out of model context.
+`submit_h3_graph_mcp.py` serially uploads refs, revalidates prompt/settings,
+patches returned loader filenames in memory, and passes the exact graph object
+through pinned `mcporter@0.13.7` → `comfyui-mcp@0.52.61`, with a result-file
+reservation that fails closed instead of double-submitting. Generation jobs
 receive only terminal, file, skills, and comfyui toolsets. The agent must not
-inspect or reverse-engineer the runner source.
-Studio then uploads refs and enqueues through MCP, archives with
+inspect the runner or transcribe workflow/prompt content.
+Studio then waits through MCP, archives with
 `design_studio.py archive-output` using exact project + clip IDs, and always
 clears VRAM.
 `design_studio.py generate` remains a manual direct diagnostic fallback.
@@ -35,7 +39,8 @@ clears VRAM.
 - LightX2V turbo LoRAs: Ref2VA v0.1 4-step (R2V); FL2VA v1.1 768p 4-step
   (T2VA/I2VA/FL2VA), strength 1.0, res_multistep/simple, explicit 1344x768
 - Never run two H3 jobs concurrently (ComfyUI/input upload races corrupt refs)
-- Upload ordered references one at a time; never issue parallel MCP upload calls
+- `submit_h3_graph_mcp.py` owns ordered reference uploads and batch submission;
+  agents never hand-transcribe graphs into MCP tool arguments
 - Cancelling: killing run_h3.py does NOT stop the queued job — use the MCP
   queue cancel action, verify stopped, then clear VRAM
 - Empty prompt bodies are rejected — pass real content ('.' placeholder works)
