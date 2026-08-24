@@ -5,7 +5,7 @@ planning, generating, and reviewing MiniMax H3 video and Krea 2 still images.
 Hermes profiles handle creative direction and specialist handoffs, ComfyUI owns
 GPU execution, and the project filesystem remains the media source of truth.
 
-> **Preview status (`v0.1.0-preview.2`):** the planning, settings, activity, and
+> **Preview status (`v0.1.0-preview.3`):** the planning, settings, activity, and
 > media-review workflow is operational and locally tested on Linux with an RTX
 > 5060 Ti 16 GB. The web
 > server remains loopback-only; optional remote access is tailnet-only through
@@ -222,7 +222,7 @@ reference images.
 
 - No application authentication or multi-user isolation; tailnet access relies
   on Tailscale identity and ACL policy
-- No side-by-side take comparison, selected-take assembly, or timeline editor
+- No side-by-side take comparison, trimming, transitions, or timeline editor
 - No packaged installer or model/workflow downloader
 - No guarantee outside the documented local Linux/ComfyUI setup
 

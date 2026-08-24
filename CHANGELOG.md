@@ -7,6 +7,8 @@ preview and production releases.
 
 ## [Unreleased]
 
+## [0.1.0-preview.3] - 2026-08-24
+
 ### Changed
 
 - Completed the blocking fresh-eyes remediation gate before project movie
@@ -65,6 +67,14 @@ preview and production releases.
   acceleration nodes, ordered references, and prompt hash from authoritative
   ComfyUI history; incomplete or mismatched execution metadata fails closed
   instead of publishing a partial take record
+
+### Preview limitations
+
+- No application authentication or multi-user isolation; tailnet access relies
+  on Tailscale identity and ACL policy
+- No side-by-side take comparison, trimming, transitions, or timeline editor
+- Linux, Hermes Agent, FFmpeg, ComfyUI, models, and workflows must be installed
+  separately
 
 ## [0.1.0-preview.2] - 2026-08-24
 
@@ -164,6 +174,7 @@ preview and production releases.
 - Fixed desktop-first three-pane layout
 - Linux, Hermes Agent, ComfyUI, models, and workflows must be installed separately
 
-[Unreleased]: https://github.com/sradetzky/hermes-studio/compare/v0.1.0-preview.2...HEAD
+[Unreleased]: https://github.com/sradetzky/hermes-studio/compare/v0.1.0-preview.3...HEAD
+[0.1.0-preview.3]: https://github.com/sradetzky/hermes-studio/compare/v0.1.0-preview.2...v0.1.0-preview.3
 [0.1.0-preview.2]: https://github.com/sradetzky/hermes-studio/compare/v0.1.0-preview.1...v0.1.0-preview.2
 [0.1.0-preview.1]: https://github.com/sradetzky/hermes-studio/releases/tag/v0.1.0-preview.1

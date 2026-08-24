@@ -1,7 +1,7 @@
 # PLAN.md — Hermes Studio
 
-**Status**: `v0.1.0-preview.2` released; Phase 4.7 remediation and Phase 5
-project movie assembly are complete.
+**Status**: `v0.1.0-preview.3` release candidate prepared with Phase 4.7
+remediation and Phase 5 project movie assembly complete.
 **Owner**: Sven (local setup on RTX 5060 Ti 16GB)  
 **Updated**: 2026-08-24
 **Goal**: Fully local, agent-orchestrated creative studio centered on MiniMax H3 + Hermes, with a simple self-hosted web UI.
@@ -275,6 +275,16 @@ Current criteria (met):
   viewports without losing the active project, clip, conversation, or playback.
 - [x] Pass the local correctness, trust-boundary, dependency, profile-drift,
   browser, clean-archive, and checksum release gates.
+
+`v0.1.0-preview.3` criteria (met):
+
+- [x] Reject unsafe/stale generation work and preserve exact process, session,
+  output-graph, filesystem, browser-request, and playback ownership.
+- [x] Export all enabled clips' exact selected video takes in manifest order as
+  one explicit versioned hard-cut movie with immutable provenance.
+- [x] Pass 211 Python tests, 18 frontend/real-Chromium tests, compilation,
+  dependency, profile-drift, CSS, clean-archive, service/API, desktop, and narrow
+  live gates.
 
 ---
 

@@ -279,6 +279,8 @@ auto-chained, and their result never starts a render without a separate request.
   stable Media playback/download. The complete 211-test Python, 18-test frontend/
   Chromium, clean-archive, service/API, desktop, and narrow live gates pass. No
   trimming, transitions, timeline, or take comparison.
+- Preview.3 release gate (done): synchronized Phase 4.7/5 public scope and passed
+  complete local, clean-archive, service/API, and real-browser verification.
 
 ## Out of scope (v1)
 
