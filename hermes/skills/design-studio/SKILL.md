@@ -68,8 +68,15 @@ concurrently.
 1. Resolve the exact project and clip, write that clip's `current_prompt.txt`,
    and build/inspect the API graph with the relevant
    runner's `--dry-run` mode. Dry-run must not queue a job.
-2. Upload references through `mcp_comfyui_upload_image`; patch the graph with
-   the returned server filenames.
+   For a web generation request, the job query already contains the exact
+   shell-quoted dry-run command and output JSON path in its mandatory execution
+   tail. Keep that tail as the active task after every tool result. Run the
+   command exactly once with its stdout suppression intact, then read only the
+   output JSON's `prompt_stage1_h3`. Never read, search, or reverse-engineer
+   `run_h3.py`.
+2. Upload references through `mcp_comfyui_upload_image` one at a time in prompt
+   order—never as parallel tool calls; patch the graph with the returned server
+   filenames.
 3. Optionally call `mcp_comfyui_clear_vram` before switching model families.
 4. Submit exactly one graph through `mcp_comfyui_batch` with
    `action:"submit"`, `workflows:[graph]`, and `disable_random_seed:true`.

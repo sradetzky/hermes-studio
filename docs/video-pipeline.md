@@ -15,9 +15,14 @@ Hermes profile tools may isolate `$HOME`. Studio therefore uses `$HERMES_HOME`
 for active-profile skills and `$HERMES_REAL_HOME` for the account's ComfyUI,
 Documents, and repository paths; raw `~` is not a stable root.
 
-Studio builds with `run_h3.py --dry-run`, uploads refs and enqueues through
-MCP, archives with `design_studio.py archive-output` using exact project + clip
-IDs, then always clears VRAM.
+Studio web jobs derive one exact shell-quoted `run_h3.py --dry-run` command from
+the immutable generation package, place it in a compact task-preserving query
+tail, suppress its stdout, and read only the emitted graph JSON. Generation jobs
+receive only terminal, file, skills, and comfyui toolsets. The agent must not
+inspect or reverse-engineer the runner source.
+Studio then uploads refs and enqueues through MCP, archives with
+`design_studio.py archive-output` using exact project + clip IDs, and always
+clears VRAM.
 `design_studio.py generate` remains a manual direct diagnostic fallback.
 
 ## Proven knobs (RTX 5060 Ti 16GB)
@@ -30,6 +35,7 @@ IDs, then always clears VRAM.
 - LightX2V turbo LoRAs: Ref2VA v0.1 4-step (R2V); FL2VA v1.1 768p 4-step
   (T2VA/I2VA/FL2VA), strength 1.0, res_multistep/simple, explicit 1344x768
 - Never run two H3 jobs concurrently (ComfyUI/input upload races corrupt refs)
+- Upload ordered references one at a time; never issue parallel MCP upload calls
 - Cancelling: killing run_h3.py does NOT stop the queued job — use the MCP
   queue cancel action, verify stopped, then clear VRAM
 - Empty prompt bodies are rejected — pass real content ('.' placeholder works)

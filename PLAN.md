@@ -55,6 +55,10 @@ Folder structure on disk (source of truth for projects & media)
   preview/final defaults are 0.5MP/8 steps and 0.9MP/20 steps.
 - Acceleration means only Sol fused modulation + ChunkFF. Quantization, model,
   Turbo, SeedVR2, and upscale controls are not part of the web generation contract.
+- Web generation jobs receive one exact immutable-package-derived
+  `run_h3.py --dry-run` command in a compact task-preserving tail and consume its
+  graph JSON with a minimal render toolset; the agent never reverse-engineers or
+  reads the runner source during a render request.
 - Always generate structured official prompts (see 2.4).
 - Output: 4–15s video with native stereo audio, archived at the generated canvas.
 

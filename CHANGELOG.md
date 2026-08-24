@@ -9,6 +9,11 @@ preview and production releases.
 
 ### Fixed
 
+- Prevented web generation agents from repeatedly reading the H3 runner source:
+  each immutable generation job now uses a minimal render toolset and supplies a
+  compact tail-pinned, shell-quoted dry-run graph-builder command whose JSON
+  output is read directly without flooding or losing the active task context;
+  reference uploads are explicitly serialized in prompt order
 - Made Studio profile jobs and legacy H3 runner paths robust to Hermes profile
   HOME isolation: active-profile skills use `$HERMES_HOME`, account files use
   `$HERMES_REAL_HOME`, and the Studio profile forces real-home terminal mode

@@ -292,8 +292,22 @@ class StudioManagerTests(WebAppTestCase):
         self.assertIn("Explicit user-authorized web generation", query)
         self.assertIn('"action": "generate-current-prompt"', query)
         self.assertIn('"width": 832', query)
+        self.assertNotIn("A complete 5-second H3 generation prompt", query)
         self.assertIn("exact prompt_id", query)
         self.assertIn("authoritative ComfyUI history", query)
+        self.assertIn("MANDATORY EXECUTION TAIL", query)
+        self.assertIn("read, search, inspect, or reverse-engineer run_h3.py", query)
+        self.assertIn("never with parallel tool calls", query)
+        self.assertIn("--mode t2va", query)
+        self.assertIn("--width 832 --height 480 --length 124 --steps 20", query)
+        self.assertIn("--dry-run --output-json", query)
+        self.assertIn(">/dev/null", query)
+        command = manager._default_command(job, None)
+        self.assertEqual(
+            command[command.index("-t") + 1],
+            "terminal,file,skills,comfyui",
+        )
+        self.assertNotIn("all", command)
         self.assertEqual(
             manager._job_environment(job)["HERMES_STUDIO_JOB_KIND"], "generate")
         (clip / "current_prompt.txt").write_text("changed 5-second prompt\n")
@@ -307,6 +321,34 @@ class StudioManagerTests(WebAppTestCase):
         self.assertEqual(failed.status, JobStatus.FAILED)
         self.assertIn("changed", failed.error.lower())
         self.assertEqual(commands, [])
+
+    def test_generation_graph_builder_command_carries_ordered_r2v_inputs(self):
+        project = ds.create_project(self.settings.studio_root, "r2v-builder")
+        clip = project / "clips" / "clip-001"
+        references = project / "references"
+        (references / "one.jpg").write_bytes(b"one")
+        (references / "two.jpg").write_bytes(b"two")
+        (clip / "current_prompt.txt").write_text(
+            "<Picture 1> (one.jpg) <Picture 2> (two.jpg) 15-second prompt\n")
+        contract = GenerationSettingsStore(self.settings).save(
+            project, clip, _generation_settings_payload(
+                mode="r2v", seed=42, steps=8, accel=True))
+        store = JobStore(self.settings.database_path)
+        store.initialize()
+        manager = StudioJobManager(self.settings, store)
+        job = manager.submit_generation(
+            project.name,
+            "clip-001",
+            contract["manifest"]["prompt_sha256"],
+            contract["manifest"]["updated_at"],
+        )
+
+        query = manager._agent_query(job)
+
+        self.assertIn("--mode r2v", query)
+        self.assertIn("--length 362 --steps 8 --seed 42 --accel", query)
+        self.assertLess(query.index("one.jpg"), query.index("two.jpg"))
+        self.assertIn(f"hermes-studio-{job.id}-h3-graph.json", query)
 
     def test_generation_exit_zero_without_contract_archive_fails(self):
         ds.studio_root(str(self.settings.studio_root))

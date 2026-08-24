@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import signal
 import sqlite3
 import subprocess
@@ -542,7 +543,11 @@ class StudioJobManager:
         ]
         if session_id and re.fullmatch(r"[A-Za-z0-9_-]+", session_id):
             command += ["-r", session_id]
-        toolsets = PROFILE_TOOLSETS.get(job.profile, "all")
+        toolsets = (
+            "terminal,file,skills,comfyui"
+            if job.kind == "generate"
+            else PROFILE_TOOLSETS.get(job.profile, "all")
+        )
         command += [
             "chat", "-Q", "-t", toolsets, "--source", self._session_source(job),
             "-q", self._agent_query(job),
@@ -574,6 +579,36 @@ class StudioJobManager:
             str(os.getpid()),
             *command,
         ]
+
+    def _graph_builder_command(self, job: Job, package: dict) -> tuple[str, Path]:
+        project_path = self.settings.studio_root / "projects" / job.project
+        clip_path = project_path / "clips" / job.clip_id
+        profile_home = (
+            self.settings.hermes_home
+            if job.profile == "default"
+            else self.settings.hermes_home / "profiles" / job.profile
+        )
+        output = Path(f"/tmp/hermes-studio-{job.id}-h3-graph.json")
+        settings = package["settings_manifest"]
+        execution = package["execution"]
+        command = [
+            "python3",
+            str(profile_home / "skills/minimax-h3-run/scripts/run_h3.py"),
+            "--mode", settings["mode"],
+            "--prompt-file", str(clip_path / "current_prompt.txt"),
+            "--width", str(execution["resolution"]["width"]),
+            "--height", str(execution["resolution"]["height"]),
+            "--length", str(execution["timing"]["frames"]),
+            "--steps", str(settings["steps"]),
+        ]
+        if settings["seed"] is not None:
+            command.extend(("--seed", str(settings["seed"])))
+        if settings["accel"]:
+            command.append("--accel")
+        for filename in execution["references"]:
+            command.extend(("--image", str(project_path / "references" / filename)))
+        command.extend(("--dry-run", "--output-json", str(output)))
+        return shlex.join(command) + " >/dev/null", output
 
     def _agent_query(self, job: Job) -> str:
         project_path = self.settings.studio_root / "projects" / job.project
@@ -613,6 +648,10 @@ class StudioJobManager:
             return context + f"User request:\n{job.message}"
 
         package = self._validate_generation_job(job)
+        graph_command, graph_path = self._graph_builder_command(job, package)
+        agent_package = {
+            key: value for key, value in package.items() if key != "prompt"
+        }
         return context + (
             "Explicit user-authorized web generation. Do not ask for confirmation, "
             "do not rewrite current_prompt.txt or current_generation.json, and do not "
@@ -624,8 +663,23 @@ class StudioJobManager:
             "finally-style cleanup. The web archive boundary reads authoritative "
             "ComfyUI history and rejects missing, incomplete, or mismatched execution "
             "metadata.\n\n"
-            "Validated generation package:\n" +
-            json.dumps(package, indent=2, ensure_ascii=False)
+            "Validated generation package (the immutable prompt body is intentionally "
+            "omitted here; read it only from current_prompt.txt):\n" +
+            json.dumps(agent_package, indent=2, ensure_ascii=False) +
+            "\n\nMANDATORY EXECUTION TAIL — retain this as the active task after every "
+            "tool result. Do not ask for the request again. Do not inspect directories "
+            "or read, search, inspect, or reverse-engineer run_h3.py. If the job-unique "
+            f"graph file {graph_path} does not exist, run this exact terminal command "
+            "once; otherwise do not rerun it:\n"
+            f"{graph_command}\n"
+            f"Read only {graph_path}; use its prompt_stage1_h3 object as the MCP "
+            "workflow. Upload the ordered references through comfyui-mcp one at a "
+            "time in order, never with parallel tool calls, and "
+            "replace graph LoadImage filenames only when an upload returns a different "
+            "server filename. Immediately before submission, re-read the two exact "
+            "clip contract files and verify their token. Submit exactly one workflow, "
+            "wait in two-second status batches, archive the matching output, then clear "
+            "VRAM in finally-style cleanup. Do not invoke the runner without --dry-run."
         )
 
     def _validate_generation_job(self, job: Job) -> dict:

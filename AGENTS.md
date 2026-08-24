@@ -183,6 +183,9 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
 - Studio path resolution now survives Hermes profile HOME isolation: profile
   skills use `HERMES_HOME`, user resources use `HERMES_REAL_HOME`, and Studio
   terminal jobs use explicit real-home mode.
+- Web generation jobs now use a minimal render toolset and provide an exact,
+  compact tail-pinned H3 dry-run command and JSON path, preventing task loss and
+  model loops over the runner's source code.
 
 ## Next steps
 
