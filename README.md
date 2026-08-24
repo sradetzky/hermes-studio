@@ -130,12 +130,12 @@ printf '%s\n' 'HERMES_STUDIO_TRUSTED_HOSTS=<machine>.<tailnet>.ts.net' \
 chmod 600 "$HOME/.config/hermes-studio/environment"
 systemctl --user daemon-reload
 systemctl --user enable --now hermes-studio.service
-sudo tailscale serve --bg --yes --https=8788 http://127.0.0.1:8788
+sudo tailscale serve --bg --yes --https=8443 http://127.0.0.1:8788
 ```
 
-Open `https://<machine>.<tailnet>.ts.net:8788/` from a device permitted by the
-tailnet ACL. Port 8788 deliberately avoids replacing any existing Serve handler
-on standard HTTPS port 443. Do not use Tailscale Funnel: Studio has no separate
+Open `https://<machine>.<tailnet>.ts.net:8443/` from a device permitted by the
+tailnet ACL. Standard alternate HTTPS port 8443 avoids replacing any existing
+Serve handler on port 443. Do not use Tailscale Funnel: Studio has no separate
 application login, so every tailnet identity allowed to reach this device is
 trusted with its project, media, and write APIs.
 
@@ -143,7 +143,7 @@ Inspect or remove the exposure with:
 
 ```bash
 tailscale serve status
-sudo tailscale serve --https=8788 off
+sudo tailscale serve --https=8443 off
 systemctl --user disable --now hermes-studio.service
 ```
 

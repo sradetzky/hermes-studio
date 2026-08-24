@@ -14,7 +14,7 @@ if [[ -f "$PIDFILE" ]]; then
       if [[ -f "$environment" ]]; then
         while IFS='=' read -r key value; do
           if [[ "$key" == "HERMES_STUDIO_TRUSTED_HOSTS" && -n "$value" ]]; then
-            message+=" · https://${value%%,*}:8788"
+            message+=" · https://${value%%,*}:8443"
             break
           fi
         done < "$environment"

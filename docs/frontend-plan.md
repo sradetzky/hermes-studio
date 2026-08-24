@@ -133,7 +133,8 @@ auto-chained, and their result never starts a render without a separate request.
 - Queue observability is a read-only `GET /queue` exception to MCP-only control;
   responses expose prompt IDs and order only, never workflow payloads or controls.
 - Uvicorn stays loopback-only. Optional remote access uses Tailscale Serve HTTPS
-  on port 8788 and an exact `HERMES_STUDIO_TRUSTED_HOSTS` DNS allowlist; Funnel,
+  on standard alternate port 8443 and an exact `HERMES_STUDIO_TRUSTED_HOSTS`
+  DNS allowlist; Funnel,
   wildcard tailnet hosts, and direct LAN binding remain out of scope.
 - Uploads are restricted to image/video/audio extensions, 20 files/request,
   256MB/file; path components are rejected, batches stage before publication,
