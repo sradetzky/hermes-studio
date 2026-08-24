@@ -27,6 +27,9 @@ preview and production releases.
 - Made web generation jobs persist immutable prompt/settings/execution/archive
   contracts; archival reads the exact running job snapshot, and subprocess exit
   zero no longer completes a job without a matching artifact and prompt ID
+- Bound authoritative H3 metadata to the exact executed `SaveVideo` output branch
+  instead of global first-class-name matches; disconnected or ambiguous graph
+  nodes and output producers now fail closed
 - Web-triggered H3 archives now recover actual seed, canvas, timing, steps,
   acceleration nodes, ordered references, and prompt hash from authoritative
   ComfyUI history; incomplete or mismatched execution metadata fails closed

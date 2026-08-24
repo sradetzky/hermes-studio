@@ -409,6 +409,10 @@ class ProjectPathTests(unittest.TestCase):
             '{"mutated":true}\n', encoding="utf-8")
         prompt_id = "prompt-123"
         graph = {
+            "unet": {
+                "class_type": "UNETLoader",
+                "inputs": {"unet_name": "h3.safetensors"},
+            },
             "ref-1": {
                 "class_type": "LoadImage",
                 "inputs": {"image": "first.png"},
@@ -434,19 +438,65 @@ class ProjectPathTests(unittest.TestCase):
             },
             "scheduler": {
                 "class_type": "BasicScheduler",
-                "inputs": {"steps": 8},
+                "inputs": {"model": ["chunk", 0], "steps": 8},
             },
             "fused": {
                 "class_type": "MiniMaxH3FusedModulation",
-                "inputs": {"enabled": True},
+                "inputs": {"model": ["unet", 0], "enabled": True},
             },
             "chunk": {
                 "class_type": "MiniMaxH3ChunkFeedForward",
-                "inputs": {"enabled": True},
+                "inputs": {"model": ["fused", 0], "enabled": True},
+            },
+            "guider": {
+                "class_type": "BasicGuider",
+                "inputs": {
+                    "model": ["chunk", 0],
+                    "conditioning": ["cond", 0],
+                },
+            },
+            "sample": {
+                "class_type": "SamplerCustomAdvanced",
+                "inputs": {
+                    "noise": ["noise", 0],
+                    "guider": ["guider", 0],
+                    "sigmas": ["scheduler", 0],
+                    "latent_image": ["cond", 1],
+                },
+            },
+            "video-vae": {
+                "class_type": "VAELoader",
+                "inputs": {"vae_name": "video.safetensors"},
+            },
+            "audio-vae": {
+                "class_type": "VAELoader",
+                "inputs": {"vae_name": "audio.safetensors"},
+            },
+            "vae-decode": {
+                "class_type": "VAEDecode",
+                "inputs": {
+                    "samples": ["sample", 0],
+                    "vae": ["video-vae", 0],
+                },
+            },
+            "audio-decode": {
+                "class_type": "VAEDecodeAudio",
+                "inputs": {
+                    "samples": ["sample", 0],
+                    "vae": ["audio-vae", 0],
+                },
             },
             "video": {
                 "class_type": "CreateVideo",
-                "inputs": {"fps": 24.0},
+                "inputs": {
+                    "images": ["vae-decode", 0],
+                    "audio": ["audio-decode", 0],
+                    "fps": 24.0,
+                },
+            },
+            "save": {
+                "class_type": "SaveVideo",
+                "inputs": {"video": ["video", 0]},
             },
         }
         history = {
@@ -497,6 +547,7 @@ class ProjectPathTests(unittest.TestCase):
             f"http://127.0.0.1:8188/history/{prompt_id}",
         )
         self.assertEqual(meta["studio_job_id"], job.id)
+        self.assertEqual(meta["output_node_id"], "save")
         self.assertEqual(meta["generation_contract_version"], 1)
         self.assertEqual(meta["settings_updated_at"], settings_manifest["updated_at"])
         self.assertEqual(meta["recipe"], "h3-ref2va")
@@ -524,6 +575,133 @@ class ProjectPathTests(unittest.TestCase):
             json.loads((generation / "settings.json").read_text()),
             settings_manifest,
         )
+
+    def test_h3_history_metadata_follows_the_archived_output_branch(self):
+        prompt_id = "branch-prompt"
+        graph = {
+            "decoy-cond": {
+                "class_type": "MiniMaxH3ReferenceToVideo",
+                "inputs": {
+                    "prompt": "decoy prompt",
+                    "width": 1280,
+                    "height": 704,
+                    "length": 243,
+                },
+            },
+            "decoy-noise": {
+                "class_type": "RandomNoise",
+                "inputs": {"noise_seed": 1},
+            },
+            "decoy-scheduler": {
+                "class_type": "BasicScheduler",
+                "inputs": {"steps": 8},
+            },
+            "decoy-video": {
+                "class_type": "CreateVideo",
+                "inputs": {"fps": 24},
+            },
+            "cond": {
+                "class_type": "MiniMaxH3ImageToVideo",
+                "inputs": {
+                    "prompt": "actual branch prompt",
+                    "width": 640,
+                    "height": 384,
+                    "length": 125,
+                },
+            },
+            "model": {"class_type": "UNETLoader", "inputs": {}},
+            "noise": {
+                "class_type": "RandomNoise",
+                "inputs": {"noise_seed": 22},
+            },
+            "scheduler": {
+                "class_type": "BasicScheduler",
+                "inputs": {"model": ["model", 0], "steps": 9},
+            },
+            "guider": {
+                "class_type": "BasicGuider",
+                "inputs": {
+                    "model": ["model", 0],
+                    "conditioning": ["cond", 0],
+                },
+            },
+            "sample": {
+                "class_type": "SamplerCustomAdvanced",
+                "inputs": {
+                    "noise": ["noise", 0],
+                    "guider": ["guider", 0],
+                    "sigmas": ["scheduler", 0],
+                    "latent_image": ["cond", 1],
+                },
+            },
+            "vae": {"class_type": "VAELoader", "inputs": {}},
+            "vae-decode": {
+                "class_type": "VAEDecode",
+                "inputs": {"samples": ["sample", 0], "vae": ["vae", 0]},
+            },
+            "audio-decode": {
+                "class_type": "VAEDecodeAudio",
+                "inputs": {"samples": ["sample", 0], "vae": ["vae", 0]},
+            },
+            "video": {
+                "class_type": "CreateVideo",
+                "inputs": {
+                    "images": ["vae-decode", 0],
+                    "audio": ["audio-decode", 0],
+                    "fps": 25,
+                },
+            },
+            "save": {
+                "class_type": "SaveVideo",
+                "inputs": {"video": ["video", 0]},
+            },
+        }
+        history = {
+            prompt_id: {
+                "prompt": [1, prompt_id, graph, {}, ["save"]],
+                "status": {"completed": True, "status_str": "success"},
+                "outputs": {"save": {"images": [{
+                    "filename": "result.mp4",
+                    "subfolder": "",
+                    "type": "output",
+                }]}},
+            },
+        }
+        with patch(
+                "scripts.design_studio.urllib.request.urlopen",
+                return_value=closing(StringIO(json.dumps(history)))):
+            metadata = ds._h3_history_metadata(
+                prompt_id, ["result.mp4"])
+        self.assertEqual(metadata["mode"], "t2va")
+        self.assertEqual(metadata["output_node_id"], "save")
+        self.assertEqual(metadata["prompt_sha256"], hashlib.sha256(
+            b"actual branch prompt").hexdigest())
+        self.assertEqual((metadata["width"], metadata["height"]), (640, 384))
+        self.assertEqual(metadata["length"], 125)
+        self.assertEqual(metadata["seed"], 22)
+        self.assertEqual(metadata["steps"], 9)
+        self.assertEqual(metadata["fps"], 25)
+
+        graph["other-save"] = {
+            "class_type": "SaveVideo",
+            "inputs": {"video": ["video", 0]},
+        }
+        history[prompt_id]["prompt"][4].append("other-save")
+        history[prompt_id]["outputs"]["other-save"] = {
+            "images": [{
+                "filename": "result.mp4",
+                "subfolder": "",
+                "type": "output",
+            }],
+        }
+        with (
+            patch(
+                "scripts.design_studio.urllib.request.urlopen",
+                return_value=closing(StringIO(json.dumps(history))),
+            ),
+            self.assertRaisesRegex(ValueError, "one exact producer"),
+        ):
+            ds._h3_history_metadata(prompt_id, ["result.mp4"])
 
     def test_web_generation_archive_rejects_missing_history_identity(self):
         comfy_output = Path(self.temp.name) / "web-missing-history"

@@ -197,7 +197,7 @@ project/clip chat scope and exact IDs.
   without replaying prior-session activity.
 - [x] Persist an immutable generation execution contract per job and require one
   exact contract-bound archive before a generation job can complete.
-- [ ] Traverse the exact output-producing ComfyUI graph branch when deriving
+- [x] Traverse the exact output-producing ComfyUI graph branch when deriving
   authoritative execution metadata; reject disconnected or ambiguous nodes.
 - [ ] Prevent active project jobs from racing clip/settings mutations.
 - [ ] Validate and publish selected-take provenance under one project lock.

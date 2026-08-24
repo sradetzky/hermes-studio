@@ -151,6 +151,9 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
   expected archive snapshots in SQLite. Web archives read that exact running-job
   contract, and agent exit zero is rejected unless the matching artifact,
   authoritative prompt ID, prompt, settings, and metadata all exist.
+- ComfyUI metadata recovery now binds archived files to one executed `SaveVideo`
+  node and traverses only that node's upstream graph, rejecting disconnected
+  class-name decoys, ambiguous producers, and duplicate execution nodes.
 
 ## Next steps
 

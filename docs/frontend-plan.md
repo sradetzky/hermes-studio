@@ -210,6 +210,8 @@ auto-chained, and their result never starts a render without a separate request.
   the dedicated SQLite job. Worker start revalidates current state against that
   snapshot; archival reads the snapshot back from the exact running job, and a
   zero-exit agent cannot complete without one matching artifact and prompt ID.
+  Authoritative metadata follows the exact executed `SaveVideo` producer branch;
+  disconnected decoys and ambiguous output producers fail closed.
 - No auth v1; Uvicorn remains loopback-only, while optional tailnet access relies
   on Tailscale identity/ACLs plus the exact-host and same-origin guards above.
 
