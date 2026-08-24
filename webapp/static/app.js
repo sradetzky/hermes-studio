@@ -135,6 +135,7 @@ async function refreshComfyQueue() {
 }
 
 const narrowWorkspace = window.matchMedia('(max-width: 1099px)');
+if (narrowWorkspace.matches) $('#prompt-panel').open = false;
 
 function renderWorkspacePane() {
   const pane = normalizeWorkspacePane(state.workspacePane);

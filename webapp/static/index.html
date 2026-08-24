@@ -80,31 +80,30 @@
         </span>
       </div>
       <div class="panel flex-1 p-3 overflow-auto min-h-0" id="chatlog"></div>
-      <div class="panel p-3">
-        <div class="generation-readiness" id="generation-readiness">
-          <div class="generation-readiness-main">
-            <span class="readiness-badge" id="generation-readiness-badge">Not configured</span>
-            <span class="generation-readiness-summary"
-                  id="generation-readiness-summary">Save settings for this prompt</span>
+      <details class="panel prompt-panel" id="prompt-panel" open>
+        <summary class="prompt-panel-summary">Prompt &amp; generation</summary>
+        <div class="prompt-panel-body">
+          <div class="generation-readiness" id="generation-readiness">
+            <div class="generation-readiness-main">
+              <span class="readiness-badge" id="generation-readiness-badge">Not configured</span>
+              <span class="generation-readiness-summary"
+                    id="generation-readiness-summary">Save settings for this prompt</span>
+            </div>
+            <div class="generation-readiness-actions">
+              <button class="btn primary" id="generate-current-prompt" type="button"
+                      disabled>Generate with this prompt</button>
+              <button class="btn" id="edit-generation-settings" type="button">
+                Generation settings
+              </button>
+            </div>
+            <div class="generation-action-status" id="generation-action-status"
+                 role="status" aria-live="polite"></div>
+            <div class="generation-readiness-details" id="generation-readiness-details"></div>
           </div>
-          <div class="generation-readiness-actions">
-            <button class="btn primary" id="generate-current-prompt" type="button"
-                    disabled>Generate with this prompt</button>
-            <button class="btn" id="edit-generation-settings" type="button">
-              Generation settings
-            </button>
-          </div>
-          <div class="generation-action-status" id="generation-action-status"
-               role="status" aria-live="polite"></div>
-          <div class="generation-readiness-details" id="generation-readiness-details"></div>
-        </div>
-        <details open>
-          <summary class="text-xs uppercase tracking-wider text-gray-500 cursor-pointer mb-2">
-            Current prompt
-          </summary>
+          <div class="prompt-heading">Current prompt</div>
           <pre class="prompt" id="prompt">—</pre>
-        </details>
-      </div>
+        </div>
+      </details>
       <form class="panel p-2 flex gap-2" id="chat-form">
         <span class="active-clip-label" id="active-clip-label">No clip</span>
         <label class="sr-only" for="profile-select">Studio profile</label>

@@ -74,6 +74,11 @@ instead of rebuilding the DOM or resetting playback.
 - Narrow workspace selector: pointer and Left/Right/Home/End keyboard navigation,
   accurate pressed/hidden/inert state, touch-sized controls, and automatic return
   to Chat after selecting a project or clip
+- Prompt & generation uses one collapsible panel: open by default on desktop,
+  closed by default on narrow page loads, and capped at 28% of the narrow Chat
+  pane when expanded so the transcript stays larger. Its body scrolls independently.
+- On phones, the ComfyUI queue popover anchors to both header edges and uses a
+  viewport-relative maximum height instead of overflowing from the status label.
 - Polling every 2s runs project navigation, scoped chat/jobs/activity,
   references, and clip/generation requests as independently failing planes.
   Project, clip, and chat-scope revision tokens reject stale responses; media

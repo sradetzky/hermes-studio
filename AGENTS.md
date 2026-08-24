@@ -129,6 +129,9 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
 - Wide screens retain the Projects/Chat/Media three-pane workspace; viewports at
   1099px and below use explicit keyboard-accessible pane navigation without DOM
   replacement, preserving project/clip/chat state and active media playback.
+- Mobile queue details are viewport-bounded, and Prompt & generation is a
+  desktop-and-mobile collapsible panel that defaults closed on narrow screens;
+  expanded narrow prompts are capped so Chat remains the larger workspace.
 
 ## Next steps
 

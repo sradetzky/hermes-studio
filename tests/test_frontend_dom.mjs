@@ -57,3 +57,11 @@ test('responsive workspace exposes one control and panel per pane', () => {
     assert.match(html, new RegExp(`aria-controls="workspace-${pane}"`));
   }
 });
+
+test('prompt and generation controls live in a desktop-open collapsible panel', () => {
+  const html = readFileSync(
+    new URL('../webapp/static/index.html', import.meta.url), 'utf8');
+  assert.match(html, /<details class="panel prompt-panel" id="prompt-panel" open>/);
+  assert.match(html, /<summary class="prompt-panel-summary">Prompt &amp; generation<\/summary>/);
+  assert.match(html, /<pre class="prompt" id="prompt">/);
+});

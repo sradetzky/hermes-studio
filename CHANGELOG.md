@@ -44,6 +44,12 @@ preview and production releases.
 - Existing shared transcript/session/activity state migrates transactionally and
   losslessly into Project history; clip conversations start clean
 
+### Fixed
+
+- Kept the ComfyUI queue popover inside phone viewports and rebalanced narrow Chat
+  with a collapsed-by-default, independently scrollable Prompt & generation panel;
+  the same panel can now be collapsed on desktop for additional transcript space
+
 ## [0.1.0-preview.1] - 2026-08-23
 
 ### Added
