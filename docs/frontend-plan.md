@@ -260,10 +260,10 @@ auto-chained, and their result never starts a render without a separate request.
 - Preview.2 release gate (done): synchronized public scope, complete local
   correctness/security/dependency/profile-drift gates, real Chromium desktop and
   narrow checks, and a clean extracted-archive verification
-- M4.7 (blocking): close the fresh-eyes process/session/generation ownership,
+- M4.7 (done): closed the fresh-eyes process/session/generation ownership,
   authoritative graph traversal, filesystem transaction, stale-response, stable
   media DOM, and behavioral-browser coverage findings before adding more features
-- M5 (after M4.7): project-level **Export selected takes as movie** readiness and one
+- M5 (current): project-level **Export selected takes as movie** readiness and one
   explicit asynchronous hard-cut MP4 assembly from enabled clips in manifest
   order, with versioned `final/` publication, exact clip/take provenance, and
   Media playback/download. No trimming, transitions, timeline, or take comparison.

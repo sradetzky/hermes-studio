@@ -188,7 +188,7 @@ project/clip chat scope and exact IDs.
 - [x] Re-run desktop and narrow-browser release gates, synchronize current docs,
   and cut `v0.1.0-preview.2` only after both slices are verified
 
-### Phase 4.7 – Fresh-eyes remediation gate (blocking)
+### Phase 4.7 – Fresh-eyes remediation gate (complete)
 - [x] Make detached Hermes process ownership crash-safe and never release the
   global GPU lease while a possible job process remains alive.
 - [x] Couple worker lease renewal to scheduler health and recover unexpected
@@ -211,7 +211,7 @@ project/clip chat scope and exact IDs.
 - [x] Add behavioral Chromium coverage for navigation, dialogs, stale responses,
   queue sequencing, and playback; source-text regex checks remain supplementary.
 
-### Phase 5 – Project movie assembly (blocked by Phase 4.7)
+### Phase 5 – Project movie assembly
 - [ ] Add project-level assembly readiness for all enabled clips in manifest order;
   block and identify every enabled clip without one valid selected video take
 - [ ] Add an explicit **Export selected takes as movie** project action that runs

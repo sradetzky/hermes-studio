@@ -9,10 +9,10 @@ preview and production releases.
 
 ### Changed
 
-- Added a blocking fresh-eyes remediation gate before project movie assembly,
-  covering process/session/generation ownership, output-bound provenance,
-  filesystem transactions, stale browser responses, playback stability, and
-  behavioral browser coverage
+- Completed the blocking fresh-eyes remediation gate before project movie
+  assembly, covering process/session/generation ownership, output-bound
+  provenance, filesystem transactions, stale browser responses, playback
+  stability, and behavioral browser coverage
 
 ### Fixed
 
