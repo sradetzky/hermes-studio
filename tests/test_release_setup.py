@@ -37,6 +37,19 @@ class ReleaseSetupTests(unittest.TestCase):
         self.assertIn("Web profiles do not execute local ComfyUI jobs", illustrator)
         self.assertIn("deterministic worker own web H3 execution", prompt_engineer)
 
+    def test_studio_requires_visual_evidence_for_reference_descriptions(self):
+        soul = (REPO_ROOT / "hermes/profiles/studio/SOUL.md").read_text()
+        skill = (REPO_ROOT / "hermes/skills/design-studio/SKILL.md").read_text()
+
+        for contract in (soul, skill):
+            self.assertIn("vision_analyze", contract)
+            self.assertIn("A filename is not visual evidence", contract)
+            self.assertIn(
+                "I could not inspect <filename>; I will not infer its visual contents.",
+                contract,
+            )
+            self.assertIn("generated takes or videos", contract)
+
     def test_service_uses_stable_launcher_instead_of_checkout_path(self):
         unit = (REPO_ROOT / "webapp/hermes-studio.service").read_text()
         self.assertIn("ExecStart=%h/.local/bin/hermes-studio-web", unit)

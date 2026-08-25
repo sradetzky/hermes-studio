@@ -63,6 +63,10 @@ preview and production releases.
 
 ### Fixed
 
+- Required Studio to inspect the exact named project image with `vision_analyze`
+  before making reference-derived visual claims; filenames and inherited prompt
+  prose are no longer accepted as visual evidence, and unavailable vision now
+  produces an explicit no-inference warning
 - Made previous-take continuity eligibility depend only on an exact preceding
   enabled selected video take, so the second clip exposes the checkbox before
   its prompt or generation settings are authored

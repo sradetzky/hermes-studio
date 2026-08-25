@@ -258,6 +258,10 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
   prompt is authored; the backend extracts the exact predecessor's final frame,
   snapshots source/derived SHA-256 provenance, and fails closed on order,
   selection, file, or byte drift before submission and archival.
+- Studio reference descriptions now require same-job `vision_analyze` inspection
+  of the exact project image. Filenames, memory, metadata, inherited prompts, and
+  other-agent prose are not visual evidence; unavailable vision produces an
+  explicit no-inference warning without inspecting generated takes or videos.
 
 ## Next steps
 

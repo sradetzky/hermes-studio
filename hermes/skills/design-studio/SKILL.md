@@ -84,6 +84,22 @@ so output can never land in an ambiguously matched project.
 The web server's `/queue` projection is sanitized and read-only. Profiles do not
 call it or any mutating ComfyUI endpoint.
 
+## Mandatory reference vision
+
+- Before writing or revising any prompt, subject definition, storyboard, review,
+  or other visual claim based on a user-uploaded or named image reference,
+  resolve the exact file under the project's `references/` directory and call
+  `vision_analyze` on that image in the same job.
+  A filename is not visual evidence; memory, metadata, prior prompts, and
+  another agent's description are not substitutes.
+- Do not state visible attributes until that exact image was inspected
+  successfully. If the file is missing, unreadable, or vision is unavailable,
+  warn the user exactly: **I could not inspect <filename>; I will not infer its visual contents.**
+  Leave unverified attributes unspecified instead of guessing.
+- This guard applies to source/reference images. It does not authorize inspecting
+  generated takes or videos; never extract frames from or vision-audit generated
+  output unless the user explicitly asks.
+
 Each clip's `current_generation.json` is the web UI's compact typed run contract.
 It records mode, canvas/MP, seed, steps, accel, and the SHA-256 of that clip's
 `current_prompt.txt`.
