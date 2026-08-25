@@ -241,9 +241,11 @@ project/clip chat scope and exact IDs.
   Python and shell; verify both normal and profile-isolated environments.
 - [x] Establish a dependency-neutral `studio_core` layer, extract the legacy
   migration engine, and remove bidirectional `webapp`/`scripts` imports.
-- [ ] Execute immutable generation contracts directly instead of using an LLM as
-  a deterministic shell-command proxy; split scheduling, process supervision,
-  agent, generation, and movie execution ownership.
+- [x] Execute immutable generation contracts directly instead of using an LLM as
+  a deterministic shell-command proxy, including direct pinned-MCP submission,
+  bounded two-second batch waits, authoritative archival, and queue/VRAM cleanup.
+- [ ] Split scheduling, process supervision, agent, generation, and movie
+  execution ownership.
 - [x] Measure runtime-event growth and document an explicit durable-retention
   policy with concrete revisit triggers.
 - [ ] Type job kinds/scopes/phases/payloads at persistence boundaries.

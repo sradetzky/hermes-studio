@@ -34,8 +34,9 @@ Current server exposes 41 tools. Core Studio tools:
 
 ## Mandatory generation transaction
 
-Only `studio` executes GPU jobs. Subagents prepare storyboards, prompts and
-image handoffs.
+Only the supervised Studio generation worker executes GPU jobs. Hermes profiles
+prepare storyboards, prompts, creative decisions, and image handoffs; they do not
+transcribe or invoke the deterministic render transaction.
 
 1. Build/inspect an API-format graph locally (`run_h3.py --dry-run` or
    `krea2_image.py --dry-run`).
@@ -48,12 +49,9 @@ image handoffs.
    completion is not delayed by a fixed sleep. Repeat only when the bounded
    safety cap expires and the returned state is still pending/running. Never
    overlap jobs.
-5. On success, archive MCP output into the project:
-
-   ```bash
-   python3 scripts/design_studio.py archive-output <project-id> <clip-id> \
-     <filename-under-ComfyUI-output> --prompt-id <id> --kind <image|video>
-   ```
+5. On success, select the output from the graph's one exact executed `SaveVideo`
+   node and call the canonical archive service. It re-reads authoritative ComfyUI
+   history and rejects artifact, graph, prompt, settings, or provenance mismatch.
 
 6. In a finally-style cleanup, always call `mcp_comfyui_clear_vram` (defaults:
    `unload_models=true`, `free_memory=true`).
@@ -66,7 +64,7 @@ the 16GB GPU.
 
 ## No silent REST fallback
 
-Normal Studio agent work must not use curl or raw `/prompt`, `/history`,
+Normal Studio worker or agent work must not use curl or raw `/prompt`, `/history`,
 `/upload`, `/queue`, `/interrupt`, or `/free`. If MCP discovery/calls fail,
 stop and report the MCP error.
 

@@ -22,6 +22,7 @@ from scripts import design_studio as ds
 from webapp.app import create_app
 from webapp.config import Settings
 from webapp.generation_settings_store import GenerationSettingsStore
+from webapp.generation_runner import GenerationJobRunner, GenerationRuntime
 from webapp.hermes_events import HermesSessionEventBridge
 from webapp.job_store import ActiveJobError, JobStore, JobStoreError
 from webapp.models import JobStatus
@@ -288,29 +289,11 @@ class StudioManagerTests(WebAppTestCase):
             **_generation_settings_payload(),
         })
         self.assertEqual(payload["expected_generation_id"], "001")
-        query = manager._agent_query(job)
-        self.assertIn("Explicit user-authorized web generation", query)
-        self.assertIn('"action": "generate-current-prompt"', query)
-        self.assertIn('"width": 832', query)
-        self.assertNotIn("A complete 5-second H3 generation prompt", query)
-        self.assertIn("exact prompt_id", query)
-        self.assertIn("authoritative ComfyUI history", query)
-        self.assertIn("MANDATORY EXECUTION TAIL", query)
-        self.assertIn("read, search, inspect, or reverse-engineer run_h3.py", query)
-        self.assertIn("never call upload_image or batch submit yourself", query)
-        self.assertIn("--mode t2va", query)
-        self.assertIn("--width 832 --height 480 --length 124 --steps 20", query)
-        self.assertIn("--dry-run --output-json", query)
-        self.assertIn(">/dev/null", query)
-        self.assertIn("scripts/submit_h3_graph_mcp.py", query)
-        self.assertIn("--prompt-sha256", query)
-        self.assertIn("--settings-updated-at", query)
-        command = manager._default_command(job, None)
-        self.assertEqual(
-            command[command.index("-t") + 1],
-            "terminal,file,skills,comfyui",
-        )
-        self.assertNotIn("all", command)
+        with self.assertRaisesRegex(ValueError, "never execute through Hermes"):
+            manager._agent_query(job)
+        command = manager._generation_worker_command(job)
+        self.assertIn("webapp/generation_worker.py", " ".join(command))
+        self.assertNotIn(self.settings.hermes_command, command)
         self.assertEqual(
             manager._job_environment(job)["HERMES_STUDIO_JOB_KIND"], "generate")
         (clip / "current_prompt.txt").write_text("changed 5-second prompt\n")
@@ -346,13 +329,29 @@ class StudioManagerTests(WebAppTestCase):
             contract["manifest"]["updated_at"],
         )
 
-        query = manager._agent_query(job)
+        runner = GenerationJobRunner(GenerationRuntime(
+            studio_root=self.settings.studio_root,
+            runtime_root=self.settings.runtime_root,
+            profile_home=self.settings.profile_home(job.profile),
+            real_home=self.settings.real_home,
+            comfy_root=self.settings.comfy_root,
+            comfy_url=self.settings.comfy_url,
+            comfy_python=self.settings.comfy_root / ".venv/bin/python",
+            timeout_seconds=self.settings.job_timeout_seconds,
+        ))
+        command = runner._graph_command(
+            project.name, "clip-001", json.loads(job.message), Path("graph.json"))
 
-        self.assertIn("--mode r2v", query)
-        self.assertIn("--length 362 --steps 8 --seed 42 --accel", query)
-        self.assertLess(query.index("one.jpg"), query.index("two.jpg"))
-        self.assertIn(f"hermes-studio-{job.id}-h3-graph.json", query)
-        self.assertIn(f"hermes-studio-{job.id}-mcp-submit.json", query)
+        self.assertIn("r2v", command)
+        self.assertIn("362", command)
+        self.assertIn("8", command)
+        self.assertIn("42", command)
+        self.assertIn("--accel", command)
+        self.assertLess(
+            command.index(str(references / "one.jpg")),
+            command.index(str(references / "two.jpg")),
+        )
+        self.assertIn("--dry-run", command)
 
     def test_generation_exit_zero_without_contract_archive_fails(self):
         ds.studio_root(str(self.settings.studio_root))
@@ -364,22 +363,30 @@ class StudioManagerTests(WebAppTestCase):
         contract = GenerationSettingsStore(self.settings).save(
             project, clip, _generation_settings_payload())
         store = JobStore(self.settings.database_path)
+        store.initialize()
         manager = StudioJobManager(
-            self.settings,
-            store,
-            command_builder=lambda *_: [
-                sys.executable, "-c", "print('generation complete')"],
-            cleanup_callback=lambda: None,
+            self.settings, store, cleanup_callback=lambda: None)
+        job = manager.submit_generation(
+            project.name,
+            "clip-001",
+            contract["manifest"]["prompt_sha256"],
+            contract["manifest"]["updated_at"],
         )
-        with self.assertLogs("webapp.studio_manager", level="ERROR"):
+        result = json.dumps({
+            "generation_id": "001",
+            "prompt_id": "prompt-id",
+            "outputs": ["render.mp4"],
+        })
+        with (
+            patch.object(
+                manager,
+                "_generation_worker_command",
+                return_value=[sys.executable, "-c", f"print({result!r})"],
+            ),
+            self.assertLogs("webapp.studio_manager", level="ERROR"),
+        ):
             manager.start()
             try:
-                job = manager.submit_generation(
-                    project.name,
-                    "clip-001",
-                    contract["manifest"]["prompt_sha256"],
-                    contract["manifest"]["updated_at"],
-                )
                 finished = self.wait_for_terminal(store, job.id)
             finally:
                 manager.stop()
@@ -389,6 +396,60 @@ class StudioManagerTests(WebAppTestCase):
         self.assertIn("generation archive", finished.error.lower())
         self.assertEqual(
             list((clip / "generations").iterdir()), [])
+
+    def test_generation_executes_worker_without_calling_hermes_builder(self):
+        project = ds.create_project(self.settings.studio_root, "generation-direct")
+        clip = project / "clips" / "clip-001"
+        (clip / "current_prompt.txt").write_text(
+            "A complete 5-second H3 generation prompt\n")
+        contract = GenerationSettingsStore(self.settings).save(
+            project, clip, _generation_settings_payload())
+        store = JobStore(self.settings.database_path)
+        store.initialize()
+
+        def forbidden_builder(*_args):
+            self.fail("generation attempted to build a Hermes chat command")
+
+        manager = StudioJobManager(
+            self.settings,
+            store,
+            command_builder=forbidden_builder,
+            cleanup_callback=lambda: None,
+        )
+        job = manager.submit_generation(
+            project.name,
+            "clip-001",
+            contract["manifest"]["prompt_sha256"],
+            contract["manifest"]["updated_at"],
+        )
+        claimed = store.claim_next(manager.owner_id)
+        assert claimed is not None
+        result = json.dumps({
+            "generation_id": "001",
+            "prompt_id": "prompt-id",
+            "outputs": ["render.mp4"],
+        })
+        with (
+            patch.object(
+                manager,
+                "_generation_worker_command",
+                return_value=[sys.executable, "-c", f"print({result!r})"],
+            ),
+            patch.object(manager, "_verify_generation_completion"),
+        ):
+            manager._execute(claimed)
+
+        finished = store.get_job(job.id)
+        self.assertEqual(finished.status, JobStatus.COMPLETED)
+        self.assertIn("prompt-id", finished.reply)
+
+    def test_cleanup_uses_direct_mcp_transaction_without_hermes(self):
+        store = JobStore(self.settings.database_path)
+        manager = StudioJobManager(self.settings, store)
+        with patch("webapp.studio_manager.cleanup_comfyui") as cleanup:
+            manager._cleanup_comfy()
+        cleanup.assert_called_once()
+        self.assertTrue(cleanup.call_args.kwargs["cancel"])
 
     def test_shutdown_terminates_tracked_child(self):
         ds.studio_root(str(self.settings.studio_root))

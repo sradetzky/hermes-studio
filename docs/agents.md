@@ -6,7 +6,7 @@ specialist.
 
 | Profile | Role | Produces | Never does |
 |---|---|---|---|
-| `studio` | Orchestrator + creative director | project mgmt, generation runs | — |
+| `studio` | Orchestrator + creative director | project mgmt, creative decisions | deterministic render execution |
 | `studio-storyboarder` | Shot planning | `storyboard.md` per project | final prompts, renders |
 | `studio-prompt-engineer` | H3 prompt writing | structured prompts, handoff params | renders, shot redesign |
 | `studio-reviewer` | Quality gate | PASS/REVISE/REJECT verdicts in chat.jsonl | deletes media, rewrites prompts |
@@ -19,7 +19,7 @@ specialist.
 brief → studio-storyboarder → project-shared storyboard.md
       → studio-prompt-engineer → clip/current_prompt.txt (+ length/reference mapping)
       → web settings editor    → clip/current_generation.json (compact render knobs)
-      → studio (orchestrator)  → comfyui-mcp → clip take archive → clear_vram
+      → web generation worker → comfyui-mcp → clip take archive → clear_vram
       → studio-grok (optional) → xAI web/X/Imagine → research/ or archive-grok
       → studio-reviewer        → PASS/REVISE/REJECT appended to chat.jsonl
 ```
@@ -27,6 +27,9 @@ brief → studio-storyboarder → project-shared storyboard.md
 Handoffs carry exact project + clip IDs and travel through the filesystem,
 never through chat context. One role per step; escalate problems sideways, not
 around. Chat/references stay project-shared; prompt/settings/takes stay clip-local.
+Once the user authorizes **Generate with this prompt**, the immutable contract is
+executed directly by the supervised web worker. No Hermes model call is used for
+graph construction, MCP submission, waiting, archival, or cleanup.
 
 ## Spawning
 

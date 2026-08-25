@@ -25,18 +25,19 @@ preview and production releases.
 - Established one-way dependency-neutral ownership for project/clip operations,
   generation contracts and archives, profile dispatch, runtime persistence, and
   event projection; static checks now reject reverse core and script imports
+- Replaced the web generation `hermes chat` proxy with a supervised deterministic
+  worker that builds the exact H3 graph, serially uploads ordered references,
+  submits and waits through pinned MCP tooling, archives authoritative output,
+  and performs direct queue/VRAM cleanup without consuming model tokens
 
 ### Fixed
 
 - Unified account, Hermes fleet/profile, and ComfyUI path resolution across the
   webapp, CLI, profile sync, and model switcher so profile-isolated `$HOME` values
   cannot create nested fleet paths or redirect account-owned resources
-- Prevented web generation agents from repeatedly reading the H3 runner source:
-  each immutable generation job now uses a minimal render toolset and supplies a
-  compact tail-pinned, shell-quoted dry-run graph-builder command whose JSON
-  output stays out of model context; a no-duplicate helper serializes reference
-  uploads, revalidates the exact contract, and passes graph bytes through pinned
-  mcporter/comfyui-mcp without model transcription
+- Prevented immutable web generation from reaching any LLM context: exact prompt,
+  settings, graph bytes, MCP identifiers, and output provenance now stay within
+  validated filesystem/process boundaries and fail closed on drift or mismatch
 - Made Studio profile jobs and legacy H3 runner paths robust to Hermes profile
   HOME isolation: active-profile skills use `$HERMES_HOME`, account files use
   `$HERMES_REAL_HOME`, and the Studio profile forces real-home terminal mode

@@ -303,6 +303,14 @@ contracts remain unchanged.
 
 ### P1.3 Remove the LLM from deterministic generation execution
 
+**Status (2026-08-25): complete.** Web generation now starts a supervised
+deterministic worker rather than `hermes chat`. The worker loads the immutable
+running-job contract, builds the H3 graph with the profile runner in dry-run
+mode, uploads ordered references, submits and waits through the pinned MCP
+service, selects the exact `SaveVideo` output, archives through authoritative
+history validation, and always performs direct queue/VRAM cleanup. Hermes is no
+longer charged for deterministic render choreography.
+
 **Problem:** The generation contract is deterministic, but the webapp still
 launches Hermes so a model can execute exact graph-build and MCP-submit commands,
 poll, archive, and clean up.

@@ -4,7 +4,6 @@ import json
 import logging
 import os
 import re
-import shlex
 import signal
 import sqlite3
 import subprocess
@@ -17,6 +16,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from studio_core.generation_archive import parse_generation_job_payload
+from studio_core.comfyui_mcp import cleanup_comfyui, mcp_environment
 from studio_core.projects import (
     next_generation_dir,
     project_path,
@@ -308,20 +308,8 @@ class StudioJobManager:
             self._execute_movie(job)
             return
         if job.kind == "generate":
-            try:
-                self._validate_generation_job(job)
-            except Exception as exc:
-                error = f"Generation request validation failed: {exc}"
-                self.store.append_job_event(
-                    job.id,
-                    job.profile,
-                    "generation.validation",
-                    error,
-                    status="failed",
-                )
-                self.store.fail(job.id, error, self.owner_id)
-                self._export_job_chat(job)
-                return
+            self._execute_generation(job)
+            return
         try:
             session_id = self.store.get_session(
                 job.project, job.profile, clip_id=self._scope_clip_id(job))
@@ -430,8 +418,6 @@ class StudioJobManager:
                     job.id, "Studio agent returned an empty reply", self.owner_id)
                 self._export_job_chat(job)
                 return
-            if job.kind == "generate":
-                self._verify_generation_completion(job)
             match = SESSION_RE.search(stderr)
             self.store.complete(
                 job.id, self.owner_id, reply,
@@ -449,6 +435,120 @@ class StudioJobManager:
                 self._export_job_chat(job)
             except Exception:
                 log.exception("Could not persist failure for job %s", job.id)
+        finally:
+            with self._process_lock:
+                self._processes.pop(job.id, None)
+
+    def _generation_worker_command(self, job: Job) -> list[str]:
+        return [
+            sys.executable,
+            str(self.settings.repo / "webapp" / "generation_worker.py"),
+            "--job-id", job.id,
+            "--project", job.project,
+            "--clip", job.clip_id,
+            "--profile", job.profile,
+            "--studio-root", str(self.settings.studio_root),
+            "--runtime-root", str(self.settings.runtime_root),
+            "--profile-home", str(self.settings.profile_home(job.profile)),
+            "--real-home", str(self.settings.real_home),
+            "--comfyui-root", str(self.settings.comfy_root),
+            "--comfyui-url", self.settings.comfy_url,
+            "--comfyui-python", str(
+                self.settings.comfy_root / ".venv/bin/python"),
+            "--timeout-seconds", str(self.settings.job_timeout_seconds),
+        ]
+
+    def _execute_generation(self, job: Job) -> None:
+        try:
+            self._validate_generation_job(job)
+        except Exception as exc:
+            error = f"Generation request validation failed: {exc}"
+            self.store.append_job_event(
+                job.id, job.profile, "generation.validation", error,
+                status="failed")
+            self.store.fail(job.id, error, self.owner_id)
+            self._export_job_chat(job)
+            return
+
+        process: subprocess.Popen | None = None
+        try:
+            with self._process_lock:
+                if self._stop.is_set():
+                    self.store.fail(
+                        job.id, "Studio server stopped", self.owner_id)
+                    self._export_job_chat(job)
+                    return
+                process = subprocess.Popen(
+                    self._supervised_command(
+                        self._generation_worker_command(job)),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    start_new_session=True,
+                    env=self._job_environment(job),
+                )
+                self.store.set_process(
+                    job.id, self.owner_id, process.pid,
+                    process_start_time(process.pid))
+                self._processes[job.id] = process
+            try:
+                stdout, stderr = self._communicate(process, None)
+            except subprocess.TimeoutExpired:
+                self._terminate_process(process)
+                process.communicate()
+                self.store.append_job_event(
+                    job.id,
+                    job.profile,
+                    "job.timeout",
+                    f"Exceeded the {self.settings.job_timeout_seconds}s job limit",
+                    status="failed",
+                )
+                self._cleanup_safely()
+                self.store.fail(
+                    job.id,
+                    f"Generation timed out after "
+                    f"{self.settings.job_timeout_seconds}s",
+                    self.owner_id,
+                )
+                self._export_job_chat(job)
+                return
+            if process.returncode:
+                detail = stderr.strip().splitlines()[-1] if stderr.strip() else ""
+                error = f"Generation worker failed ({process.returncode})"
+                if detail:
+                    error += f": {detail}"
+                self._cleanup_safely()
+                self.store.fail(job.id, error, self.owner_id)
+                self._export_job_chat(job)
+                return
+            try:
+                result = json.loads(stdout)
+            except json.JSONDecodeError as exc:
+                raise ValueError("generation worker returned invalid output") from exc
+            if (not isinstance(result, dict)
+                    or not isinstance(result.get("generation_id"), str)
+                    or not isinstance(result.get("prompt_id"), str)
+                    or not isinstance(result.get("outputs"), list)):
+                raise ValueError("generation worker returned an invalid result")
+            self._verify_generation_completion(job)
+            self.store.complete(
+                job.id,
+                self.owner_id,
+                f"Generation completed: {result['generation_id']} "
+                f"(prompt_id: {result['prompt_id']})",
+                None,
+            )
+            self._export_job_chat(job)
+        except Exception as exc:
+            log.exception("Generation job %s failed", job.id)
+            if process:
+                self._terminate_process(process)
+            self._cleanup_safely()
+            try:
+                self.store.fail(job.id, str(exc), self.owner_id)
+                self._export_job_chat(job)
+            except Exception:
+                log.exception("Could not persist generation failure for job %s", job.id)
         finally:
             with self._process_lock:
                 self._processes.pop(job.id, None)
@@ -548,11 +648,7 @@ class StudioJobManager:
         ]
         if session_id and re.fullmatch(r"[A-Za-z0-9_-]+", session_id):
             command += ["-r", session_id]
-        toolsets = (
-            "terminal,file,skills,comfyui"
-            if job.kind == "generate"
-            else PROFILE_TOOLSETS.get(job.profile, "all")
-        )
+        toolsets = PROFILE_TOOLSETS.get(job.profile, "all")
         command += [
             "chat", "-Q", "-t", toolsets, "--source", self._session_source(job),
             "-q", self._agent_query(job),
@@ -585,56 +681,9 @@ class StudioJobManager:
             *command,
         ]
 
-    def _graph_builder_command(self, job: Job, package: dict) -> tuple[str, Path]:
-        project_path = self.settings.studio_root / "projects" / job.project
-        clip_path = project_path / "clips" / job.clip_id
-        profile_home = self.settings.profile_home(job.profile)
-        output = Path(f"/tmp/hermes-studio-{job.id}-h3-graph.json")
-        settings = package["settings_manifest"]
-        execution = package["execution"]
-        command = [
-            "python3",
-            str(profile_home / "skills/minimax-h3-run/scripts/run_h3.py"),
-            "--mode", settings["mode"],
-            "--prompt-file", str(clip_path / "current_prompt.txt"),
-            "--width", str(execution["resolution"]["width"]),
-            "--height", str(execution["resolution"]["height"]),
-            "--length", str(execution["timing"]["frames"]),
-            "--steps", str(settings["steps"]),
-        ]
-        if settings["seed"] is not None:
-            command.extend(("--seed", str(settings["seed"])))
-        if settings["accel"]:
-            command.append("--accel")
-        for filename in execution["references"]:
-            command.extend(("--image", str(project_path / "references" / filename)))
-        command.extend(("--dry-run", "--output-json", str(output)))
-        return shlex.join(command) + " >/dev/null", output
-
-    def _graph_submit_command(
-            self, job: Job, package: dict, graph_path: Path) -> tuple[str, Path]:
-        project_path = self.settings.studio_root / "projects" / job.project
-        clip_path = project_path / "clips" / job.clip_id
-        result = Path(f"/tmp/hermes-studio-{job.id}-mcp-submit.json")
-        command = [
-            "python3",
-            str(self.settings.repo / "scripts/submit_h3_graph_mcp.py"),
-            "--graph-json", str(graph_path),
-            "--prompt-file", str(clip_path / "current_prompt.txt"),
-            "--settings-file", str(clip_path / "current_generation.json"),
-            "--prompt-sha256", package["prompt_sha256"],
-            "--settings-updated-at", package["settings_updated_at"],
-            "--comfyui-url", self.settings.comfy_url,
-            "--comfyui-path", str(self.settings.comfy_output.parent),
-            "--comfyui-python", str(
-                self.settings.comfy_output.parent / ".venv/bin/python"),
-        ]
-        for filename in package["execution"]["references"]:
-            command.extend(("--image", str(project_path / "references" / filename)))
-        command.extend(("--result-json", str(result)))
-        return shlex.join(command), result
-
     def _agent_query(self, job: Job) -> str:
+        if job.kind == "generate":
+            raise ValueError("generation jobs never execute through Hermes chat")
         project_path = self.settings.studio_root / "projects" / job.project
         path_context = (
             "Path roots: use $HERMES_HOME for active-profile Hermes data and "
@@ -668,51 +717,7 @@ class StudioJobManager:
             "Project chat and references are shared. Read or write prompt, settings, "
             "and generation files only under the active clip path.\n\n"
         )
-        if job.kind != "generate":
-            return context + f"User request:\n{job.message}"
-
-        package = self._validate_generation_job(job)
-        graph_command, graph_path = self._graph_builder_command(job, package)
-        submit_command, submit_result = self._graph_submit_command(
-            job, package, graph_path)
-        agent_package = {
-            key: value for key, value in package.items() if key != "prompt"
-        }
-        return context + (
-            "Explicit user-authorized web generation. Do not ask for confirmation, "
-            "do not rewrite current_prompt.txt or current_generation.json, and do not "
-            "change any validated knob. The exact submission helper re-reads both files "
-            "immediately before ComfyUI submission and aborts without queueing if their "
-            "prompt SHA-256 or settings updated_at differs from the request token. Build "
-            "the exact H3 graph, submit "
-            "one workflow through the mandatory comfyui-mcp batch transaction, archive "
-            "the output into this clip with its exact prompt_id, and clear VRAM in "
-            "finally-style cleanup. The web archive boundary reads authoritative "
-            "ComfyUI history and rejects missing, incomplete, or mismatched execution "
-            "metadata.\n\n"
-            "Validated generation package (the immutable prompt body is intentionally "
-            "omitted here and is read only by the exact helper):\n" +
-            json.dumps(agent_package, indent=2, ensure_ascii=False) +
-            "\n\nMANDATORY EXECUTION TAIL — retain this as the active task after every "
-            "tool result. Do not ask for the request again. Do not inspect directories "
-            "or read, search, inspect, or reverse-engineer run_h3.py. If the job-unique "
-            f"graph file {graph_path} does not exist, run this exact terminal command "
-            "once; otherwise do not rerun it:\n"
-            f"{graph_command}\n"
-            f"Do not read {graph_path}; it is input only to the exact submission helper "
-            "below. Do not read the graph or prompt body into model context, and never "
-            "call upload_image or "
-            "batch submit yourself. The helper serially uploads references, re-verifies "
-            "the exact prompt/settings token, and passes the graph bytes to pinned "
-            "comfyui-mcp tooling without model transcription. If the job-unique result "
-            f"file {submit_result} does not exist, run this exact command once; otherwise "
-            "do not rerun it:\n"
-            f"{submit_command}\n"
-            f"Read only the compact {submit_result}. Use its batch_id to wait in "
-            "two-second status batches, archive the matching prompt_id output, then "
-            "clear VRAM in finally-style cleanup. Do not invoke the runner without "
-            "--dry-run."
-        )
+        return context + f"User request:\n{job.message}"
 
     def _validate_generation_job(self, job: Job) -> dict:
         request = parse_generation_job_payload(job.message)
@@ -1013,29 +1018,12 @@ class StudioJobManager:
         return not cls._matching_job_processes(job)
 
     def _cleanup_comfy(self) -> None:
-        prompt = (
-            "Use only comfyui MCP tools. Cancel the running ComfyUI job and "
-            "all pending jobs, verify the queue is stopped, then call "
-            "clear_vram with unload_models=true and free_memory=true. "
-            "Reply only with the final queue and VRAM status."
+        environment = mcp_environment(
+            self.settings.comfy_url,
+            self.settings.comfy_root,
+            self.settings.comfy_root / ".venv/bin/python",
         )
-        try:
-            result = subprocess.run(
-                [
-                    self.settings.hermes_command,
-                    "-p", self.settings.studio_profile,
-                    "chat", "-Q", "-t", "comfyui", "-q", prompt,
-                ],
-                capture_output=True,
-                text=True,
-                timeout=180,
-            )
-            if result.returncode:
-                log.error(
-                    "ComfyUI cleanup failed (%d): %s",
-                    result.returncode, result.stderr.strip())
-        except Exception:
-            log.exception("Could not cancel ComfyUI work during job cleanup")
+        cleanup_comfyui(environment, cancel=True)
 
     def _cleanup_safely(self) -> None:
         try:
