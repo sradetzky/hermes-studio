@@ -278,6 +278,9 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
   `tests/webapp_test_support.py`, leaving route-specific manager behavior local.
 - Closed leaked SQLite handles in the interaction migration regression; the
   complete webapp suite is clean with `ResourceWarning` visibility enabled.
+- The committed-source thermo-nuclear follow-up gate passed 279 Python and 28
+  frontend/Chromium tests plus compilation, full Ruff, dependency/audit, tool,
+  profile, CSS, source-archive, and repository-integrity checks.
 
 ## Next steps
 

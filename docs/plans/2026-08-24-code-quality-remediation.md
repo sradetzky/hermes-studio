@@ -538,6 +538,11 @@ transaction context managers in one interaction migration test: `sqlite3`
 commits on context exit but does not close. Explicit `closing(...)` ownership now
 makes the full webapp suite warning-clean under `PYTHONWARNINGS=always::ResourceWarning`.
 
+The final committed-source gate passed after these follow-ups: 279 Python tests
+and 28 frontend/Chromium tests, compilation, full Ruff, dependency lock and
+audit, external-tool contracts, profile drift, reproducible CSS, source archive,
+and repository integrity all succeeded.
+
 The canonical local non-GPU gate is:
 
 ```bash
