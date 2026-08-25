@@ -69,6 +69,9 @@ class CdpClient {
       }
       for (const handler of this.handlers.get(message.method) || []) {
         Promise.resolve(handler(message.params || {})).catch(error => {
+          if (/^Invalid InterceptionId\.?$/.test(error.message)) {
+            return; // navigation cancelled a paused request before its response
+          }
           this.eventError = error;
         });
       }

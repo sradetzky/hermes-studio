@@ -296,6 +296,32 @@ browserTest(
     let generateBody = null;
     browser.intercept(async params => {
       const url = new URL(params.request.url);
+      if (url.pathname.endsWith('/clips/clip-001') &&
+          params.request.method === 'GET') {
+        await browser.fulfill(params.requestId, {
+          id: 'clip-001', title: 'Main clip', enabled: true, selected_take: null,
+          current_prompt: 'A complete 5-second continuation prompt',
+          generation_settings: {
+            readiness: {
+              ready: true, status: 'ready', reasons: [], warnings: [],
+              resolution: {width: 832, height: 480},
+              timing: {requested_seconds: 5},
+            },
+            settings: {mode: 'r2v', steps: 8, accel: true},
+            manifest: {
+              prompt_sha256: 'a'.repeat(64), updated_at: 'revision-2',
+            },
+            previous_selected_take_input: {
+              eligible: true,
+              source_clip_id: 'clip-000',
+              source_generation_id: '007',
+              source_filename: 'take.mp4',
+              picture_number: 2,
+            },
+          },
+        });
+        return true;
+      }
       if (!url.pathname.endsWith('/generate') || params.request.method !== 'POST') {
         return false;
       }
@@ -319,23 +345,6 @@ browserTest(
     await browser.evaluate(`document.querySelector('.clip').click()`);
     await browser.waitExpression(
       `document.querySelector('.clip.active')`, 'active clip');
-    await browser.evaluate(`void import('/static/generation-settings.js').then(module =>
-      module.renderGenerationReadiness({
-        readiness: {
-          ready: true, status: 'ready', reasons: [], warnings: [],
-          resolution: {width: 832, height: 480},
-          timing: {requested_seconds: 5},
-        },
-        settings: {mode: 'r2v', steps: 8, accel: true},
-        manifest: {prompt_sha256: '${'a'.repeat(64)}', updated_at: 'revision-2'},
-        previous_selected_take_input: {
-          eligible: true,
-          source_clip_id: 'clip-000',
-          source_generation_id: '007',
-          source_filename: 'take.mp4',
-          picture_number: 2,
-        },
-      }))`);
     await browser.waitExpression(
       `!document.querySelector('#previous-take-input-option').hidden &&
        document.querySelector('#previous-take-input-label').textContent.includes('<Picture 2>')`,
