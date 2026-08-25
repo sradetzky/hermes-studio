@@ -739,7 +739,12 @@ They are being closed in this order before another feature wave:
    and ComfyUI endpoint. Archival no longer reads SQLite or ambient job variables,
    and graph construction receives the exact validated input paths, including
    clip-local derived continuity frames.
-3. **Unified specialist dispatch lifecycle — pending.**
+3. **Unified specialist dispatch lifecycle — complete.** Local specialists and
+   `studio-grok` now use one profile-configured command, persistent scoped session,
+   process-group timeout, failure, event, and session-publication lifecycle. A
+   correlated handoff must bind to the exact running parent job and successfully
+   prepare event projection before the specialist process starts; setup failure
+   aborts and records `handoff.failed` when persistence is available.
 4. **Single coordinated generation preflight owner — pending.**
 
 Each item follows the slice protocol in section 2. Run the complete committed-

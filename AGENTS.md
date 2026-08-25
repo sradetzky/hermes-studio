@@ -297,9 +297,13 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
   store, pass explicit job/contract/prompt/ComfyUI archive context, and give the
   graph builder the exact validated input paths; archival no longer opens SQLite
   or discovers identity through process-global environment variables.
+- Local specialists and `studio-grok` now share one serialized session/process,
+  timeout, failure, event, and publication lifecycle. Correlated handoffs require
+  an exact running parent scope and abort before launch if event projection cannot
+  attach or prepare, recording setup failures whenever the job store is available.
 
 ## Next steps
 
 - Complete the remaining second thermo-nuclear closure slices in documented
-  order: unified specialist dispatch, redundant route-preflight removal, then the
-  committed-source release gate.
+  order: remove the redundant generation route preflight, then run the committed-
+  source release gate.

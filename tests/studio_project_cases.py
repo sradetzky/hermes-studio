@@ -9,11 +9,11 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from scripts import design_studio as ds
 from scripts.krea2_image import parse_loras
+from studio_core import dispatch as dispatch_core
 from studio_core import projects as clip_store
 from studio_core.projects import ClipStore, ClipStoreError
 from studio_core.job_store import JobStore
@@ -413,31 +413,31 @@ class ProjectPathTests(unittest.TestCase):
             [("user", "question"), ("assistant", "answer")],
         )
 
-    @patch.object(ds.subprocess, "run")
-    def test_grok_dispatch_persists_project_session(self, run):
-        run.return_value = SimpleNamespace(
-            returncode=0, stdout="research result\n",
-            stderr="session_id: grok-session-1\n")
+    @patch.object(ds.subprocess, "Popen")
+    def test_grok_dispatch_persists_project_session(self, popen):
+        process = MagicMock()
+        process.returncode = 0
+        process.communicate.return_value = (
+            "research result\n", "session_id: grok-session-1\n")
+        popen.return_value = process
         reply = ds.dispatch_grok(self.root, self.project.name, "research this")
         self.assertEqual(reply, "research result")
-        first_command = run.call_args.args[0]
+        first_command = popen.call_args.args[0]
         self.assertNotIn("-r", first_command)
         self.assertIn("web,x_search,image_gen,vision,file,terminal", first_command)
 
-        run.return_value = SimpleNamespace(
-            returncode=0, stdout="continued\n",
-            stderr="session_id: grok-session-1\n")
+        process.communicate.return_value = (
+            "continued\n", "session_id: grok-session-1\n")
         ds.dispatch_grok(self.root, self.project.name, "continue")
-        second_command = run.call_args.args[0]
+        second_command = popen.call_args.args[0]
         self.assertIn("-r", second_command)
         self.assertIn("grok-session-1", second_command)
 
-        run.return_value = SimpleNamespace(
-            returncode=0, stdout="clip research\n",
-            stderr="session_id: grok-clip-session\n")
+        process.communicate.return_value = (
+            "clip research\n", "session_id: grok-clip-session\n")
         ds.dispatch_grok(
             self.root, self.project.name, "clip research", clip_id="clip-001")
-        clip_command = run.call_args.args[0]
+        clip_command = popen.call_args.args[0]
         self.assertNotIn("-r", clip_command)
         clip_prompt = clip_command[clip_command.index("-q") + 1]
         self.assertIn("Conversation scope: clip", clip_prompt)
@@ -515,6 +515,59 @@ class ProjectPathTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unsupported"):
             ds.dispatch_profile(
                 self.root, self.project.name, "studio", "Do everything")
+
+    @patch.object(ds.subprocess, "Popen")
+    def test_correlated_dispatch_fails_closed_when_observability_cannot_attach(
+            self, popen):
+        runtime = Path(self.temp.name) / "missing-handoff-runtime"
+        JobStore(runtime / "studio.db").initialize()
+        environment = {
+            "HERMES_STUDIO_JOB_ID": "missing-job",
+            "HERMES_STUDIO_RUNTIME_ROOT": str(runtime),
+        }
+        with (
+            patch.dict(os.environ, environment, clear=False),
+            self.assertRaisesRegex(RuntimeError, "observability"),
+        ):
+            ds.dispatch_profile(
+                self.root, self.project.name,
+                "studio-storyboarder", "Plan three shots")
+        popen.assert_not_called()
+
+    @patch.object(ds.subprocess, "Popen")
+    def test_correlated_dispatch_records_bridge_setup_failure(self, popen):
+        runtime = Path(self.temp.name) / "handoff-runtime"
+        store = JobStore(runtime / "studio.db")
+        store.initialize()
+        job = store.create_project_chat_job(self.project.name, "plan")
+        self.assertIsNotNone(store.claim_next("worker"))
+        sessions = self.root / "tmp" / "profile-sessions"
+        sessions.mkdir(parents=True, exist_ok=True)
+        (sessions / f"{self.project.name}.studio-storyboarder").write_text(
+            "missing-session\n")
+        environment = {
+            "HERMES_STUDIO_JOB_ID": job.id,
+            "HERMES_STUDIO_RUNTIME_ROOT": str(runtime),
+        }
+        missing_state = Path(self.temp.name) / "missing-state.db"
+        with (
+            patch.dict(os.environ, environment, clear=False),
+            patch.object(
+                dispatch_core._ProfileStateLocator,
+                "profile_state_path",
+                return_value=missing_state,
+            ),
+            self.assertRaisesRegex(RuntimeError, "prepare.*observability"),
+        ):
+            ds.dispatch_profile(
+                self.root, self.project.name,
+                "studio-storyboarder", "Plan three shots")
+        popen.assert_not_called()
+        events = store.job_events(self.project.name)[1]
+        self.assertEqual(
+            [event.event_type for event in events[-2:]],
+            ["handoff.started", "handoff.failed"],
+        )
 
 class LoraParserTests(unittest.TestCase):
     def test_parses_name_and_strength(self):

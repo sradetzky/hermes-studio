@@ -300,7 +300,7 @@ project/clip chat scope and exact IDs.
   persisted running job instead of accepting a serialized command-line contract.
 - [x] Pass generation archival an explicit typed context and exact resolved input
   paths instead of reloading contracts through ambient process state.
-- [ ] Unify local and Grok specialist dispatch behind one lifecycle and fail
+- [x] Unify local and Grok specialist dispatch behind one lifecycle and fail
   closed when web-correlated event projection cannot attach.
 - [ ] Remove the redundant unlocked generation-route preflight and retain the
   coordinated generation service as the single validation owner.

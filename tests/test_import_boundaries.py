@@ -194,6 +194,14 @@ class ImportBoundaryTests(unittest.TestCase):
         self.assertIn("generation_context=GenerationArchiveContext(", runner)
         self.assertNotIn("os.environ.update", worker)
 
+    def test_specialist_profiles_share_one_dispatch_lifecycle(self):
+        dispatch = (ROOT / "studio_core" / "dispatch.py").read_text(
+            encoding="utf-8")
+        self.assertIn("def _dispatch_specialist(", dispatch)
+        self.assertEqual(dispatch.count("subprocess.Popen("), 1)
+        self.assertNotIn("subprocess.run(", dispatch)
+        self.assertNotIn("except Exception:\n            store = None", dispatch)
+
 
 if __name__ == "__main__":
     unittest.main()
