@@ -83,6 +83,30 @@ class ImportBoundaryTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_job_execution_is_split_behind_one_dispatch_boundary(self):
+        files = {
+            name: (ROOT / "webapp" / name).read_text(encoding="utf-8")
+            for name in (
+                "studio_manager.py",
+                "process_runner.py",
+                "agent_runner.py",
+                "generation_runner.py",
+                "movie_runner.py",
+            )
+        }
+        self.assertTrue(all(text.count("\n") + 1 <= 1000
+                            for text in files.values()))
+        manager = files["studio_manager.py"]
+        self.assertIn("runner = self._runners[job.kind]", manager)
+        self.assertNotIn("subprocess.Popen", manager)
+        self.assertNotIn("os.killpg", manager)
+        self.assertNotIn('Path("/proc")', manager)
+        self.assertIn("subprocess.Popen", files["process_runner.py"])
+        self.assertIn("os.killpg", files["process_runner.py"])
+        self.assertIn('Path("/proc")', files["process_runner.py"])
+        self.assertNotIn("cleanup_comfyui", files["movie_runner.py"])
+        self.assertIn("cleanup_comfyui", files["generation_runner.py"])
+
 
 if __name__ == "__main__":
     unittest.main()

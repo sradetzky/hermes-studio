@@ -218,11 +218,14 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
 - Remediation P1.3 removed Hermes from deterministic generation execution:
   a supervised worker now builds, submits, waits, archives, validates, and
   cleans up the immutable render contract directly through pinned MCP tooling.
+- Remediation P1.4 reduced `StudioJobManager` to FIFO, leases, lifecycle, and one
+  typed dispatch table; cohesive process, agent, generation, and movie runners
+  now own execution, timeout, recovery, event, and cleanup behavior.
 
 ## Next steps
 
-- [ ] Remediation P1: split job runners and type job boundaries on the completed
-  direct-generation and `studio_core` ownership layers.
+- [ ] Remediation P1: type job and persistence boundaries on the completed
+  runner, direct-generation, and `studio_core` ownership layers.
 - [ ] Remediation P2: extract browser controllers, reconcile stable activity
   nodes, fix follow-latest scrolling, and split behavioral browser scenarios.
 - [ ] Only after the remediation gate passes, add scoped Hermes `clarify`

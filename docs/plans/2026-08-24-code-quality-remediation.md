@@ -341,6 +341,15 @@ for creative planning and prompt writing, not deterministic shell choreography.
 
 ### P1.4 Split scheduling from job execution
 
+**Status (2026-08-25): complete.** `StudioJobManager` is now a 475-line FIFO,
+lease, lifecycle, and dispatch owner. One `JobRunner` protocol and dispatch table
+select agent, generation, or movie execution. `SupervisedProcessRunner` is the
+single owner of process groups, PID/start-time identity, timeout communication,
+termination, `/proc` recovery, and parent-death supervision. Agent session/event
+bridging lives in `agent_runner.py`; deterministic generation and movie lifecycle
+handling live beside their transactions. Structural tests enforce the ownership,
+the 1,000-line ceiling, and the GPU-cleanup boundary.
+
 **Problem:** `StudioJobManager` owns unrelated scheduling and execution domains.
 
 **Target shape:**

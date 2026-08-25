@@ -27,9 +27,10 @@ from webapp.hermes_events import HermesSessionEventBridge
 from webapp.job_store import ActiveJobError, JobStore, JobStoreError
 from webapp.models import JobStatus
 from webapp.project_jobs import project_job_guard
+from webapp.process_runner import SupervisedProcessRunner, process_start_time
 from webapp.runtime_schema import CURRENT_SCHEMA_VERSION, LEGACY_CLIP_ERROR
 from webapp import safe_files
-from webapp.studio_manager import StudioJobManager, process_start_time
+from webapp.studio_manager import StudioJobManager
 
 
 def _create_job_in_process(database, barrier, results):
@@ -106,6 +107,39 @@ class StudioManagerTests(WebAppTestCase):
             time.sleep(0.05)
         self.fail("job did not reach a terminal state")
 
+    def test_one_dispatch_table_selects_each_job_runner(self):
+        store = JobStore(self.settings.database_path)
+        store.initialize()
+        manager = StudioJobManager(
+            self.settings, store, cleanup_callback=lambda: None)
+        queued = store.create_chat_job(
+            "project", "message", clip_id="clip-001")
+        job = store.claim_next(manager.owner_id)
+        self.assertIsNotNone(job)
+        assert job is not None
+        calls = []
+
+        class Recorder:
+            def __init__(self, name):
+                self.name = name
+
+            def execute(self, dispatched):
+                calls.append((self.name, dispatched.kind))
+
+        manager._runners = {
+            kind: Recorder(kind)
+            for kind in ("chat", "generate", "export_movie")
+        }
+        for kind in manager._runners:
+            manager._execute(replace(job, kind=kind))
+
+        self.assertEqual(calls, [
+            ("chat", "chat"),
+            ("generate", "generate"),
+            ("export_movie", "export_movie"),
+        ])
+        self.assertEqual(store.get_job(queued.id).status, JobStatus.RUNNING)
+
     def test_command_preparation_failure_marks_job_failed(self):
         ds.studio_root(str(self.settings.studio_root))
         project = ds.create_project(self.settings.studio_root, "prepare-failure")
@@ -172,10 +206,14 @@ class StudioManagerTests(WebAppTestCase):
         self.assertEqual(project_job.clip_id, "")
         self.assertIn(
             "Conversation scope: project chat",
-            manager._agent_query(project_job),
+            manager.agent_runner.agent_query(project_job),
         )
-        self.assertIn("use $HERMES_HOME", manager._agent_query(project_job))
-        self.assertIn("use $HERMES_REAL_HOME", manager._agent_query(project_job))
+        self.assertIn(
+            "use $HERMES_HOME", manager.agent_runner.agent_query(project_job))
+        self.assertIn(
+            "use $HERMES_REAL_HOME",
+            manager.agent_runner.agent_query(project_job),
+        )
         project_environment = manager._job_environment(project_job)
         self.assertEqual(project_environment["HERMES_STUDIO_CLIP"], "")
         self.assertEqual(project_environment["HERMES_STUDIO_CLIP_PATH"], "")
@@ -190,8 +228,14 @@ class StudioManagerTests(WebAppTestCase):
             project.name, "clip-001", "clip refinement")
         self.assertIsNone(
             store.get_session(project.name, clip_id="clip-001"))
-        self.assertIn("Active clip ID: clip-001", manager._agent_query(clip_job))
-        self.assertIn("Do not derive either root from $HOME", manager._agent_query(clip_job))
+        self.assertIn(
+            "Active clip ID: clip-001",
+            manager.agent_runner.agent_query(clip_job),
+        )
+        self.assertIn(
+            "Do not derive either root from $HOME",
+            manager.agent_runner.agent_query(clip_job),
+        )
 
         project_rows = [json.loads(line) for line in
                         (project / "chat.jsonl").read_text().splitlines()]
@@ -239,7 +283,7 @@ class StudioManagerTests(WebAppTestCase):
         job = store.create_chat_job(
             "project", "plan", profile="studio-storyboarder",
             clip_id="clip-002")
-        command = manager._default_command(job, None)
+        command = manager.agent_runner.default_command(job, None)
         self.assertEqual(
             command[command.index("-t") + 1], "file,terminal,skills")
         self.assertNotIn("all", command)
@@ -290,8 +334,8 @@ class StudioManagerTests(WebAppTestCase):
         })
         self.assertEqual(payload["expected_generation_id"], "001")
         with self.assertRaisesRegex(ValueError, "never execute through Hermes"):
-            manager._agent_query(job)
-        command = manager._generation_worker_command(job)
+            manager.agent_runner.agent_query(job)
+        command = manager.generation_runner.command(job)
         self.assertIn("webapp/generation_worker.py", " ".join(command))
         self.assertNotIn(self.settings.hermes_command, command)
         self.assertEqual(
@@ -379,11 +423,11 @@ class StudioManagerTests(WebAppTestCase):
         })
         with (
             patch.object(
-                manager,
-                "_generation_worker_command",
+                manager.generation_runner,
+                "command",
                 return_value=[sys.executable, "-c", f"print({result!r})"],
             ),
-            self.assertLogs("webapp.studio_manager", level="ERROR"),
+            self.assertLogs("webapp.generation_runner", level="ERROR"),
         ):
             manager.start()
             try:
@@ -431,11 +475,11 @@ class StudioManagerTests(WebAppTestCase):
         })
         with (
             patch.object(
-                manager,
-                "_generation_worker_command",
+                manager.generation_runner,
+                "command",
                 return_value=[sys.executable, "-c", f"print({result!r})"],
             ),
-            patch.object(manager, "_verify_generation_completion"),
+            patch.object(manager.generation_runner, "verify"),
         ):
             manager._execute(claimed)
 
@@ -526,11 +570,12 @@ class StudioManagerTests(WebAppTestCase):
             parent.wait(timeout=5)
             deadline = time.monotonic() + 5
             while time.monotonic() < deadline:
-                if StudioJobManager._process_stopped(child_pid, child_start):
+                if SupervisedProcessRunner.process_stopped(
+                        child_pid, child_start):
                     break
                 time.sleep(0.02)
             self.assertTrue(
-                StudioJobManager._process_stopped(child_pid, child_start))
+                SupervisedProcessRunner.process_stopped(child_pid, child_start))
         finally:
             if parent.poll() is None:
                 parent.kill()
@@ -583,7 +628,11 @@ class StudioManagerTests(WebAppTestCase):
         claimed = store.claim_stale_running(manager.owner_id, time.time() + 1)
         assert claimed is not None
         with (
-            patch.object(manager, "_terminate_orphan_job", return_value=False),
+            patch.object(
+                manager.process_runner,
+                "terminate_orphan_job",
+                return_value=False,
+            ),
             self.assertLogs("webapp.studio_manager", level="CRITICAL"),
         ):
             manager._recover_claimed_job(claimed)
@@ -642,7 +691,7 @@ class StudioManagerTests(WebAppTestCase):
         manager.start()
         try:
             job = manager.submit_chat(project.name, "clip-001", "question")
-            with self.assertLogs("webapp.studio_manager", level="ERROR"):
+            with self.assertLogs("webapp.agent_runner", level="ERROR"):
                 failed = self.wait_for_terminal(store, job.id)
         finally:
             manager.stop()
@@ -767,7 +816,7 @@ class StudioManagerTests(WebAppTestCase):
         try:
             job = manager.submit_chat(
                 project.name, "clip-001", "plan", "studio-storyboarder")
-            with self.assertLogs("webapp.studio_manager", level="ERROR"):
+            with self.assertLogs("webapp.agent_runner", level="ERROR"):
                 failed = self.wait_for_terminal(store, job.id)
         finally:
             manager.stop()
@@ -891,8 +940,9 @@ class StudioManagerTests(WebAppTestCase):
             store.set_process(
                 job.id, "dead-owner", child.pid,
                 process_start_time(child.pid))
-            with self.assertLogs("webapp.studio_manager", level="ERROR"):
-                StudioJobManager._terminate_orphan_process(store.get_job(job.id))
+            with self.assertLogs("webapp.process_runner", level="ERROR"):
+                SupervisedProcessRunner.terminate_orphan_process(
+                    store.get_job(job.id))
             self.assertIsNone(child.poll())
         finally:
             if child.poll() is None:
@@ -922,8 +972,9 @@ class StudioManagerTests(WebAppTestCase):
             store.set_process(
                 job.id, "dead-owner", child.pid,
                 process_start_time(child.pid) + 1)
-            with self.assertLogs("webapp.studio_manager", level="ERROR"):
-                StudioJobManager._terminate_orphan_process(store.get_job(job.id))
+            with self.assertLogs("webapp.process_runner", level="ERROR"):
+                SupervisedProcessRunner.terminate_orphan_process(
+                    store.get_job(job.id))
             self.assertIsNone(child.poll())
         finally:
             if child.poll() is None:

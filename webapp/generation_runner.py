@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import subprocess
+import sys
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -25,6 +27,13 @@ from studio_core.safe_files import (
     open_regular_file,
     read_opened_text,
 )
+from studio_core.job_store import JobStore
+from studio_core.models import Job
+from webapp.config import Settings
+from webapp.process_runner import ProcessCancelled, SupervisedProcessRunner
+
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -321,3 +330,119 @@ class GenerationJobRunner:
                         f"ComfyUI cleanup also failed: {cleanup_error}")
                 else:
                     raise
+
+
+class GenerationWorkerRunner:
+    """Supervise the deterministic generation worker process for one job."""
+
+    def __init__(
+        self,
+        settings: Settings,
+        store: JobStore,
+        owner_id: str,
+        process_runner: SupervisedProcessRunner,
+        environment: Callable[[Job], dict[str, str]],
+        export_chat: Callable[[Job], None],
+        cleanup: Callable[[], None],
+        validate: Callable[[Job], dict],
+        verify: Callable[[Job], None],
+    ) -> None:
+        self.settings = settings
+        self.store = store
+        self.owner_id = owner_id
+        self.process_runner = process_runner
+        self.environment = environment
+        self.export_chat = export_chat
+        self.cleanup = cleanup
+        self.validate = validate
+        self.verify = verify
+
+    def command(self, job: Job) -> list[str]:
+        return [
+            sys.executable,
+            str(self.settings.repo / "webapp" / "generation_worker.py"),
+            "--job-id", job.id,
+            "--project", job.project,
+            "--clip", job.clip_id,
+            "--profile", job.profile,
+            "--studio-root", str(self.settings.studio_root),
+            "--runtime-root", str(self.settings.runtime_root),
+            "--profile-home", str(self.settings.profile_home(job.profile)),
+            "--real-home", str(self.settings.real_home),
+            "--comfyui-root", str(self.settings.comfy_root),
+            "--comfyui-url", self.settings.comfy_url,
+            "--comfyui-python", str(
+                self.settings.comfy_root / ".venv/bin/python"),
+            "--timeout-seconds", str(self.settings.job_timeout_seconds),
+        ]
+
+    def _fail(self, job: Job, error: str) -> None:
+        self.store.fail(job.id, error, self.owner_id)
+        self.export_chat(job)
+
+    def execute(self, job: Job) -> None:
+        try:
+            self.validate(job)
+        except Exception as exc:
+            error = f"Generation request validation failed: {exc}"
+            self.store.append_job_event(
+                job.id, job.profile, "generation.validation", error,
+                status="failed")
+            self._fail(job, error)
+            return
+        try:
+            result = self.process_runner.run(
+                job, self.command(job), self.environment(job))
+        except ProcessCancelled:
+            self._fail(job, "Studio server stopped")
+            return
+        except subprocess.TimeoutExpired:
+            self.store.append_job_event(
+                job.id, job.profile, "job.timeout",
+                f"Exceeded the {self.settings.job_timeout_seconds}s job limit",
+                status="failed")
+            self.cleanup()
+            self._fail(
+                job,
+                f"Generation timed out after {self.settings.job_timeout_seconds}s",
+            )
+            return
+        except Exception as exc:
+            log.exception("Generation job %s failed", job.id)
+            self.cleanup()
+            try:
+                self._fail(job, str(exc))
+            except Exception:
+                log.exception(
+                    "Could not persist generation failure for job %s", job.id)
+            return
+        if result.returncode:
+            detail = (
+                result.stderr.strip().splitlines()[-1]
+                if result.stderr.strip() else "")
+            error = f"Generation worker failed ({result.returncode})"
+            if detail:
+                error += f": {detail}"
+            self.cleanup()
+            self._fail(job, error)
+            return
+        try:
+            document = json.loads(result.stdout)
+            if (not isinstance(document, dict)
+                    or not isinstance(document.get("generation_id"), str)
+                    or not isinstance(document.get("prompt_id"), str)
+                    or not isinstance(document.get("outputs"), list)):
+                raise ValueError("generation worker returned an invalid result")
+            self.verify(job)
+            self.store.complete(
+                job.id,
+                self.owner_id,
+                f"Generation completed: {document['generation_id']} "
+                f"(prompt_id: {document['prompt_id']})",
+                None,
+            )
+            self.export_chat(job)
+        except Exception as exc:
+            log.exception("Generation completion for job %s failed", job.id)
+            self.cleanup()
+            self._fail(job, str(exc))

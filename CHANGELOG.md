@@ -29,6 +29,9 @@ preview and production releases.
   worker that builds the exact H3 graph, serially uploads ordered references,
   submits and waits through pinned MCP tooling, archives authoritative output,
   and performs direct queue/VRAM cleanup without consuming model tokens
+- Split FIFO scheduling from process, agent, generation, and movie execution:
+  one typed dispatch table now selects cohesive runners, while one process owner
+  handles supervised groups, PID-safe recovery, termination, and timeouts
 
 ### Fixed
 

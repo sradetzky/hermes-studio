@@ -244,7 +244,7 @@ project/clip chat scope and exact IDs.
 - [x] Execute immutable generation contracts directly instead of using an LLM as
   a deterministic shell-command proxy, including direct pinned-MCP submission,
   bounded two-second batch waits, authoritative archival, and queue/VRAM cleanup.
-- [ ] Split scheduling, process supervision, agent, generation, and movie
+- [x] Split scheduling, process supervision, agent, generation, and movie
   execution ownership.
 - [x] Measure runtime-event growth and document an explicit durable-retention
   policy with concrete revisit triggers.
