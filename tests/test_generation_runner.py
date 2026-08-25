@@ -6,23 +6,27 @@ import unittest
 from pathlib import Path
 
 from studio_core.comfyui_mcp import cleanup_comfyui
+from studio_core.generation_contracts import (
+    GenerationContract,
+    parse_generation_contract,
+)
 from webapp.generation_runner import GenerationJobRunner, GenerationRuntime
 
 
 class GenerationJobRunnerTests(unittest.TestCase):
-    def _contract(self, reference: str = "ref.jpg") -> dict:
+    def _contract(self, reference: str = "ref.jpg") -> GenerationContract:
         prompt = "exact prompt\n"
         digest = hashlib.sha256(prompt.encode()).hexdigest()
-        return {
+        return parse_generation_contract({
             "schema_version": 1,
             "action": "generate-current-prompt",
             "prompt": prompt,
             "prompt_sha256": digest,
-            "settings_updated_at": "revision",
+            "settings_updated_at": "2026-08-25T00:00:00+00:00",
             "settings_manifest": {
                 "schema_version": 2,
                 "prompt_sha256": digest,
-                "updated_at": "revision",
+                "updated_at": "2026-08-25T00:00:00+00:00",
                 "mode": "r2v",
                 "aspect": "16:9",
                 "mp": 0.5,
@@ -33,12 +37,18 @@ class GenerationJobRunnerTests(unittest.TestCase):
                 "accel": True,
             },
             "execution": {
-                "resolution": {"width": 832, "height": 480},
-                "timing": {"seconds": 5, "fps": 24, "frames": 121},
+                "resolution": {
+                    "mode": "explicit", "width": 832, "height": 480,
+                    "megapixels": 0.399,
+                },
+                "timing": {
+                    "requested_seconds": 5.0, "fps": 24, "frames": 124,
+                    "actual_seconds": 5.167,
+                },
                 "references": [reference],
             },
             "expected_generation_id": "001",
-        }
+        })
 
     def _fixture(self, root: Path) -> tuple[GenerationRuntime, Path, Path]:
         studio_root = root / "studio-root"
@@ -51,8 +61,8 @@ class GenerationJobRunnerTests(unittest.TestCase):
         references.mkdir()
         (clip / "current_prompt.txt").write_text("exact prompt\n")
         (clip / "current_generation.json").write_text(json.dumps({
-            "prompt_sha256": self._contract()["prompt_sha256"],
-            "updated_at": "revision",
+            "prompt_sha256": self._contract().prompt_sha256,
+            "updated_at": "2026-08-25T00:00:00+00:00",
         }))
         (references / "ref.jpg").write_bytes(b"reference")
         (profile / "skills/minimax-h3-run/scripts").mkdir(parents=True)

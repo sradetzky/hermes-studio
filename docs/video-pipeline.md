@@ -15,21 +15,19 @@ Hermes profile tools may isolate `$HOME`. Studio therefore uses `$HERMES_HOME`
 for active-profile skills and `$HERMES_REAL_HOME` for the account's ComfyUI,
 Documents, and repository paths; raw `~` is not a stable root.
 
-Studio web jobs derive one exact shell-quoted `run_h3.py --dry-run` command from
-the immutable generation package, place it in a compact task-preserving query
-tail, suppress its stdout, and keep the emitted graph JSON out of model context.
-`submit_h3_graph_mcp.py` serially uploads refs, revalidates prompt/settings,
-patches returned loader filenames in memory, and passes the exact graph object
-through pinned `mcporter@0.13.7` → `comfyui-mcp@0.52.61`, with a result-file
-reservation that fails closed instead of double-submitting. Generation jobs
-receive only terminal, file, skills, and comfyui toolsets. The agent must not
-inspect the runner or transcribe workflow/prompt content.
+Studio web jobs decode the immutable generation package into frozen typed values.
+The supervised deterministic worker derives one exact shell-quoted
+`run_h3.py --dry-run` command, keeps graph JSON out of model context, serially
+uploads ordered references, patches returned loader filenames in memory, and
+passes the exact graph through pinned `mcporter@0.13.7` →
+`comfyui-mcp@0.52.61`. Web Hermes profiles receive explicit non-ComfyUI
+toolsets and cannot execute this transaction.
 `scripts/check_tool_versions.py`, invoked by the canonical release gate, verifies
 that both pinned npm package versions remain available and that the installed
 Hermes CLI still exposes the subprocess options this integration requires.
-Studio then waits through MCP, archives with
-`design_studio.py archive-output` using exact project + clip IDs, and always
-clears VRAM.
+The worker waits through MCP, archives against exact project + clip IDs and
+authoritative history, and always clears VRAM. Only a typed `generate` job owns
+queue cancellation; chat or specialist failures never interrupt ComfyUI.
 `design_studio.py generate` remains a manual direct diagnostic fallback.
 
 ## Proven knobs (RTX 5060 Ti 16GB)

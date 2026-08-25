@@ -280,7 +280,7 @@ auto-chained, and their result never starts a render without a separate request.
   generation jobs, worker-start revalidation, and queued/active browser feedback
 - M4.4 (done): explicit Project/Clip chat selector, independently persisted
   transcripts/activity/profile sessions, and lossless project-history migration
-- Real E2E checkpoint (done): exact-clip web job → Studio → comfyui-mcp H3
+- Real E2E checkpoint (done): exact-clip web job → deterministic worker → comfyui-mcp H3
   submission → parameter read-back → clip-local archive → VRAM cleanup
 - M4.5 (done): editable project display title and brief with an immutable
   filesystem project ID, validated serialized publication, API/storage coverage,
@@ -304,7 +304,7 @@ auto-chained, and their result never starts a render without a separate request.
   trimming, transitions, timeline, or take comparison.
 - Preview.3 release gate (done): synchronized Phase 4.7/5 public scope and passed
   complete local, clean-archive, service/API, and real-browser verification.
-- M5.5 (planned; blocks M6): complete the code-quality remediation plan in
+- M5.5 (done): completed the code-quality remediation plan in
   `docs/plans/2026-08-24-code-quality-remediation.md`: canonical tests/paths/setup,
   dependency-neutral runtime ownership, direct deterministic generation, typed
   jobs, locally owned browser controllers, stable activity reconciliation, and

@@ -1,7 +1,7 @@
 # PLAN.md — Hermes Studio
 
-**Status**: `v0.1.0-preview.3` released; Phase 5.5 remediation P1 core ownership
-is complete and direct generation execution is next. Phase 6 remains blocked.
+**Status**: `v0.1.0-preview.3` released; Phase 5.5 remediation and its
+thermo-nuclear follow-up are complete. Phase 6 interaction/continuity work is next.
 **Owner**: Sven (local setup on RTX 5060 Ti 16GB)  
 **Updated**: 2026-08-25
 **Goal**: Fully local, agent-orchestrated creative studio centered on MiniMax H3 + Hermes, with a simple self-hosted web UI.
@@ -17,9 +17,9 @@ implementation status.
 User (browser)
     ↓
 Simple Web UI (FastAPI + minimal frontend)
-    ↓
-Hermes Profile "studio"  ←→  Configured model/provider
-    ↓ (comfyui-mcp)
+    ├─ chat jobs → Hermes profiles ←→ configured model/provider
+    └─ generation jobs → deterministic worker → pinned comfyui-mcp
+                                      ↓
 ComfyUI (native MiniMax H3 nodes)
     ↓
 Folder structure on disk (source of truth for projects & media)
@@ -55,11 +55,11 @@ Folder structure on disk (source of truth for projects & media)
   preview/final defaults are 0.5MP/8 steps and 0.9MP/20 steps.
 - Acceleration means only Sol fused modulation + ChunkFF. Quantization, model,
   Turbo, SeedVR2, and upscale controls are not part of the web generation contract.
-- Web generation jobs receive one exact immutable-package-derived
-  `run_h3.py --dry-run` command in a compact task-preserving tail and consume its
-  graph JSON with a minimal render toolset. A deterministic pinned-MCP helper
-  validates and submits the graph bytes; the agent never reverse-engineers the
-  runner or transcribes workflow/prompt content during a render request.
+- Web generation jobs are decoded into an immutable typed contract and executed
+  directly by the supervised deterministic worker. The worker builds the exact
+  `run_h3.py --dry-run` graph, submits through pinned MCP tooling, waits, archives,
+  validates, and cleans up; no render command, graph, prompt, or MCP operation is
+  routed through a Hermes model.
 - Always generate structured official prompts (see 2.4).
 - Output: 4–15s video with native stereo audio, archived at the generated canvas.
 
@@ -119,8 +119,9 @@ project/clip chat scope and exact IDs.
   No heavy SPA or runtime CDN.
 
 ### 2.6 Integration Points
-- ComfyUI ↔ Hermes: pinned `comfyui-mcp`; the `studio` profile is the sole GPU
-  queue owner. No silent raw-REST fallback in normal operation.
+- ComfyUI ↔ Studio worker: pinned `comfyui-mcp`; only exact `generate` jobs own
+  web GPU execution and cleanup. Web Hermes profile toolsets exclude ComfyUI/MCP,
+  and chat failures never cancel unrelated queue work.
 - Build API-format H3 graphs with the proven `run_h3.py --dry-run` builder,
   upload references through MCP, and submit the resulting graph through the
   pinned batch tools. Repo workflow JSON files remain optional.
@@ -232,7 +233,7 @@ project/clip chat scope and exact IDs.
 - [x] Keep trimming, transitions, timeline editing, and side-by-side take
   comparison outside this phase
 
-### Phase 5.5 – Code-quality remediation gate (planned; blocks Phase 6)
+### Phase 5.5 – Code-quality remediation gate (complete)
 - [x] Make all Python tests discoverable through one canonical command and add
   one executable clean-commit entry point for local non-GPU release checks.
 - [x] Add reproducible checkout-independent service setup and extend the

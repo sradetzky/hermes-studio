@@ -18,10 +18,8 @@ from studio_core.comfyui_mcp import (
     submit_exact_h3_graph,
     unwrap_content,
 )
-from studio_core.generation_archive import (
-    archive_outputs,
-    parse_generation_job_payload,
-)
+from studio_core.generation_archive import archive_outputs
+from studio_core.generation_contracts import GenerationContract
 from studio_core.job_contracts import JobEventType, JobPhase
 from studio_core.safe_files import (
     SafeFilesystemError,
@@ -75,28 +73,28 @@ class GenerationJobRunner:
             event_type, summary, phase=phase, detail=detail or {})
 
     def _graph_command(
-            self, project: str, clip_id: str, contract: dict,
+            self, project: str, clip_id: str, contract: GenerationContract,
             output: Path) -> list[str]:
         project_path = self.runtime.studio_root / "projects" / project
         clip_path = project_path / "clips" / clip_id
-        settings = contract["settings_manifest"]
-        execution = contract["execution"]
+        settings = contract.settings_manifest
+        execution = contract.execution
         command = [
             "python3",
             str(self.runtime.profile_home /
                 "skills/minimax-h3-run/scripts/run_h3.py"),
-            "--mode", settings["mode"],
+            "--mode", settings.mode,
             "--prompt-file", str(clip_path / "current_prompt.txt"),
-            "--width", str(execution["resolution"]["width"]),
-            "--height", str(execution["resolution"]["height"]),
-            "--length", str(execution["timing"]["frames"]),
-            "--steps", str(settings["steps"]),
+            "--width", str(execution.resolution.width),
+            "--height", str(execution.resolution.height),
+            "--length", str(execution.timing.frames),
+            "--steps", str(settings.steps),
         ]
-        if settings["seed"] is not None:
-            command.extend(("--seed", str(settings["seed"])))
-        if settings["accel"]:
+        if settings.seed is not None:
+            command.extend(("--seed", str(settings.seed)))
+        if settings.accel:
             command.append("--accel")
-        for filename in execution["references"]:
+        for filename in execution.references:
             command.extend((
                 "--image", str(project_path / "references" / filename)))
         command.extend(("--dry-run", "--output-json", str(output)))
@@ -204,13 +202,12 @@ class GenerationJobRunner:
 
     def run(
             self, job_id: str, project: str, clip_id: str,
-            contract: dict) -> dict[str, Any]:
-        parsed = parse_generation_job_payload(json.dumps(contract))
+            contract: GenerationContract) -> dict[str, Any]:
         project_path = self.runtime.studio_root / "projects" / project
         clip_path = project_path / "clips" / clip_id
         references = [
             project_path / "references" / filename
-            for filename in parsed["execution"]["references"]
+            for filename in contract.execution.references
         ]
         environment = mcp_environment(
             self.runtime.comfy_url,
@@ -233,11 +230,11 @@ class GenerationJobRunner:
                     dir=self.runtime.runtime_root) as directory:
                 graph_path = Path(directory) / "h3-graph.json"
                 command = self._graph_command(
-                    project, clip_id, parsed, graph_path)
+                    project, clip_id, contract, graph_path)
                 self._event(
                     JobEventType.GENERATION_GRAPH,
                     "Building the exact H3 graph",
-                    detail={"mode": parsed["settings_manifest"]["mode"]})
+                    detail={"mode": contract.settings_manifest.mode})
                 result = self.command_runner(
                     command,
                     check=False,
@@ -260,8 +257,8 @@ class GenerationJobRunner:
                     graph_path,
                     clip_path / "current_prompt.txt",
                     clip_path / "current_generation.json",
-                    parsed["prompt_sha256"],
-                    parsed["settings_updated_at"],
+                    contract.prompt_sha256,
+                    contract.settings_updated_at,
                     references,
                     environment,
                     mcp_call=self.mcp_call,
@@ -306,7 +303,7 @@ class GenerationJobRunner:
                     source_root=self.runtime.comfy_root / "output",
                     transport="comfyui-mcp",
                 )
-                if generation.name != parsed["expected_generation_id"]:
+                if generation.name != contract.expected_generation_id:
                     raise RuntimeError(
                         "generation archive does not match the expected sequence")
                 completed = True
@@ -350,7 +347,7 @@ class GenerationWorkerRunner:
         environment: Callable[[Job], dict[str, str]],
         export_chat: Callable[[Job], None],
         cleanup: Callable[[], None],
-        validate: Callable[[Job], dict],
+        validate: Callable[[Job], GenerationContract],
         verify: Callable[[Job], None],
     ) -> None:
         self.settings = settings

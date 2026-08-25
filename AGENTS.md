@@ -237,6 +237,9 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
   including live service/API and desktop/narrow CDP checks. A live historical
   row exposed and now guards exact terminal-only pre-contract generation
   metadata without weakening active-job or malformed-payload rejection.
+- Thermo-nuclear follow-up completed nested immutable generation/movie contract
+  validation, restricted ComfyUI cleanup to exact generation jobs, removed render
+  ownership from web Hermes agents, and synchronized semantic profile guards.
 
 ## Next steps
 

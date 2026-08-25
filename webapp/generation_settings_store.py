@@ -11,8 +11,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from webapp.config import Settings
-from webapp.reference_store import ReferenceStore, ReferenceStoreError
+from studio_core.generation_contracts import (
+    ASPECT_RATIOS,
+    CANVAS_MULTIPLE,
+    FPS,
+    IMAGE_REFERENCE_EXTENSIONS,
+    MAX_CANVAS_PIXELS,
+    MAX_SAFE_SEED,
+    MODES,
+    duration_to_frames,
+    resolution_from_mp,
+)
 from studio_core.safe_files import (
     SafeFilesystemError,
     atomic_write_bytes_at,
@@ -20,24 +29,12 @@ from studio_core.safe_files import (
     open_regular_file,
     read_opened_text,
 )
+from webapp.config import Settings
+from webapp.reference_store import ReferenceStore, ReferenceStoreError
 
 
 MANIFEST_NAME = "current_generation.json"
 SCHEMA_VERSION = 2
-MODES = {"t2va", "i2va", "fl2va", "r2v"}
-ASPECT_RATIOS = {
-    "16:9": 16 / 9,
-    "9:16": 9 / 16,
-    "1:1": 1.0,
-    "4:3": 4 / 3,
-    "3:4": 3 / 4,
-    "21:9": 21 / 9,
-}
-CANVAS_MULTIPLE = 32
-MAX_CANVAS_PIXELS = 1_100_000
-MAX_SAFE_SEED = 9_007_199_254_740_991
-FPS = 24
-IMAGE_REFERENCE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 
 
 class GenerationSettingsError(ValueError):
@@ -91,24 +88,6 @@ def _filename(value: Any, field: str, *, optional: bool = False) -> str | None:
             or Path(name).name != name):
         raise GenerationSettingsError(f"invalid {field}: {value!r}")
     return name
-
-
-def resolution_from_mp(aspect: str, mp: float) -> tuple[int, int]:
-    ratio = ASPECT_RATIOS[aspect]
-    pixels = mp * 1_000_000.0
-    height = (pixels / ratio) ** 0.5
-    width = ratio * height
-    return (
-        max(CANVAS_MULTIPLE, int(round(width / CANVAS_MULTIPLE)) * CANVAS_MULTIPLE),
-        max(CANVAS_MULTIPLE, int(round(height / CANVAS_MULTIPLE)) * CANVAS_MULTIPLE),
-    )
-
-
-def duration_to_frames(seconds: float) -> int:
-    frames = max(5, int(round(seconds * FPS)))
-    while frames % 17 != 5:
-        frames += 1
-    return frames
 
 
 class GenerationSettingsStore:

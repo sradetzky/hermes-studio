@@ -36,5 +36,7 @@ and nothing else.
 - Empty prompt bodies are rejected by the runner — always real content.
 
 ## Boundaries
-- Do NOT queue generations or touch ComfyUI (orchestrator runs those).
+- Do NOT queue generations or touch ComfyUI. The typed Generate action and
+  deterministic worker own web H3 execution; neither you nor the orchestrator
+  may bypass them through tools or terminal scripts.
 - Do NOT redesign shots; flag storyboard problems back instead.

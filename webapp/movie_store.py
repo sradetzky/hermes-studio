@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import json
 import hashlib
-import math
 import os
-import re
 import stat
 import subprocess
 import uuid
@@ -15,7 +13,16 @@ from pathlib import Path
 from urllib.parse import quote
 
 from studio_core.projects import ClipStore, ClipStoreError
-from studio_core.identifiers import CLIP_ID_RE
+from studio_core.movie_contracts import (
+    COPY_AUDIO_CODECS,
+    COPY_VIDEO_CODECS,
+    MOVIE_CONTRACT_VERSION,
+    MOVIE_DIRECTORY_RE,
+    MOVIE_FILENAME,
+    MOVIE_PROVENANCE,
+    MovieContractError,
+    parse_movie_contract,
+)
 from webapp.media_review_store import (
     MediaReviewError,
     MediaReviewStore,
@@ -32,14 +39,6 @@ from studio_core.safe_files import (
     remove_published_directory_if_same,
     write_new_regular_file_at,
 )
-
-
-MOVIE_DIRECTORY_RE = re.compile(r"movie-(\d{3,})")
-MOVIE_FILENAME = "movie.mp4"
-MOVIE_PROVENANCE = "provenance.json"
-MOVIE_CONTRACT_VERSION = 1
-COPY_VIDEO_CODECS = {"h264", "hevc", "av1"}
-COPY_AUDIO_CODECS = {"aac", "mp3", "alac", "ac3", "eac3"}
 
 
 class MovieStoreError(ValueError):
@@ -333,108 +332,16 @@ class MovieStore:
         }
 
     @staticmethod
-    def _valid_component(value: object) -> bool:
-        return (
-            isinstance(value, str) and bool(value)
-            and not value.startswith(".")
-            and "/" not in value and "\\" not in value
-            and Path(value).name == value
-        )
-
-    @staticmethod
-    def _validate_probe(probe: object) -> None:
-        if not isinstance(probe, dict) or set(probe) != {
-                "duration_seconds", "video", "audio"}:
-            raise MovieStoreError("movie export contract is invalid")
-        duration = probe["duration_seconds"]
-        video = probe["video"]
-        audio = probe["audio"]
-        video_keys = {
-            "codec_name", "width", "height", "pix_fmt", "r_frame_rate",
-            "time_base",
-        }
-        if (isinstance(duration, bool)
-                or not isinstance(duration, (int, float))
-                or not math.isfinite(duration) or duration <= 0
-                or not isinstance(video, dict) or set(video) != video_keys
-                or not isinstance(video["width"], int) or video["width"] <= 0
-                or not isinstance(video["height"], int) or video["height"] <= 0
-                or any(not isinstance(video[key], str) or not video[key]
-                       for key in (
-                           "codec_name", "pix_fmt", "r_frame_rate",
-                           "time_base"))):
-            raise MovieStoreError("movie export contract is invalid")
+    def _validated_contract(contract: dict) -> dict:
         try:
-            if Fraction(video["r_frame_rate"]) <= 0:
-                raise MovieStoreError("movie export contract is invalid")
-        except (ValueError, ZeroDivisionError) as exc:
-            raise MovieStoreError("movie export contract is invalid") from exc
-        if audio is None:
-            return
-        audio_keys = {
-            "codec_name", "sample_rate", "channels", "channel_layout",
-            "time_base",
-        }
-        if (not isinstance(audio, dict) or set(audio) != audio_keys
-                or not isinstance(audio["codec_name"], str)
-                or not audio["codec_name"]
-                or not isinstance(audio["sample_rate"], str)
-                or not audio["sample_rate"].isdigit()
-                or int(audio["sample_rate"]) <= 0
-                or not isinstance(audio["channels"], int)
-                or audio["channels"] <= 0
-                or not isinstance(audio["time_base"], str)
-                or not audio["time_base"]
-                or (audio["channel_layout"] is not None
-                    and not isinstance(audio["channel_layout"], str))):
-            raise MovieStoreError("movie export contract is invalid")
+            return parse_movie_contract(contract).to_dict()
+        except MovieContractError as exc:
+            raise MovieStoreError(
+                f"movie export contract is invalid: {exc}") from exc
 
     @staticmethod
     def _validate_contract(contract: dict) -> None:
-        if (not isinstance(contract, dict)
-                or contract.get("schema_version") != MOVIE_CONTRACT_VERSION
-                or contract.get("action") != "export-selected-takes"):
-            raise MovieStoreError("movie export contract is invalid")
-        output = contract.get("output")
-        sources = contract.get("sources")
-        assembly = contract.get("assembly")
-        if (not isinstance(output, dict) or set(output) != {
-                    "id", "filename", "provenance"}
-                or not isinstance(output.get("id"), str)
-                or MOVIE_DIRECTORY_RE.fullmatch(str(output.get("id") or "")) is None
-                or output.get("filename") != MOVIE_FILENAME
-                or output.get("provenance") != MOVIE_PROVENANCE
-                or not isinstance(sources, list) or not sources
-                or not isinstance(assembly, dict) or set(assembly) != {
-                    "mode", "hard_cuts", "target"}
-                or assembly.get("mode") not in {"stream-copy", "normalized"}
-                or assembly.get("hard_cuts") is not True):
-            raise MovieStoreError("movie export contract is invalid")
-        required = {
-            "clip_id", "clip_title", "generation", "filename", "size",
-            "sha256", "probe",
-        }
-        clip_ids = set()
-        for source in sources:
-            if (not isinstance(source, dict) or set(source) != required
-                    or CLIP_ID_RE.fullmatch(str(source.get("clip_id") or "")) is None
-                    or source.get("clip_id") in clip_ids
-                    or not isinstance(source.get("clip_title"), str)
-                    or not source["clip_title"].strip()
-                    or not MovieStore._valid_component(source.get("generation"))
-                    or not MovieStore._valid_component(source.get("filename"))
-                    or Path(source["filename"]).suffix.lower() not in VIDEO_EXTENSIONS
-                    or not isinstance(source["size"], int)
-                    or source["size"] <= 0
-                    or not re.fullmatch(r"[0-9a-f]{64}", str(source["sha256"]))):
-                raise MovieStoreError("movie export source contract is invalid")
-            clip_ids.add(source["clip_id"])
-            MovieStore._validate_probe(source["probe"])
-        if (assembly["target"] != MovieStore._target_for_sources(sources)
-                or assembly["mode"] != (
-                    "stream-copy" if MovieStore._copy_compatible(sources)
-                    else "normalized")):
-            raise MovieStoreError("movie export contract is invalid")
+        MovieStore._validated_contract(contract)
 
     @staticmethod
     def _concat_bytes(descriptors: list[int]) -> bytes:
@@ -525,7 +432,7 @@ class MovieStore:
         ], tuple(descriptors + [staging_fd]))
 
     def export(self, project: Path, contract: dict, job_id: str) -> dict:
-        self._validate_contract(contract)
+        contract = self._validated_contract(contract)
         final = project / "final"
         staging_name = f".movie-{uuid.uuid4().hex}"
         staging_identity = None
@@ -612,7 +519,7 @@ class MovieStore:
         return self.verify_export(project, contract, job_id)
 
     def verify_export(self, project: Path, contract: dict, job_id: str) -> dict:
-        self._validate_contract(contract)
+        contract = self._validated_contract(contract)
         movie_id = contract["output"]["id"]
         movie = project / "final" / movie_id
         try:

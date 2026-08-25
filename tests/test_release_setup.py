@@ -14,6 +14,27 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 class ReleaseSetupTests(unittest.TestCase):
+    def test_profile_contracts_reserve_web_generation_for_worker(self):
+        soul = (REPO_ROOT / "hermes/profiles/studio/SOUL.md").read_text()
+        skill = (REPO_ROOT / "hermes/skills/design-studio/SKILL.md").read_text()
+        illustrator = (
+            REPO_ROOT / "hermes/profiles/studio-illustrator/SOUL.md").read_text()
+        prompt_engineer = (
+            REPO_ROOT / "hermes/profiles/studio-prompt-engineer/SOUL.md").read_text()
+
+        for obsolete in (
+            "## Web Generate Contract",
+            "you execute every GPU job",
+            "For a web generation request",
+            "Only the `studio` orchestrator may execute these steps",
+        ):
+            self.assertNotIn(obsolete, soul)
+            self.assertNotIn(obsolete, skill)
+        self.assertIn("sole owner of web H3 rendering", soul)
+        self.assertIn("Web profile toolsets intentionally exclude ComfyUI/MCP", skill)
+        self.assertIn("Web profiles do not execute local ComfyUI jobs", illustrator)
+        self.assertIn("deterministic worker own web H3 execution", prompt_engineer)
+
     def test_service_uses_stable_launcher_instead_of_checkout_path(self):
         unit = (REPO_ROOT / "webapp/hermes-studio.service").read_text()
         self.assertIn("ExecStart=%h/.local/bin/hermes-studio-web", unit)

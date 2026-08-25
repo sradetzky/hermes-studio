@@ -5,10 +5,11 @@ description: Use when working in the hermes-studio repo — creating studio proj
 
 # design-studio skill
 
-Manages the on-disk project structure for Hermes Studio. Production ComfyUI
-execution goes through the `comfyui` MCP server owned by the `studio` profile.
-The Python runners build proven graphs and remain explicit legacy fallbacks;
-they are not the normal Studio transport.
+Manages the on-disk project structure for Hermes Studio. The supervised web
+generation worker exclusively owns production H3 execution through pinned MCP
+tooling. Hermes profiles prepare creative inputs and never invoke or duplicate
+that transaction. Python render commands remain explicit operator diagnostics
+outside web chat; they are not normal Studio transport.
 
 ## Repo & Paths
 
@@ -60,59 +61,28 @@ After creation, pass the exact project folder id returned by the command
 (`2026-08-22_smoke-test`). Fuzzy/suffix matching is intentionally unsupported
 so output can never land in an ambiguously matched project.
 
-## MCP generation transaction (mandatory)
+## Generation ownership guard
 
-Only the `studio` orchestrator may execute these steps. Never run two GPU jobs
-concurrently.
+- A web chat request is never render authorization. Profiles may create or edit
+  prompts and settings, then direct the user to **Generate with this prompt**.
+- The typed Generate action snapshots the exact prompt, settings, timing,
+  references, canvas, and archive sequence. The supervised worker alone builds
+  the graph, uploads references, submits, waits, archives authoritative history,
+  and performs queue/VRAM cleanup.
+- Web profile toolsets intentionally exclude ComfyUI/MCP. Never bypass that
+  boundary through terminal render scripts, raw REST, curl, another profile, or
+  hand-transcribed graph/tool arguments.
+- Prompt edits intentionally stale saved settings. Never rewrite the manifest to
+  make a request pass; the user must review and save it again.
+- Specialist output never starts a render. Only the explicit typed Generate
+  action can enqueue the worker, and the worker serializes all web GPU work.
+- Manual `generate`/`generate-image`, runner `--dry-run`, MCP submission, and
+  archive commands are operator diagnostics outside web chat. Run them only when
+  the user explicitly requests that manual path; they are not a fallback for a
+  failed web job.
 
-1. Resolve the exact project and clip, write that clip's `current_prompt.txt`,
-   and build/inspect the API graph with the relevant
-   runner's `--dry-run` mode. Dry-run must not queue a job.
-   For a web generation request, the job query already contains the exact
-   shell-quoted dry-run command and output JSON path in its mandatory execution
-   tail. Keep that tail as the active task after every tool result. Run the
-   command exactly once with its stdout suppression intact. Do not read its graph
-   JSON into model context. Never read, search, or reverse-engineer `run_h3.py`.
-2. For a web generation request, run the exact `submit_h3_graph_mcp.py` command
-   from the mandatory tail. Never call upload or batch-submit tools yourself and
-   never transcribe a graph/prompt into tool arguments. The helper serially
-   uploads refs, revalidates the contract, and submits exact graph bytes through
-   pinned MCP tooling. Read only its compact result JSON.
-3. For a manual/non-web run only, upload references serially in prompt order,
-   patch returned filenames into the graph, and optionally call
-   `mcp_comfyui_clear_vram` before switching model families.
-4. For a manual/non-web run only, submit exactly one graph through
-   `mcp_comfyui_batch` with
-   `action:"submit"`, `workflows:[graph]`, and `disable_random_seed:true`.
-   Retain the returned `batch_id` and `prompt_id`. The explicit seed guard is
-   mandatory because batch submission otherwise randomizes seed widgets.
-5. Call `mcp_comfyui_batch` with `action:"wait"`, that `batch_id`, and
-   `timeout_s:600`. This is the notification-style wait: it checks status
-   internally every two seconds and returns immediately when the prompt is
-   terminal. If its bounded ten-minute safety cap expires while the job remains
-   pending/running, call the same wait action again. Never approximate waiting
-   with `sleep`, terminal timeout calls, or manually spaced queue/history polls.
-   Never start another job while one is running.
-6. On success, archive output with `design_studio.py archive-output`, the exact
-   `prompt_id`, and the same exact project + clip IDs. Web Generate jobs derive
-   seed, canvas, frames, FPS, steps, acceleration nodes, ordered references, and
-   prompt hash from authoritative ComfyUI history at the archive boundary; an
-   incomplete or mismatched archive must fail rather than publish partial metadata.
-   If the configured ComfyUI root is itself a
-   symlink and the safe-filesystem guard rejects it, do not copy manually:
-   import `scripts/design_studio.py` and call `archive_outputs(...)` with the
-   canonical real output directory as `source_root` plus a relative output
-   filename. This preserves the same descriptor-safe archive transaction.
-7. **Finally, always call `mcp_comfyui_clear_vram`** with model unload and
-   memory free enabled — after success, error, cancellation, or timeout.
-8. On timeout/error, cancel through `mcp_comfyui_queue` first, verify the job
-   stopped, then clear VRAM. Killing a wrapper process does not cancel ComfyUI.
-
-Do not use raw REST, curl, `/prompt`, `/history`, `/upload`, or `/free` during
-normal Studio work. The web server's sanitized read-only `/queue` projection is
-an observability-only exception; agents do not call it and it cannot mutate
-ComfyUI. If MCP is unavailable, stop with a clear error; do not silently fall
-back to REST.
+The web server's `/queue` projection is sanitized and read-only. Profiles do not
+call it or any mutating ComfyUI endpoint.
 
 Each clip's `current_generation.json` is the web UI's compact typed run contract.
 It records mode, canvas/MP, seed, steps, accel, and the SHA-256 of that clip's
@@ -124,9 +94,9 @@ manifest from agent prose. A prompt edit intentionally makes the UI show stale
 settings; the user must review and save the panel again before the web Generate
 action is allowed. A Generate click is explicit render authorization. Its Studio
 job carries the validated prompt hash, manifest revision, resolved timing,
-references, canvas, and execution knobs. Re-read both clip files immediately
-before submission and abort without queueing on any token mismatch; never rewrite
-the prompt or settings to make a stale request pass.
+references, canvas, and execution knobs. The deterministic worker revalidates
+both clip files immediately before submission and aborts without queueing on any
+token mismatch.
 
 The legacy `generate` and `generate-image` CLI commands remain for manual
 diagnostics only. They explicitly clean VRAM, and timeout paths interrupt the
@@ -173,8 +143,8 @@ Allowed profiles are `studio-storyboarder`, `studio-prompt-engineer`,
 `studio-reviewer`, and `studio-illustrator`. Handoffs are serialized and keep a
 independent session for each project or exact clip scope. The web runtime
 projects their reasoning,
-tool use, and lifecycle into the parent job's activity feed. Specialists never
-queue ComfyUI; only `studio` owns GPU execution. Use the reviewer only when the
+tool use, and lifecycle into the parent job's activity feed. Profiles never
+queue ComfyUI; only the deterministic worker owns web H3 execution. Use the reviewer only when the
 user explicitly requests agent review—the human remains the final judge.
 
 Dispatch only for an explicit web profile selection or one exact command:

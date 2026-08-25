@@ -298,7 +298,22 @@ class StudioManagerTests(WebAppTestCase):
         self.assertTrue(environment["HERMES_STUDIO_CLIP_PATH"].endswith(
             "/projects/project/clips/clip-002"))
 
-    def test_queued_generation_is_revalidated_before_agent_execution(self):
+    def test_studio_chat_command_excludes_comfyui_toolsets(self):
+        store = JobStore(self.settings.database_path)
+        store.initialize()
+        manager = StudioJobManager(self.settings, store)
+        job = store.create_chat_job(
+            "project", "plan", profile="studio", clip_id="clip-001")
+
+        command = manager.agent_runner.default_command(job, None)
+        toolsets = command[command.index("-t") + 1]
+
+        self.assertEqual(toolsets, "file,terminal,vision,web,skills")
+        self.assertNotIn("all", command)
+        self.assertNotIn("comfyui", toolsets)
+        self.assertFalse(manager._job_owns_gpu(job))
+
+    def test_queued_generation_is_revalidated_before_worker_execution(self):
         ds.studio_root(str(self.settings.studio_root))
         project = ds.create_project(self.settings.studio_root, "generation-revalidate")
         clip = project / "clips" / "clip-001"
@@ -384,7 +399,8 @@ class StudioManagerTests(WebAppTestCase):
             timeout_seconds=self.settings.job_timeout_seconds,
         ))
         command = runner._graph_command(
-            project.name, "clip-001", json.loads(job.message), Path("graph.json"))
+            project.name, "clip-001", manager._validate_generation_job(job),
+            Path("graph.json"))
 
         self.assertIn("r2v", command)
         self.assertIn("362", command)
@@ -503,9 +519,10 @@ class StudioManagerTests(WebAppTestCase):
         def command(_job, _session):
             return [sys.executable, "-c", "import time; time.sleep(30)"]
 
+        cleanup_calls = []
         manager = StudioJobManager(
             self.settings, store, command_builder=command,
-            cleanup_callback=lambda: None,
+            cleanup_callback=lambda: cleanup_calls.append(True),
         )
         manager.start()
         job = manager.submit_chat(project.name, "clip-001", "question")
@@ -527,6 +544,7 @@ class StudioManagerTests(WebAppTestCase):
         self.assertEqual(failed.status, JobStatus.FAILED)
         with self.assertRaises(ProcessLookupError):
             os.kill(child_pid, 0)
+        self.assertEqual(cleanup_calls, [])
 
     def test_supervised_exec_refuses_command_after_parent_identity_changes(self):
         marker = Path(self.temp.name) / "command-ran"
@@ -684,9 +702,10 @@ class StudioManagerTests(WebAppTestCase):
         def command(_job, _session):
             return [sys.executable, "-c", "raise SystemExit(7)"]
 
+        cleanup_calls = []
         manager = StudioJobManager(
             self.settings, store, command_builder=command,
-            cleanup_callback=lambda: None,
+            cleanup_callback=lambda: cleanup_calls.append(True),
         )
         manager.start()
         try:
@@ -703,6 +722,30 @@ class StudioManagerTests(WebAppTestCase):
         self.assertEqual(
             [event.role for event in events], ["user", "system"])
         self.assertIn("failed", events[1].content.lower())
+        self.assertEqual(cleanup_calls, [])
+
+    def test_timed_out_studio_chat_does_not_interrupt_comfyui(self):
+        ds.studio_root(str(self.settings.studio_root))
+        project = ds.create_project(self.settings.studio_root, "chat-timeout")
+        store = JobStore(self.settings.database_path)
+        store.initialize()
+        cleanup_calls = []
+        manager = StudioJobManager(
+            self.settings, store,
+            cleanup_callback=lambda: cleanup_calls.append(True),
+        )
+        job = manager.submit_chat(project.name, "clip-001", "question")
+        claimed = store.claim_next(manager.owner_id)
+        if claimed is None:
+            self.fail("chat job was not claimable")
+
+        with patch.object(
+                manager.process_runner, "run",
+                side_effect=subprocess.TimeoutExpired(["hermes"], 5)):
+            manager.agent_runner.execute(claimed)
+
+        self.assertEqual(store.get_job(job.id).status, JobStatus.FAILED)
+        self.assertEqual(cleanup_calls, [])
 
     def test_scheduler_survives_transient_store_error(self):
         project = ds.create_project(self.settings.studio_root, "scheduler-retry")
@@ -823,7 +866,7 @@ class StudioManagerTests(WebAppTestCase):
         self.assertEqual(failed.status, JobStatus.FAILED)
         self.assertEqual(cleanup_calls, [])
 
-    def test_startup_recovers_job_without_live_worker_lease(self):
+    def test_startup_recovers_chat_without_interrupting_comfyui(self):
         ds.studio_root(str(self.settings.studio_root))
         project = ds.create_project(self.settings.studio_root, "recovery")
         store = JobStore(self.settings.database_path)
@@ -842,6 +885,41 @@ class StudioManagerTests(WebAppTestCase):
             recovered = store.get_job(job.id)
         finally:
             manager.stop()
+        self.assertEqual(recovered.status, JobStatus.FAILED)
+        self.assertEqual(cleanup_calls, [])
+
+    def test_startup_recovers_generation_and_cleans_comfyui(self):
+        ds.studio_root(str(self.settings.studio_root))
+        project = ds.create_project(
+            self.settings.studio_root, "generation-recovery")
+        clip = project / "clips" / "clip-001"
+        (clip / "current_prompt.txt").write_text(
+            "A complete 5-second H3 generation prompt\n")
+        contract = GenerationSettingsStore(self.settings).save(
+            project, clip, _generation_settings_payload())
+        store = JobStore(self.settings.database_path)
+        store.initialize()
+        creator = StudioJobManager(
+            self.settings, store, cleanup_callback=lambda: None)
+        job = creator.submit_generation(
+            project.name,
+            "clip-001",
+            contract["manifest"]["prompt_sha256"],
+            contract["manifest"]["updated_at"],
+        )
+        store.claim_next("dead-worker")
+        cleanup_calls = []
+        manager = StudioJobManager(
+            self.settings, store,
+            cleanup_callback=lambda: cleanup_calls.append(True),
+        )
+
+        manager.start()
+        try:
+            recovered = store.get_job(job.id)
+        finally:
+            manager.stop()
+
         self.assertEqual(recovered.status, JobStatus.FAILED)
         self.assertEqual(cleanup_calls, [True])
 
@@ -869,21 +947,21 @@ class StudioManagerTests(WebAppTestCase):
         self.assertEqual(recovered.status, JobStatus.FAILED)
         self.assertEqual(cleanup_calls, [])
 
-    def test_cleanup_finishes_before_next_global_job_starts(self):
+    def test_generation_cleanup_finishes_before_next_global_job_starts(self):
         ds.studio_root(str(self.settings.studio_root))
         first_project = ds.create_project(self.settings.studio_root, "first")
         second_project = ds.create_project(self.settings.studio_root, "second")
+        first_clip = first_project / "clips" / "clip-001"
+        (first_clip / "current_prompt.txt").write_text(
+            "A complete 5-second H3 generation prompt\n")
+        first_contract = GenerationSettingsStore(self.settings).save(
+            first_project, first_clip, _generation_settings_payload())
         first_store = JobStore(self.settings.database_path)
         second_store = JobStore(self.settings.database_path)
         cleanup_started = Event()
         release_cleanup = Event()
 
-        def command(job, _session):
-            if job.project == first_project.name:
-                return [
-                    sys.executable, "-c",
-                    "import time; time.sleep(.2); raise SystemExit(7)",
-                ]
+        def command(_job, _session):
             return [sys.executable, "-c", "print('ok')"]
 
         def cleanup():
@@ -899,9 +977,17 @@ class StudioManagerTests(WebAppTestCase):
             command_builder=command,
             cleanup_callback=lambda: None,
         )
+        first.generation_runner.command = lambda job: [
+            sys.executable, "-c",
+            "import time; time.sleep(.2); raise SystemExit(7)",
+        ]
         first.start()
-        first_job = first.submit_chat(
-            first_project.name, "clip-001", "fail")
+        first_job = first.submit_generation(
+            first_project.name,
+            "clip-001",
+            first_contract["manifest"]["prompt_sha256"],
+            first_contract["manifest"]["updated_at"],
+        )
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
             if first_store.get_job(first_job.id).status is JobStatus.RUNNING:

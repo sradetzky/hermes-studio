@@ -34,9 +34,11 @@ turbo-range), `--seed`, `--lora name:strength` (repeatable), `--denoise`,
 - `studio-illustrator` must not queue ComfyUI. It returns recipe, prompt,
   reference paths, aspect, steps, seed/ref-boost and any extra LoRAs to the
   `studio` orchestrator.
-- `studio` builds with `--dry-run`, uploads refs and enqueues through MCP,
-  archives with `design_studio.py archive-output`, then always calls
-  `mcp_comfyui_clear_vram`.
+- Web profiles, including `studio`, must not queue ComfyUI. They prepare the
+  exact image handoff only; web chat intentionally excludes ComfyUI/MCP tools.
+- Krea execution is currently an explicit operator diagnostic outside web chat:
+  build with `--dry-run`, submit through the pinned transport, archive, and
+  clean VRAM. Never use it as a fallback for a failed web H3 generation job.
 - Direct execution without `--dry-run` is a manual diagnostic fallback only;
   it unloads models/frees memory after terminal success or failure and
   interrupts before cleanup on timeout.

@@ -66,8 +66,7 @@ class MovieJobRunner:
         try:
             if not isinstance(job.payload, MovieExportJobPayload):
                 raise ValueError("movie runner received the wrong payload type")
-            contract = job.payload.contract
-            MovieStore._validate_contract(contract)
+            contract = job.payload.contract.to_dict()
         except ValueError as exc:
             self._fail(job, f"Movie export contract is invalid: {exc}")
             return

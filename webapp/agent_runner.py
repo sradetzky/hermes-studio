@@ -25,6 +25,7 @@ log = logging.getLogger(__name__)
 SESSION_RE = re.compile(r"session_id:\s*([A-Za-z0-9_-]+)")
 CommandBuilder = Callable[[Job, str | None], list[str]]
 PROFILE_TOOLSETS = {
+    "studio": "file,terminal,vision,web,skills",
     "studio-storyboarder": "file,terminal,skills",
     "studio-prompt-engineer": "file,terminal,skills",
     "studio-reviewer": "file,terminal,vision,skills",
@@ -44,8 +45,6 @@ class AgentJobRunner:
         process_runner: SupervisedProcessRunner,
         environment: Callable[[Job], dict[str, str]],
         export_chat: Callable[[Job], None],
-        cleanup: Callable[[], None],
-        owns_gpu: Callable[[Job], bool],
         command_builder: CommandBuilder | None = None,
     ) -> None:
         self.settings = settings
@@ -55,8 +54,6 @@ class AgentJobRunner:
         self.process_runner = process_runner
         self.environment = environment
         self.export_chat = export_chat
-        self.cleanup = cleanup
-        self.owns_gpu = owns_gpu
         self.command_builder = command_builder or self.default_command
 
     @staticmethod
@@ -71,7 +68,7 @@ class AgentJobRunner:
         command = [self.settings.hermes_command, "-p", job.profile]
         if session_id and re.fullmatch(r"[A-Za-z0-9_-]+", session_id):
             command += ["-r", session_id]
-        toolsets = PROFILE_TOOLSETS.get(job.profile, "all")
+        toolsets = PROFILE_TOOLSETS.get(job.profile, "file,terminal,skills")
         command += [
             "chat",
             "-Q",
@@ -200,15 +197,6 @@ class AgentJobRunner:
                 f"Exceeded the {self.settings.job_timeout_seconds}s job limit",
                 phase=JobPhase.FAILED,
             )
-            if self.owns_gpu(job):
-                self.store.append_job_event(
-                    job.id,
-                    job.profile,
-                    JobEventType.COMFYUI_CLEANUP,
-                    "Cancelling ComfyUI work after Studio timeout",
-                    phase=JobPhase.RUNNING,
-                )
-                self.cleanup()
             self._fail(
                 job,
                 f"Studio agent timed out after {self.settings.job_timeout_seconds}s",
@@ -216,8 +204,6 @@ class AgentJobRunner:
             return
         except Exception as exc:
             log.exception("Studio agent job %s failed", job.id)
-            if self.owns_gpu(job):
-                self.cleanup()
             try:
                 self._fail(job, str(exc))
             except Exception:
@@ -232,14 +218,10 @@ class AgentJobRunner:
                 result.returncode,
                 result.stderr.strip(),
             )
-            if self.owns_gpu(job):
-                self.cleanup()
             self._fail(job, error)
             return
         reply = result.stdout.strip()
         if not reply:
-            if self.owns_gpu(job):
-                self.cleanup()
             self._fail(job, "Studio agent returned an empty reply")
             return
         match = SESSION_RE.search(result.stderr)

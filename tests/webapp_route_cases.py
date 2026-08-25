@@ -85,12 +85,29 @@ class PassiveManager:
                 "filename": "take.mp4",
                 "size": 1,
                 "sha256": "0" * 64,
-                "probe": {},
+                "probe": {
+                    "duration_seconds": 1.0,
+                    "video": {
+                        "codec_name": "h264",
+                        "width": 160,
+                        "height": 96,
+                        "pix_fmt": "yuv420p",
+                        "r_frame_rate": "10/1",
+                        "time_base": "1/10240",
+                    },
+                    "audio": None,
+                },
             }],
             "assembly": {
                 "mode": "stream-copy",
                 "hard_cuts": True,
-                "target": {},
+                "target": {
+                    "width": 160,
+                    "height": 96,
+                    "fps": "10/1",
+                    "sample_rate": 48000,
+                    "channels": 2,
+                },
             },
             "output": {
                 "id": "movie-001",

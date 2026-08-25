@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Protocol
 
 from studio_core.comfyui_mcp import cleanup_comfyui, mcp_environment
+from studio_core.generation_contracts import GenerationContract
 from studio_core.job_contracts import (
     ChatScope,
     GenerationJobPayload,
@@ -70,8 +71,7 @@ class StudioJobManager:
             settings, store, self.owner_id, self._stop)
         self.agent_runner = AgentJobRunner(
             settings, store, self.owner_id, self._stop, self.process_runner,
-            self._job_environment, self._export_job_chat,
-            self._cleanup_safely, self._job_may_own_gpu, command_builder)
+            self._job_environment, self._export_job_chat, command_builder)
         self.generation_runner = GenerationWorkerRunner(
             settings, store, self.owner_id, self.process_runner,
             self._job_environment, self._export_job_chat,
@@ -107,7 +107,7 @@ class StudioJobManager:
         self._stop.set()
         self._wake.set()
         had_gpu_process = any(
-            job.owner_id == self.owner_id and self._job_may_own_gpu(job)
+            job.owner_id == self.owner_id and self._job_owns_gpu(job)
             for job in self.store.active_jobs()
         )
         self.process_runner.terminate_all()
@@ -284,7 +284,7 @@ class StudioJobManager:
 
     def _contain_execution_failure(self, job: Job, exc: Exception) -> bool:
         self.process_runner.terminate_job(job.id)
-        if self._job_may_own_gpu(job):
+        if self._job_owns_gpu(job):
             self._cleanup_safely()
         try:
             current = self.store.get_job(job.id)
@@ -311,10 +311,11 @@ class StudioJobManager:
             return
         runner.execute(job)
 
-    def _validate_generation_job(self, job: Job) -> dict:
+    def _validate_generation_job(self, job: Job) -> GenerationContract:
         if not isinstance(job.payload, GenerationJobPayload):
             raise ValueError("generation runner received the wrong payload type")
-        request = job.payload.contract
+        contract = job.payload.contract
+        request = contract.to_dict()
         project = project_path(self.settings.studio_root, job.project)
         clip_store = ClipStore()
         manifest = clip_store.describe(project)
@@ -352,7 +353,7 @@ class StudioJobManager:
             self.settings.studio_root, job.project, job.clip_id).name
         if expected_generation_id != request["expected_generation_id"]:
             raise ValueError("generation archive sequence changed after enqueue")
-        return request
+        return contract
 
     def _verify_generation_completion(self, job: Job) -> None:
         if not isinstance(job.payload, GenerationJobPayload):
@@ -360,7 +361,7 @@ class StudioJobManager:
         contract = job.payload.contract
         project = project_path(self.settings.studio_root, job.project)
         clip = ClipStore().resolve_clip(project, job.clip_id)
-        generation_id = contract["expected_generation_id"]
+        generation_id = contract.expected_generation_id
         try:
             details = MediaReviewStore().describe_generation(
                 project, clip, generation_id, include_prompt=True)
@@ -370,14 +371,14 @@ class StudioJobManager:
         meta = details["meta"]
         if (meta.get("studio_job_id") != job.id
                 or meta.get("generation_contract_version") != 1
-                or meta.get("prompt_sha256") != contract["prompt_sha256"]
+                or meta.get("prompt_sha256") != contract.prompt_sha256
                 or meta.get("settings_updated_at")
-                != contract["settings_updated_at"]
+                != contract.settings_updated_at
                 or not isinstance(meta.get("prompt_id"), str)
                 or not meta["prompt_id"]
                 or not details["files"]
                 or sorted(meta.get("files", [])) != sorted(details["files"])
-                or details.get("prompt") != contract["prompt"]):
+                or details.get("prompt") != contract.prompt):
             raise ValueError(
                 "generation archive does not match its immutable job contract")
         try:
@@ -388,7 +389,7 @@ class StudioJobManager:
             ))
         except json.JSONDecodeError as exc:
             raise ValueError("generation archive settings are invalid") from exc
-        if archived_settings != contract["settings_manifest"]:
+        if archived_settings != contract.settings_manifest.to_dict():
             raise ValueError(
                 "generation archive settings do not match its immutable job contract")
 
@@ -455,7 +456,7 @@ class StudioJobManager:
             except Exception:
                 log.exception("Could not record blocked recovery for job %s", job.id)
             return False
-        if self._job_may_own_gpu(job):
+        if self._job_owns_gpu(job):
             self._cleanup_safely()
         self.store.fail(
             job.id, "Studio worker lease expired during execution",
@@ -463,11 +464,9 @@ class StudioJobManager:
         self._export_job_chat(job)
         return True
 
-    def _job_may_own_gpu(self, job: Job) -> bool:
-        return (
-            job.profile == self.settings.studio_profile
-            and job.kind is not JobKind.EXPORT_MOVIE
-        )
+    @staticmethod
+    def _job_owns_gpu(job: Job) -> bool:
+        return job.kind is JobKind.GENERATE
 
     def _cleanup_comfy(self) -> None:
         environment = mcp_environment(

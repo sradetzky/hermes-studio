@@ -133,8 +133,11 @@ class ImportBoundaryTests(unittest.TestCase):
         self.assertIn("subprocess.Popen", files["process_runner.py"])
         self.assertIn("os.killpg", files["process_runner.py"])
         self.assertIn('Path("/proc")', files["process_runner.py"])
+        self.assertNotIn("cleanup_comfyui", files["agent_runner.py"])
+        self.assertNotIn("owns_gpu", files["agent_runner.py"])
         self.assertNotIn("cleanup_comfyui", files["movie_runner.py"])
         self.assertIn("cleanup_comfyui", files["generation_runner.py"])
+        self.assertIn("job.kind is JobKind.GENERATE", manager)
 
 
 if __name__ == "__main__":

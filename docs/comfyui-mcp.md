@@ -5,7 +5,8 @@ Raw REST remains only inside explicit legacy diagnostic runners.
 
 ## Live configuration
 
-- Profile: `studio` only (the sole GPU queue owner)
+- Configuration owner: `studio` profile (available for explicit operator
+  diagnostics; excluded from web profile toolsets)
 - Server: `comfyui-mcp@0.52.61` (pinned)
 - Transport: stdio via `npx`
 - Target: `http://127.0.0.1:8188`
@@ -22,7 +23,7 @@ hermes -p studio mcp list
 hermes -p studio mcp test comfyui
 ```
 
-Current server exposes 41 tools. Core Studio tools:
+Current server exposes 41 tools. Core deterministic-worker operations:
 
 - `mcp_comfyui_upload_image`
 - `mcp_comfyui_enqueue_workflow`
@@ -37,6 +38,9 @@ Current server exposes 41 tools. Core Studio tools:
 Only the supervised Studio generation worker executes GPU jobs. Hermes profiles
 prepare storyboards, prompts, creative decisions, and image handoffs; they do not
 transcribe or invoke the deterministic render transaction.
+Only exact `generate` jobs are classified as owning ComfyUI work. Chat, specialist,
+and movie jobs never cancel the queue or clear VRAM on failure, timeout, shutdown,
+or stale-worker recovery.
 
 1. Build/inspect an API-format graph locally (`run_h3.py --dry-run` or
    `krea2_image.py --dry-run`).
@@ -78,5 +82,6 @@ APIs only—there is no Studio ComfyUI extension and no whole-generation
 percentage or ETA claim.
 
 `design_studio.py generate`, `generate-image`, and standalone
-`krea2_image.py` execution remain manual diagnostic fallbacks. They now clean
-VRAM after terminal completion; timeout paths interrupt first, then unload.
+`krea2_image.py` execution remain operator-only manual diagnostic fallbacks outside
+web profile sessions. They clean VRAM after terminal completion; timeout paths
+interrupt first, then unload.

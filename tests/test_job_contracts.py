@@ -4,6 +4,7 @@ import sqlite3
 import tempfile
 import unittest
 from contextlib import closing
+from dataclasses import FrozenInstanceError
 from pathlib import Path
 from typing import cast
 
@@ -43,8 +44,14 @@ def generation_request() -> str:
             "accel": False,
         },
         "execution": {
-            "resolution": {"width": 1344, "height": 768},
-            "timing": {"frames": 121, "fps": 24},
+            "resolution": {
+                "mode": "mp", "width": 832, "height": 480,
+                "megapixels": 0.399,
+            },
+            "timing": {
+                "requested_seconds": 5.0, "frames": 124,
+                "actual_seconds": 5.167, "fps": 24,
+            },
             "references": [],
         },
         "expected_generation_id": "001",
@@ -62,12 +69,29 @@ def movie_contract() -> str:
             "filename": "take.mp4",
             "size": 1,
             "sha256": "0" * 64,
-            "probe": {},
+            "probe": {
+                "duration_seconds": 1.0,
+                "video": {
+                    "codec_name": "h264",
+                    "width": 160,
+                    "height": 96,
+                    "pix_fmt": "yuv420p",
+                    "r_frame_rate": "10/1",
+                    "time_base": "1/10240",
+                },
+                "audio": None,
+            },
         }],
         "assembly": {
             "mode": "stream-copy",
             "hard_cuts": True,
-            "target": {},
+            "target": {
+                "width": 160,
+                "height": 96,
+                "fps": "10/1",
+                "sample_rate": 48000,
+                "channels": 2,
+            },
         },
         "output": {
             "id": "movie-001",
@@ -98,6 +122,11 @@ class JobContractTests(unittest.TestCase):
         self.assertIs(generation.kind, JobKind.GENERATE)
         self.assertIs(generation.chat_scope, ChatScope.CLIP)
         self.assertIsInstance(generation.payload, GenerationJobPayload)
+        generation_payload = cast(GenerationJobPayload, generation.payload)
+        self.assertIsInstance(
+            generation_payload.contract.execution.references, tuple)
+        with self.assertRaises(FrozenInstanceError):
+            setattr(generation_payload.contract, "prompt", "changed")
         self.store.fail(generation.id, "done")
 
         movie = self.store.create_movie_export_job(
@@ -105,6 +134,8 @@ class JobContractTests(unittest.TestCase):
         self.assertIs(movie.kind, JobKind.EXPORT_MOVIE)
         self.assertIs(movie.chat_scope, ChatScope.PROJECT)
         self.assertIsInstance(movie.payload, MovieExportJobPayload)
+        movie_payload = cast(MovieExportJobPayload, movie.payload)
+        self.assertIsInstance(movie_payload.contract.sources, tuple)
         self.assertNotIn("payload", movie.to_dict())
 
     def test_invalid_kind_scope_and_payloads_fail_at_enqueue(self):
@@ -146,6 +177,53 @@ class JobContractTests(unittest.TestCase):
         with self.assertRaisesRegex(
                 JobStoreError, "persisted job.*generation request payload"):
             self.store.get_job(job.id)
+
+    def test_nested_generation_contract_values_fail_at_enqueue_boundary(self):
+        cases = []
+        payload = json.loads(generation_request())
+        payload["execution"]["references"] = ["../outside.png"]
+        cases.append(payload)
+        payload = json.loads(generation_request())
+        payload["settings_manifest"]["mode"] = "invalid"
+        cases.append(payload)
+        payload = json.loads(generation_request())
+        payload["settings_manifest"]["steps"] = -1
+        cases.append(payload)
+        payload = json.loads(generation_request())
+        payload["execution"]["resolution"]["width"] = 1344
+        cases.append(payload)
+        payload = json.loads(generation_request())
+        payload["settings_manifest"]["mode"] = "r2v"
+        payload["execution"]["references"] = ["same.png", "same.png"]
+        cases.append(payload)
+
+        for index, invalid in enumerate(cases):
+            with self.subTest(index=index), self.assertRaises(JobStoreError):
+                self.store.create_generation_job(
+                    "project", json.dumps(invalid), clip_id="clip-001")
+
+    def test_nested_movie_contract_values_fail_at_enqueue_boundary(self):
+        cases = []
+        payload = json.loads(movie_contract())
+        payload["sources"][0]["generation"] = "not-a-generation"
+        cases.append(payload)
+        payload = json.loads(movie_contract())
+        payload["sources"][0]["sha256"] = "bad"
+        cases.append(payload)
+        payload = json.loads(movie_contract())
+        payload["output"]["id"] = "../movie-001"
+        cases.append(payload)
+        payload = json.loads(movie_contract())
+        payload["output"]["filename"] = "../movie.mp4"
+        cases.append(payload)
+        payload = json.loads(movie_contract())
+        payload["assembly"]["target"] = {}
+        cases.append(payload)
+
+        for index, invalid in enumerate(cases):
+            with self.subTest(index=index), self.assertRaises(JobStoreError):
+                self.store.create_movie_export_job(
+                    "project", json.dumps(invalid))
 
     def test_exact_legacy_generation_payload_is_terminal_only(self):
         legacy_payload = json.dumps({

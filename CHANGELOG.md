@@ -36,6 +36,12 @@ preview and production releases.
   per-kind payload codecs at the SQLite boundary; invalid persisted contracts
   now fail closed, schema migration 6 enforces kind/scope combinations, and the
   manager protocol covers every route submission
+- Completed the payload boundary with fully validated frozen generation and movie
+  contracts, including nested settings, timing, resolution, references, hashes,
+  probes, assembly targets, and output identities
+- Reserved ComfyUI cancellation and VRAM cleanup for deterministic generation jobs;
+  web Studio/specialist toolsets exclude ComfyUI, chat failures cannot interrupt
+  queue work, and synchronized profile guards reject the obsolete agent render path
 - Extracted scoped chat, job, and activity ownership into a conversation
   controller that incrementally reconciles stable job/event nodes instead of
   replacing activity subtrees

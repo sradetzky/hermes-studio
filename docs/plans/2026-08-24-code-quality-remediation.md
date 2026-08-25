@@ -518,6 +518,13 @@ P0–P2 are complete only when all of the following are true:
 - [x] Compilation, dependency/audit, profile drift, CSS, clean archive,
   service/API, desktop, narrow-browser, and checksum gates pass.
 
+The 2026-08-25 thermo-nuclear follow-up closed three post-gate contradictions:
+generation and movie payloads now decode into fully validated frozen nested
+contracts at the SQLite boundary; only exact generation jobs own ComfyUI cleanup;
+and every repo/live Studio profile guard reserves web H3 execution for the
+deterministic worker. Negative nested-contract, chat failure/timeout/shutdown,
+generation recovery, toolset, and profile-semantic tests enforce those boundaries.
+
 The canonical local non-GPU gate is:
 
 ```bash

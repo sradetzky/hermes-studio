@@ -480,8 +480,14 @@ class ProjectPathTests(unittest.TestCase):
             "settings_updated_at": settings_manifest["updated_at"],
             "settings_manifest": settings_manifest,
             "execution": {
-                "resolution": {"width": 1280, "height": 704},
-                "timing": {"frames": 243, "fps": 24},
+                "resolution": {
+                    "mode": "explicit", "width": 1280, "height": 704,
+                    "megapixels": 0.901,
+                },
+                "timing": {
+                    "requested_seconds": 10.0, "frames": 243,
+                    "actual_seconds": 10.125, "fps": 24,
+                },
                 "references": ["first.png", "second.png"],
             },
             "expected_generation_id": "001",

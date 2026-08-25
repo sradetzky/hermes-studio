@@ -10,7 +10,7 @@ specialist.
 | `studio-storyboarder` | Shot planning | `storyboard.md` per project | final prompts, renders |
 | `studio-prompt-engineer` | H3 prompt writing | structured prompts, handoff params | renders, shot redesign |
 | `studio-reviewer` | Quality gate | PASS/REVISE/REJECT verdicts in chat.jsonl | deletes media, rewrites prompts |
-| `studio-illustrator` | Still images (Krea 2) | character sheets, style refs, refines | video/H3 work |
+| `studio-illustrator` | Still-image design (Krea 2) | recipes, prompts, reference handoffs | local renders, video/H3 work |
 | `studio-grok` | Cloud backup (Grok 4.6) | cited web/X research, Grok Imagine images | ComfyUI/GPU, X account actions |
 
 ## Dataflow
@@ -30,6 +30,10 @@ around. Chat/references stay project-shared; prompt/settings/takes stay clip-loc
 Once the user authorizes **Generate with this prompt**, the immutable contract is
 executed directly by the supervised web worker. No Hermes model call is used for
 graph construction, MCP submission, waiting, archival, or cleanup.
+Web chat profiles use explicit non-ComfyUI toolsets. A profile must not infer
+render authorization from chat, a specialist handoff, or generation-shaped text;
+only the typed Generate action creates worker-owned GPU work. Manual diagnostic
+runners are operator-only and execute outside web profile sessions.
 
 ## Spawning
 
