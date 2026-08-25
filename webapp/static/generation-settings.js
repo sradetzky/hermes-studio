@@ -72,23 +72,41 @@ export function generationRequestPayload(contract, usePreviousTakeLastFrame = fa
   };
 }
 
+export function previousTakeInputState(contract) {
+  const input = contract?.previous_selected_take_input;
+  if (!input?.eligible) return {visible: false, enabled: false, reason: ''};
+  if (contract?.settings?.mode !== 'r2v') {
+    return {
+      visible: true,
+      enabled: false,
+      reason: 'Switch generation mode to R2V to use continuity',
+    };
+  }
+  return {visible: true, enabled: true, reason: ''};
+}
+
 function renderPreviousTakeInput(contract) {
   const option = $('#previous-take-input-option');
   const checkbox = $('#use-previous-take-last-frame');
   const input = contract?.previous_selected_take_input;
+  const state = previousTakeInputState(contract);
   const signature = input?.eligible ? [
     input.source_clip_id,
     input.source_generation_id,
     input.source_filename,
     input.picture_number,
+    contract?.settings?.mode,
   ].join('\u0000') : '';
   if (signature !== generation.previousTakeSignature) checkbox.checked = false;
   generation.previousTakeSignature = signature;
-  option.hidden = !input?.eligible;
-  if (!input?.eligible) return;
+  option.hidden = !state.visible;
+  checkbox.disabled = !state.enabled;
+  checkbox.title = state.reason;
+  if (!state.visible) return;
   $('#previous-take-input-label').textContent =
     `Use previous selected take’s last frame as <Picture ${input.picture_number}>`;
   $('#previous-take-input-source').textContent =
+    state.reason ||
     `${input.source_clip_id} · take ${input.source_generation_id} · ${input.source_filename}`;
 }
 

@@ -119,6 +119,7 @@ class ImportBoundaryTests(unittest.TestCase):
                 "studio_manager.py",
                 "process_runner.py",
                 "agent_runner.py",
+                "generation_job_service.py",
                 "generation_runner.py",
                 "movie_runner.py",
             )
@@ -138,6 +139,10 @@ class ImportBoundaryTests(unittest.TestCase):
         self.assertNotIn("cleanup_comfyui", files["movie_runner.py"])
         self.assertIn("cleanup_comfyui", files["generation_runner.py"])
         self.assertIn("job.kind is JobKind.GENERATE", manager)
+        for generation_owner in (
+                "GenerationInputStore", "GenerationSettingsStore", "MediaReviewStore"):
+            self.assertNotIn(generation_owner, manager)
+            self.assertIn(generation_owner, files["generation_job_service.py"])
 
 
 if __name__ == "__main__":

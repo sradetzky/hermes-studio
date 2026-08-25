@@ -63,6 +63,11 @@ preview and production releases.
 
 ### Fixed
 
+- Rejected previous-take continuity outside R2V before derived-frame
+  materialization instead of surfacing a generation-contract HTTP 500. The UI
+  keeps eligible continuity visible but disables it for incompatible modes, and
+  one typed generation lifecycle now owns contract creation, revalidation, and
+  archive verification outside the scheduler.
 - Required Studio to inspect the exact named project image with `vision_analyze`
   before making reference-derived visual claims; filenames and inherited prompt
   prose are no longer accepted as visual evidence, and unavailable vision now

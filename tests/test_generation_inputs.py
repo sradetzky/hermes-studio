@@ -5,7 +5,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from studio_core.generation_contracts import parse_generation_contract
+from studio_core.generation_contracts import (
+    GenerationInputContract,
+    PreviousSelectedTakeLastFrameInputContract,
+    parse_generation_contract,
+)
 from studio_core.projects import ClipStore
 from webapp.generation_input_store import (
     GenerationInputError,
@@ -46,7 +50,7 @@ class GenerationInputStoreTests(unittest.TestCase):
             self.project, clip_id, generation_id, video.name)
         return video
 
-    def _materialized(self) -> dict:
+    def _materialized(self) -> PreviousSelectedTakeLastFrameInputContract:
         return self.store.materialize_previous_selected_take(
             self.project, "clip-002", project_reference_count=1)
 
@@ -62,22 +66,21 @@ class GenerationInputStoreTests(unittest.TestCase):
         })
 
         materialized = self._materialized()
-        self.assertEqual(materialized["type"], "previous_selected_take_last_frame")
-        self.assertEqual(materialized["slot"], 2)
-        self.assertEqual(materialized["source_clip_id"], "clip-001")
-        self.assertEqual(materialized["source_generation_id"], "001")
-        self.assertEqual(materialized["source_filename"], "take.mp4")
-        self.assertEqual(materialized["extraction_offset_seconds"], 0.25)
+        self.assertEqual(materialized.slot, 2)
+        self.assertEqual(materialized.source_clip_id, "clip-001")
+        self.assertEqual(materialized.source_generation_id, "001")
+        self.assertEqual(materialized.source_filename, "take.mp4")
+        self.assertEqual(materialized.extraction_offset_seconds, 0.25)
         self.assertEqual(
-            materialized["source_video_sha256"],
+            materialized.source_video_sha256,
             hashlib.sha256(self.source.read_bytes()).hexdigest())
         derived = (
             self.project / "clips" / "clip-002" / "generation-inputs" /
-            materialized["derived_filename"])
+            materialized.derived_filename)
         self.assertTrue(derived.is_file())
         self.assertGreater(derived.stat().st_size, 0)
         self.assertEqual(
-            materialized["derived_frame_sha256"],
+            materialized.derived_frame_sha256,
             hashlib.sha256(derived.read_bytes()).hexdigest())
         pixel = subprocess.run([
             "ffmpeg", "-v", "error", "-nostdin", "-i", str(derived),
@@ -97,14 +100,14 @@ class GenerationInputStoreTests(unittest.TestCase):
             "picture_number": 1,
         })
 
-    def _inputs(self) -> tuple[list[dict], Path]:
+    def _inputs(self) -> tuple[list[GenerationInputContract], Path]:
         previous = self._materialized()
         project_input = self.store.snapshot_project_reference(
             self.project, "identity.png", slot=1)
         paths = self.store.validate(
             self.project, "clip-002", [project_input, previous])
         self.assertEqual(paths[0], self.project / "references" / "identity.png")
-        self.assertEqual(paths[1].name, previous["derived_filename"])
+        self.assertEqual(paths[1].name, previous.derived_filename)
         return [project_input, previous], paths[1]
 
     def test_validates_exact_ordered_input_identities(self):
@@ -122,7 +125,8 @@ class GenerationInputStoreTests(unittest.TestCase):
         with self.assertRaisesRegex(GenerationInputError, "derived frame changed"):
             self.store.validate(self.project, "clip-002", inputs)
 
-    def _assert_previous_selection_changed(self, inputs: list[dict]) -> None:
+    def _assert_previous_selection_changed(
+            self, inputs: list[GenerationInputContract]) -> None:
         with self.assertRaisesRegex(
                 GenerationInputError,
                 "previous selected take changed after enqueue"):
@@ -177,18 +181,18 @@ class GenerationInputStoreTests(unittest.TestCase):
                     "requested_seconds": 5.0, "fps": 24, "frames": 124,
                     "actual_seconds": 5.167,
                 },
-                "inputs": [project_input, previous],
+                "inputs": [project_input.to_dict(), previous.to_dict()],
             },
             "expected_generation_id": "001",
         }
         contract = parse_generation_contract(payload)
         self.assertEqual(contract.to_dict(), payload)
         self.assertEqual(contract.execution.references, (
-            "identity.png", previous["derived_filename"]))
+            "identity.png", previous.derived_filename))
         self.assertEqual(
             json.loads(json.dumps(contract.to_dict()))["execution"]["inputs"][1]
             ["source_video_sha256"],
-            previous["source_video_sha256"])
+            previous.source_video_sha256)
 
 
 if __name__ == "__main__":

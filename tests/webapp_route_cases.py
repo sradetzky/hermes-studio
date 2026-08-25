@@ -995,6 +995,55 @@ class AppFactoryTests(WebAppTestCase):
             self.assertTrue(derived.is_file())
             self.assertGreater(derived.stat().st_size, 0)
 
+    def test_previous_take_continuity_rejects_non_r2v_before_materializing(self):
+        with TestClient(self.app(), raise_server_exceptions=False) as client:
+            project = self.create_project(client, "previous-take-mode")
+            root = self.settings.studio_root / "projects" / project
+            created = client.post(
+                f"/api/project/{project}/clips",
+                json={"title": "Continuation"},
+            )
+            self.assertEqual(created.status_code, 201)
+
+            generation = root / "clips" / "clip-001" / "generations" / "001"
+            generation.mkdir()
+            source = generation / "take.mp4"
+            subprocess.run([
+                "ffmpeg", "-v", "error", "-nostdin", "-f", "lavfi",
+                "-i", "color=c=blue:s=64x64:r=4:d=0.5", "-an",
+                "-c:v", "libx264", "-pix_fmt", "yuv420p", str(source),
+            ], check=True, capture_output=True)
+            selected = client.put(
+                f"/api/project/{project}/clips/clip-001/selected-take",
+                json={"generation": "001", "filename": "take.mp4"},
+            )
+            self.assertEqual(selected.status_code, 200)
+
+            (root / "references" / "identity.png").write_bytes(b"identity")
+            clip = root / "clips" / "clip-002"
+            (clip / "current_prompt.txt").write_text(
+                "A 5-second continuation with <Picture 1> (identity.png)\n")
+            contract = client.put(
+                f"/api/project/{project}/clips/clip-002/generation-settings",
+                json=_generation_settings_payload(mode="i2va"),
+            ).json()
+            self.assertTrue(contract["readiness"]["ready"])
+            self.assertTrue(
+                contract["previous_selected_take_input"]["eligible"])
+
+            response = client.post(
+                f"/api/project/{project}/clips/clip-002/generate",
+                json={
+                    "prompt_sha256": contract["manifest"]["prompt_sha256"],
+                    "settings_updated_at": contract["manifest"]["updated_at"],
+                    "use_previous_take_last_frame": True,
+                },
+            )
+
+            self.assertEqual(response.status_code, 409)
+            self.assertIn("R2V", response.json()["detail"])
+            self.assertFalse((clip / "generation-inputs").exists())
+
     def test_generation_settings_reject_unsafe_values(self):
         with TestClient(self.app()) as client:
             project = self.create_project(client, "generation-validation")

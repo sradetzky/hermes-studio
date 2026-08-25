@@ -592,6 +592,15 @@ the project/job coordination lock. Worker-start and pre-submit validation reject
 order, enablement, selection, deletion, project-reference, source-byte, or
 derived-byte drift.
 
+**Thermo-nuclear follow-up (2026-08-25): complete.** One typed generation job
+service now owns immutable contract creation, worker-start revalidation, and
+archive postcondition verification; `StudioJobManager` retains only coordinated
+submission and dispatch. Input snapshots remain discriminated contract objects
+through the domain instead of round-tripping through magic dictionaries. Mode
+compatibility is checked before frame extraction, so non-R2V continuity requests
+return an intentional HTTP 409 without leaving a derived artifact, and the
+browser disables the still-visible eligible option until R2V is selected.
+
 **Verified blocker:** `list[str]` prompt-parsed filenames assume every input lives
 under project `references/`. A derived previous-take frame needs source clip,
 order, selected generation/file identity, video hash, extraction point, derived

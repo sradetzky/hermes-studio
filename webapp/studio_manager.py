@@ -12,33 +12,20 @@ from pathlib import Path
 from typing import Protocol
 
 from studio_core.comfyui_mcp import cleanup_comfyui, mcp_environment
-from studio_core.generation_contracts import (
-    CONTRACT_SCHEMA_VERSION,
-    GenerationContract,
-    LEGACY_CONTRACT_SCHEMA_VERSION,
-)
 from studio_core.job_contracts import (
     ChatScope,
-    GenerationJobPayload,
     JobEventType,
     JobKind,
     JobPhase,
 )
-from studio_core.projects import (
-    next_generation_dir,
-    project_path,
-    read_project_text,
-)
-from studio_core.projects import ClipStore
+from studio_core.projects import project_path
 from webapp.config import Settings
 
 from studio_core.job_store import ActiveJobError, JobStore, JobStoreError
 from studio_core.models import Job, JobStatus
 from webapp.agent_runner import AgentJobRunner, CommandBuilder
+from webapp.generation_job_service import GenerationJobService
 from webapp.generation_runner import GenerationWorkerRunner
-from webapp.generation_input_store import GenerationInputStore
-from webapp.generation_settings_store import GenerationSettingsStore
-from webapp.media_review_store import MediaReviewStore
 from webapp.movie_runner import MovieJobRunner
 from webapp.movie_store import MovieStore
 from webapp.process_runner import (
@@ -77,11 +64,11 @@ class StudioJobManager:
         self.agent_runner = AgentJobRunner(
             settings, store, self.owner_id, self._stop, self.process_runner,
             self._job_environment, self._export_job_chat, command_builder)
+        self.generation_jobs = GenerationJobService(settings)
         self.generation_runner = GenerationWorkerRunner(
             settings, store, self.owner_id, self.process_runner,
             self._job_environment, self._export_job_chat,
-            self._cleanup_safely, self._validate_generation_job,
-            self._verify_generation_completion)
+            self._cleanup_safely, self.generation_jobs)
         self.movie_runner = MovieJobRunner(
             settings, store, self.owner_id, self.process_runner,
             self._job_environment, self._export_job_chat)
@@ -163,7 +150,7 @@ class StudioJobManager:
                           use_previous_take_last_frame: bool = False) -> Job:
         project_directory = project_path(self.settings.studio_root, project)
         with project_job_guard(project_directory):
-            request = self._generation_request(
+            request = self.generation_jobs.build_request(
                 project_directory, project, clip_id,
                 prompt_sha256, settings_updated_at,
                 use_previous_take_last_frame)
@@ -193,73 +180,6 @@ class StudioJobManager:
         self._wake.set()
         return job
 
-    def _generation_request(
-            self, project_path: Path, project: str, clip_id: str,
-            prompt_sha256: str, settings_updated_at: str,
-            use_previous_take_last_frame: bool) -> str:
-        clip_store = ClipStore()
-        project_manifest = clip_store.describe(project_path)
-        entry = next(
-            (item for item in project_manifest["clips"]
-             if item["id"] == clip_id),
-            None,
-        )
-        if entry is None:
-            raise ValueError(f"clip not found: {clip_id}")
-        if not entry["enabled"]:
-            raise ValueError("clip is disabled")
-        clip = clip_store.resolve_clip(project_path, clip_id)
-        settings_store = GenerationSettingsStore(self.settings)
-        current = settings_store.validate_generation_request(
-            project_path, clip, prompt_sha256, settings_updated_at)
-        normalized_settings = settings_store.normalize(current["settings"])
-        input_store = GenerationInputStore()
-        project_references = current["readiness"]["references"]
-        inputs = [
-            input_store.snapshot_project_reference(
-                project_path, filename, slot=index)
-            for index, filename in enumerate(project_references, 1)
-        ]
-        if use_previous_take_last_frame:
-            eligibility = input_store.describe_previous_selected_take(
-                project_path,
-                clip_id,
-                project_reference_count=len(project_references),
-            )
-            if not eligibility["eligible"]:
-                raise ValueError(
-                    "previous selected take is not available for this generation")
-            inputs.append(input_store.materialize_previous_selected_take(
-                project_path,
-                clip_id,
-                project_reference_count=len(project_references),
-            ))
-        prompt = read_project_text(
-            clip, "current_prompt.txt", required=True)
-        payload = {
-            "schema_version": CONTRACT_SCHEMA_VERSION,
-            "action": "generate-current-prompt",
-            "prompt": prompt,
-            "prompt_sha256": prompt_sha256,
-            "settings_updated_at": settings_updated_at,
-            "settings_manifest": {
-                "schema_version": current["manifest"]["schema_version"],
-                "prompt_sha256": prompt_sha256,
-                "updated_at": settings_updated_at,
-                **normalized_settings,
-            },
-            "execution": {
-                "resolution": current["readiness"]["resolution"],
-                "timing": current["readiness"]["timing"],
-                "inputs": inputs,
-            },
-            "expected_generation_id": next_generation_dir(
-                self.settings.studio_root, project, clip_id).name,
-        }
-        request = json.dumps(
-            payload, sort_keys=True, separators=(",", ":"),
-            ensure_ascii=False)
-        return request
 
     def _scheduler_loop(self) -> None:
         while not self._stop.is_set():
@@ -340,102 +260,6 @@ class StudioJobManager:
             return
         runner.execute(job)
 
-    def _validate_generation_job(self, job: Job) -> GenerationContract:
-        if not isinstance(job.payload, GenerationJobPayload):
-            raise ValueError("generation runner received the wrong payload type")
-        contract = job.payload.contract
-        request = contract.to_dict()
-        project = project_path(self.settings.studio_root, job.project)
-        clip_store = ClipStore()
-        manifest = clip_store.describe(project)
-        entry = next(
-            (item for item in manifest["clips"] if item["id"] == job.clip_id), None)
-        if entry is None:
-            raise ValueError(f"clip not found: {job.clip_id}")
-        if not entry["enabled"]:
-            raise ValueError("clip is disabled")
-        clip = clip_store.resolve_clip(project, job.clip_id)
-        settings_store = GenerationSettingsStore(self.settings)
-        current = settings_store.validate_generation_request(
-            project,
-            clip,
-            request["prompt_sha256"],
-            request["settings_updated_at"],
-        )
-        current_settings = {
-            "schema_version": current["manifest"]["schema_version"],
-            "prompt_sha256": current["manifest"]["prompt_sha256"],
-            "updated_at": current["manifest"]["updated_at"],
-            **settings_store.normalize(current["settings"]),
-        }
-        current_execution = {
-            "resolution": current["readiness"]["resolution"],
-            "timing": current["readiness"]["timing"],
-        }
-        if contract.schema_version == LEGACY_CONTRACT_SCHEMA_VERSION:
-            current_execution["references"] = current["readiness"]["references"]
-        else:
-            input_dicts = [item.to_dict() for item in contract.execution.inputs]
-            project_references = [
-                item["filename"] for item in input_dicts
-                if item["type"] == "project_reference"
-            ]
-            if project_references != current["readiness"]["references"]:
-                raise ValueError("generation inputs changed after enqueue")
-            GenerationInputStore().validate(
-                project, job.clip_id, input_dicts)
-            current_execution["inputs"] = input_dicts
-        if (read_project_text(clip, "current_prompt.txt", required=True)
-                != request["prompt"]
-                or current_settings != request["settings_manifest"]
-                or current_execution != request["execution"]):
-            raise ValueError("generation contract changed after enqueue")
-        expected_generation_id = next_generation_dir(
-            self.settings.studio_root, job.project, job.clip_id).name
-        if expected_generation_id != request["expected_generation_id"]:
-            raise ValueError("generation archive sequence changed after enqueue")
-        return contract
-
-    def _verify_generation_completion(self, job: Job) -> None:
-        if not isinstance(job.payload, GenerationJobPayload):
-            raise ValueError("generation runner received the wrong payload type")
-        contract = job.payload.contract
-        project = project_path(self.settings.studio_root, job.project)
-        clip = ClipStore().resolve_clip(project, job.clip_id)
-        generation_id = contract.expected_generation_id
-        try:
-            details = MediaReviewStore().describe_generation(
-                project, clip, generation_id, include_prompt=True)
-        except Exception as exc:
-            raise ValueError(
-                "generation archive postcondition was not satisfied") from exc
-        meta = details["meta"]
-        expected_inputs = (
-            contract.to_dict()["execution"].get("inputs", []))
-        if (meta.get("studio_job_id") != job.id
-                or meta.get("generation_contract_version") != contract.schema_version
-                or meta.get("prompt_sha256") != contract.prompt_sha256
-                or meta.get("settings_updated_at")
-                != contract.settings_updated_at
-                or not isinstance(meta.get("prompt_id"), str)
-                or not meta["prompt_id"]
-                or not details["files"]
-                or sorted(meta.get("files", [])) != sorted(details["files"])
-                or meta.get("generation_inputs", []) != expected_inputs
-                or details.get("prompt") != contract.prompt):
-            raise ValueError(
-                "generation archive does not match its immutable job contract")
-        try:
-            archived_settings = json.loads(read_project_text(
-                clip / "generations" / generation_id,
-                "settings.json",
-                required=True,
-            ))
-        except json.JSONDecodeError as exc:
-            raise ValueError("generation archive settings are invalid") from exc
-        if archived_settings != contract.settings_manifest.to_dict():
-            raise ValueError(
-                "generation archive settings do not match its immutable job contract")
 
     def _job_environment(self, job: Job) -> dict[str, str]:
         environment = os.environ.copy()

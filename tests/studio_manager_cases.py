@@ -401,7 +401,7 @@ class StudioManagerTests(WebAppTestCase):
             timeout_seconds=self.settings.job_timeout_seconds,
         ))
         command = runner._graph_command(
-            project.name, "clip-001", manager._validate_generation_job(job),
+            project.name, "clip-001", manager.generation_jobs.validate(job),
             Path("graph.json"))
 
         self.assertIn("r2v", command)
@@ -497,7 +497,7 @@ class StudioManagerTests(WebAppTestCase):
                 "command",
                 return_value=[sys.executable, "-c", f"print({result!r})"],
             ),
-            patch.object(manager.generation_runner, "verify"),
+            patch.object(manager.generation_jobs, "verify_completion"),
         ):
             manager._execute(claimed)
 

@@ -278,6 +278,9 @@ project/clip chat scope and exact IDs.
   generation contract and invalidate it when ordering, selection, source bytes,
   or derived bytes change. Contract schema 2 uses ordered discriminated inputs,
   and archives retain exact source/derived provenance.
+- [x] Keep generation-input contracts typed through the web domain, centralize
+  contract build/revalidation/archive verification outside the FIFO scheduler,
+  and reject continuity for non-R2V modes before materializing a derived frame.
 - [x] Pass the committed-source release gate and a real two-clip chained R2V
   checkpoint: the second 928×544 clip consumed the exact selected first-clip
   video and derived final frame as ordered inputs, archived matching provenance

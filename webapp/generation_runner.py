@@ -8,7 +8,7 @@ import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from studio_core.comfyui_mcp import (
     McpCall,
@@ -54,6 +54,11 @@ class GenerationRuntime:
 EventCallback = Callable[..., None]
 CommandRunner = Callable[..., subprocess.CompletedProcess]
 Archiver = Callable[..., Path]
+
+
+class GenerationLifecycle(Protocol):
+    def validate(self, job: Job) -> GenerationContract: ...
+    def verify_completion(self, job: Job) -> None: ...
 
 
 class GenerationJobRunner:
@@ -116,7 +121,7 @@ class GenerationJobRunner:
         return GenerationInputStore().validate(
             project_path,
             clip_id,
-            [item.to_dict() for item in contract.execution.inputs],
+            contract.execution.inputs,
         )
 
     @staticmethod
@@ -366,8 +371,7 @@ class GenerationWorkerRunner:
         environment: Callable[[Job], dict[str, str]],
         export_chat: Callable[[Job], None],
         cleanup: Callable[[], None],
-        validate: Callable[[Job], GenerationContract],
-        verify: Callable[[Job], None],
+        lifecycle: GenerationLifecycle,
     ) -> None:
         self.settings = settings
         self.store = store
@@ -376,8 +380,7 @@ class GenerationWorkerRunner:
         self.environment = environment
         self.export_chat = export_chat
         self.cleanup = cleanup
-        self.validate = validate
-        self.verify = verify
+        self.lifecycle = lifecycle
 
     def command(self, job: Job) -> list[str]:
         return [
@@ -404,7 +407,7 @@ class GenerationWorkerRunner:
 
     def execute(self, job: Job) -> None:
         try:
-            self.validate(job)
+            self.lifecycle.validate(job)
         except Exception as exc:
             error = f"Generation request validation failed: {exc}"
             self.store.append_job_event(
@@ -455,7 +458,7 @@ class GenerationWorkerRunner:
                     or not isinstance(document.get("prompt_id"), str)
                     or not isinstance(document.get("outputs"), list)):
                 raise ValueError("generation worker returned an invalid result")
-            self.verify(job)
+            self.lifecycle.verify_completion(job)
             self.store.complete(
                 job.id,
                 self.owner_id,

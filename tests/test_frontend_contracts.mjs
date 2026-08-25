@@ -30,6 +30,7 @@ import {
 import {
   generationActionState,
   generationRequestPayload,
+  previousTakeInputState,
 } from '../webapp/static/generation-settings.js';
 import {
   moveWorkspacePane,
@@ -214,6 +215,20 @@ test('generation action requires a ready current contract and idle enabled clip'
     prompt_sha256: 'abc', settings_updated_at: 'revision-1',
     use_previous_take_last_frame: true,
   });
+  const previousTake = {previous_selected_take_input: {eligible: true}};
+  assert.deepEqual(previousTakeInputState({
+    ...previousTake, settings: {mode: 'r2v'},
+  }), {visible: true, enabled: true, reason: ''});
+  assert.deepEqual(previousTakeInputState({
+    ...previousTake, settings: {mode: 'i2va'},
+  }), {
+    visible: true,
+    enabled: false,
+    reason: 'Switch generation mode to R2V to use continuity',
+  });
+  assert.deepEqual(previousTakeInputState({
+    previous_selected_take_input: {eligible: false}, settings: {mode: 'r2v'},
+  }), {visible: false, enabled: false, reason: ''});
 });
 
 test('Comfy queue presentation distinguishes running, queued, idle, and offline', () => {

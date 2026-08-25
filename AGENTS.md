@@ -267,6 +267,10 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
   consumed the selected clip-1 video and exact derived final frame with matching
   archived hashes/provenance, identical source/archive output bytes, an empty
   queue, and generation-owned VRAM cleanup.
+- Thermo-nuclear code judo moved typed generation contract creation,
+  revalidation, and archive verification out of `StudioJobManager`. Continuity
+  now rejects non-R2V modes before extraction with HTTP 409, while the browser
+  exposes but disables the eligible control until R2V is selected.
 
 ## Next steps
 

@@ -4,9 +4,16 @@ import hashlib
 import os
 import subprocess
 import uuid
+from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from studio_core.generation_contracts import (
+    GenerationInputContract,
+    PreviousSelectedTakeLastFrameInputContract,
+    ProjectReferenceInputContract,
+)
 from studio_core.projects import ClipStore
 from studio_core.safe_files import (
     SafeFilesystemError,
@@ -25,6 +32,14 @@ class GenerationInputError(ValueError):
     pass
 
 
+@dataclass(frozen=True)
+class PreviousSelectedTakeSource:
+    clip_id: str
+    generation_id: str
+    filename: str
+    path: Path
+
+
 def _sha256_descriptor(descriptor: int) -> str:
     digest = hashlib.sha256()
     offset = 0
@@ -41,7 +56,8 @@ class GenerationInputStore:
         self.command_runner = command_runner
         self.clips = ClipStore()
 
-    def _previous_selected_take(self, project: Path, clip_id: str) -> dict[str, Any]:
+    def _previous_selected_take(
+            self, project: Path, clip_id: str) -> PreviousSelectedTakeSource:
         try:
             manifest = self.clips.describe(project)
         except Exception as exc:
@@ -75,12 +91,12 @@ class GenerationInputStore:
         except (FileNotFoundError, OSError, SafeFilesystemError, ValueError) as exc:
             raise GenerationInputError(
                 "previous selected take changed after enqueue") from exc
-        return {
-            "source_clip_id": previous["id"],
-            "source_generation_id": selected["generation"],
-            "source_filename": selected["filename"],
-            "source_path": source_path,
-        }
+        return PreviousSelectedTakeSource(
+            clip_id=previous["id"],
+            generation_id=selected["generation"],
+            filename=selected["filename"],
+            path=source_path,
+        )
 
     def describe_previous_selected_take(
             self, project: Path, clip_id: str, *,
@@ -93,31 +109,35 @@ class GenerationInputStore:
             return {"eligible": False}
         return {
             "eligible": True,
-            "source_clip_id": source["source_clip_id"],
-            "source_generation_id": source["source_generation_id"],
-            "source_filename": source["source_filename"],
+            "source_clip_id": source.clip_id,
+            "source_generation_id": source.generation_id,
+            "source_filename": source.filename,
             "picture_number": project_reference_count + 1,
         }
 
     @staticmethod
     def snapshot_project_reference(
-            project: Path, filename: str, *, slot: int) -> dict[str, Any]:
+            project: Path, filename: str, *,
+            slot: int) -> ProjectReferenceInputContract:
         path = project / "references" / filename
         try:
             with open_regular_file(path) as opened:
                 digest = _sha256_descriptor(opened.descriptor)
         except (FileNotFoundError, OSError, SafeFilesystemError) as exc:
             raise GenerationInputError(f"project reference changed: {filename}") from exc
-        return {
-            "type": "project_reference",
-            "slot": slot,
-            "filename": filename,
-            "sha256": digest,
-        }
+        return ProjectReferenceInputContract(
+            slot=slot,
+            filename=filename,
+            sha256=digest,
+        )
 
     def materialize_previous_selected_take(
             self, project: Path, clip_id: str, *,
-            project_reference_count: int) -> dict[str, Any]:
+            project_reference_count: int,
+            mode: str = "r2v") -> PreviousSelectedTakeLastFrameInputContract:
+        if mode != "r2v":
+            raise GenerationInputError(
+                "previous selected take continuity is available only for R2V")
         if not 1 <= project_reference_count <= 8:
             raise GenerationInputError(
                 "previous selected take requires 1–8 project references")
@@ -125,7 +145,7 @@ class GenerationInputStore:
         clip = self.clips.resolve_clip(project, clip_id)
         derived_filename = f"previous-selected-take-{uuid.uuid4().hex}.png"
         try:
-            with open_regular_file(source["source_path"]) as opened_source:
+            with open_regular_file(source.path) as opened_source:
                 source_sha256 = _sha256_descriptor(opened_source.descriptor)
                 with open_directory(clip) as clip_fd:
                     try:
@@ -176,38 +196,38 @@ class GenerationInputStore:
         except (FileNotFoundError, OSError, SafeFilesystemError) as exc:
             raise GenerationInputError(
                 "previous selected take could not be materialized safely") from exc
-        return {
-            "type": "previous_selected_take_last_frame",
-            "slot": project_reference_count + 1,
-            "source_clip_id": source["source_clip_id"],
-            "source_generation_id": source["source_generation_id"],
-            "source_filename": source["source_filename"],
-            "source_video_sha256": source_sha256,
-            "extraction_offset_seconds": EXTRACTION_OFFSET_SECONDS,
-            "derived_filename": derived_filename,
-            "derived_frame_sha256": derived_sha256,
-        }
+        return PreviousSelectedTakeLastFrameInputContract(
+            slot=project_reference_count + 1,
+            source_clip_id=source.clip_id,
+            source_generation_id=source.generation_id,
+            source_filename=source.filename,
+            source_video_sha256=source_sha256,
+            extraction_offset_seconds=EXTRACTION_OFFSET_SECONDS,
+            derived_filename=derived_filename,
+            derived_frame_sha256=derived_sha256,
+        )
 
     def validate(
             self, project: Path, clip_id: str,
-            inputs: list[dict[str, Any]]) -> list[Path]:
+            inputs: Sequence[GenerationInputContract]) -> list[Path]:
         paths: list[Path] = []
         previous_inputs = [
             item for item in inputs
-            if item.get("type") == "previous_selected_take_last_frame"
+            if isinstance(item, PreviousSelectedTakeLastFrameInputContract)
         ]
         if len(previous_inputs) > 1:
             raise GenerationInputError(
                 "generation inputs contain multiple previous selected takes")
         for expected_slot, item in enumerate(inputs, 1):
-            if item.get("slot") != expected_slot:
+            if item.slot != expected_slot:
                 raise GenerationInputError("generation input order changed")
-            if item.get("type") == "project_reference":
-                path = project / "references" / item["filename"]
-                changed_message = f"project reference changed: {item['filename']}"
+            if isinstance(item, ProjectReferenceInputContract):
+                path = project / "references" / item.filename
+                changed_message = f"project reference changed: {item.filename}"
                 try:
                     with open_regular_file(path) as opened:
-                        if _sha256_descriptor(opened.descriptor) != item["sha256"]:
+                        if (item.sha256 is None
+                                or _sha256_descriptor(opened.descriptor) != item.sha256):
                             raise GenerationInputError(changed_message)
                 except GenerationInputError:
                     raise
@@ -215,28 +235,28 @@ class GenerationInputStore:
                     raise GenerationInputError(changed_message) from exc
                 paths.append(path)
                 continue
-            if item.get("type") != "previous_selected_take_last_frame":
+            if not isinstance(item, PreviousSelectedTakeLastFrameInputContract):
                 raise GenerationInputError("generation input type is unsupported")
             source = self._previous_selected_take(project, clip_id)
             if any((
-                source["source_clip_id"] != item["source_clip_id"],
-                source["source_generation_id"] != item["source_generation_id"],
-                source["source_filename"] != item["source_filename"],
+                source.clip_id != item.source_clip_id,
+                source.generation_id != item.source_generation_id,
+                source.filename != item.source_filename,
             )):
                 raise GenerationInputError(
                     "previous selected take changed after enqueue")
             try:
-                with open_regular_file(source["source_path"]) as opened_source:
+                with open_regular_file(source.path) as opened_source:
                     if (_sha256_descriptor(opened_source.descriptor)
-                            != item["source_video_sha256"]):
+                            != item.source_video_sha256):
                         raise GenerationInputError(
                             "previous selected take source video changed after enqueue")
                 derived = (
                     project / "clips" / clip_id / DERIVED_INPUT_DIRECTORY /
-                    item["derived_filename"])
+                    item.derived_filename)
                 with open_regular_file(derived) as opened_derived:
                     if (_sha256_descriptor(opened_derived.descriptor)
-                            != item["derived_frame_sha256"]):
+                            != item.derived_frame_sha256):
                         raise GenerationInputError(
                             "previous selected take derived frame changed after enqueue")
             except GenerationInputError:
