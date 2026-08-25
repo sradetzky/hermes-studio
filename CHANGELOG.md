@@ -63,6 +63,9 @@ preview and production releases.
 
 ### Fixed
 
+- Made previous-take continuity eligibility depend only on an exact preceding
+  enabled selected video take, so the second clip exposes the checkbox before
+  its prompt or generation settings are authored
 - Prevented web clarification cards from outliving Hermes' internal 10-minute
   wait: Studio profiles now use an unlimited inner clarify wait under the bounded
   job supervisor, startup fails closed on config drift, and gateway expiration

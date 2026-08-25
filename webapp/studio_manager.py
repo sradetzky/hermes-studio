@@ -224,7 +224,6 @@ class StudioJobManager:
             eligibility = input_store.describe_previous_selected_take(
                 project_path,
                 clip_id,
-                mode=normalized_settings["mode"],
                 project_reference_count=len(project_references),
             )
             if not eligibility["eligible"]:

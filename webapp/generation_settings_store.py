@@ -353,7 +353,6 @@ class GenerationSettingsStore:
                 GenerationInputStore().describe_previous_selected_take(
                     project,
                     clip.name,
-                    mode=settings["mode"],
                     project_reference_count=len(readiness["references"]),
                 )
             ),

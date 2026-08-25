@@ -254,9 +254,10 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
   expiry events close stale cards and fail the run instead of accepting a no-op.
 - Phase 6 P3.2 added ordered typed generation inputs and previous-selected-take
   continuity. The References UI exposes the option only for an eligible chained
-  R2V clip; the backend extracts the exact predecessor's final frame, snapshots
-  source/derived SHA-256 provenance, and fails closed on order, selection, file,
-  or byte drift before submission and archival.
+  clip as soon as its predecessor has a selected video, even before the next
+  prompt is authored; the backend extracts the exact predecessor's final frame,
+  snapshots source/derived SHA-256 provenance, and fails closed on order,
+  selection, file, or byte drift before submission and archival.
 
 ## Next steps
 

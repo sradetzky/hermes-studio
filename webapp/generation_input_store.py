@@ -83,9 +83,9 @@ class GenerationInputStore:
         }
 
     def describe_previous_selected_take(
-            self, project: Path, clip_id: str, *, mode: str,
+            self, project: Path, clip_id: str, *,
             project_reference_count: int) -> dict[str, Any]:
-        if mode != "r2v" or not 1 <= project_reference_count <= 8:
+        if not 0 <= project_reference_count <= 8:
             return {"eligible": False}
         try:
             source = self._previous_selected_take(project, clip_id)

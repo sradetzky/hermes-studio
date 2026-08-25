@@ -943,6 +943,20 @@ class AppFactoryTests(WebAppTestCase):
             )
             self.assertEqual(selected.status_code, 200)
 
+            before_prompt = client.get(
+                f"/api/project/{project}/clips/clip-002").json()
+            self.assertEqual(
+                before_prompt["generation_settings"]
+                ["previous_selected_take_input"],
+                {
+                    "eligible": True,
+                    "source_clip_id": "clip-001",
+                    "source_generation_id": "001",
+                    "source_filename": "take.mp4",
+                    "picture_number": 1,
+                },
+            )
+
             (root / "references" / "identity.png").write_bytes(b"identity")
             clip = root / "clips" / "clip-002"
             (clip / "current_prompt.txt").write_text(

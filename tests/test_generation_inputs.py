@@ -52,7 +52,7 @@ class GenerationInputStoreTests(unittest.TestCase):
 
     def test_describes_and_materializes_exact_previous_selected_take(self):
         eligibility = self.store.describe_previous_selected_take(
-            self.project, "clip-002", mode="r2v", project_reference_count=1)
+            self.project, "clip-002", project_reference_count=1)
         self.assertEqual(eligibility, {
             "eligible": True,
             "source_clip_id": "clip-001",
@@ -84,6 +84,18 @@ class GenerationInputStoreTests(unittest.TestCase):
             "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-",
         ], check=True, capture_output=True).stdout[:3]
         self.assertGreater(pixel[2], pixel[0])
+
+    def test_describes_previous_take_before_prompt_references_exist(self):
+        described = self.store.describe_previous_selected_take(
+            self.project, "clip-002", project_reference_count=0)
+
+        self.assertEqual(described, {
+            "eligible": True,
+            "source_clip_id": "clip-001",
+            "source_generation_id": "001",
+            "source_filename": "take.mp4",
+            "picture_number": 1,
+        })
 
     def _inputs(self) -> tuple[list[dict], Path]:
         previous = self._materialized()
