@@ -22,6 +22,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Execute one immutable Studio H3 generation contract")
     parser.add_argument("--job-id", required=True)
+    parser.add_argument("--project", help=argparse.SUPPRESS)
+    parser.add_argument("--clip", help=argparse.SUPPRESS)
+    parser.add_argument("--profile", help=argparse.SUPPRESS)
     parser.add_argument("--studio-root", required=True, type=Path)
     parser.add_argument("--runtime-root", required=True, type=Path)
     parser.add_argument("--profile-home", required=True, type=Path)
@@ -40,6 +43,14 @@ def main(argv: list[str] | None = None) -> int:
     if (job.status is not JobStatus.RUNNING
             or not isinstance(job.payload, GenerationJobPayload)):
         raise ValueError("generation worker requires one running generation job")
+    for provided, persisted in (
+        (args.project, job.project),
+        (args.clip, job.clip_id),
+        (args.profile, job.profile),
+    ):
+        if provided is not None and provided != persisted:
+            raise ValueError(
+                "generation worker identity arguments do not match persisted job")
     contract = job.payload.contract
 
     def event(

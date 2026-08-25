@@ -308,6 +308,9 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
   Chromium tests plus compilation, full Ruff, dependency/audit, external-tool,
   profile-drift, CSS reproducibility, source-archive, and repository-integrity
   checks.
+- Generation workers tolerate one stale-parent/new-worker deployment window by
+  accepting the removed identity flags as match-only assertions. The running job
+  remains authoritative, and mismatched compatibility values fail closed.
 
 ## Next steps
 

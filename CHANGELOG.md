@@ -87,6 +87,10 @@ preview and production releases.
 
 ### Fixed
 
+- Kept generation workers compatible with the immediately previous web-service
+  command during source rollovers. Removed identity flags are accepted only as
+  checked compatibility assertions; the persisted running job remains the sole
+  project, clip, profile, and generation-contract authority.
 - Rejected previous-take continuity outside R2V before derived-frame
   materialization instead of surfacing a generation-contract HTTP 500. The UI
   keeps eligible continuity visible but disables it for incompatible modes, and

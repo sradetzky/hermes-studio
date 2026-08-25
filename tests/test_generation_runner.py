@@ -3,7 +3,10 @@ import json
 import subprocess
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 from studio_core.comfyui_mcp import cleanup_comfyui
 from studio_core.generation_archive import GenerationArchiveContext
@@ -11,6 +14,8 @@ from studio_core.generation_contracts import (
     GenerationContract,
     parse_generation_contract,
 )
+from studio_core.job_store import JobStore
+from webapp import generation_worker
 from webapp.generation_runner import GenerationJobRunner, GenerationRuntime
 
 
@@ -200,6 +205,46 @@ class GenerationJobRunnerTests(unittest.TestCase):
 
             self.assertIn(str(derived), command)
             self.assertNotIn(str(project / "references" / "ref.jpg"), command)
+
+    def test_worker_accepts_previous_identity_flags_during_service_rollover(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runtime_root = root / "runtime"
+            store = JobStore(runtime_root / "studio.db")
+            store.initialize()
+            contract = self._contract()
+            job = store.create_generation_job(
+                "project", json.dumps(contract.to_dict()), "studio",
+                clip_id="clip-001")
+            self.assertIsNotNone(store.claim_next("worker"))
+            arguments = [
+                "--job-id", job.id,
+                "--project", "project",
+                "--clip", "clip-001",
+                "--profile", "studio",
+                "--studio-root", str(root / "studio-root"),
+                "--runtime-root", str(runtime_root),
+                "--profile-home", str(root / "profile"),
+                "--real-home", str(root),
+                "--comfyui-root", str(root / "ComfyUI"),
+                "--comfyui-url", "http://127.0.0.1:8188",
+                "--comfyui-python", str(root / "ComfyUI/.venv/bin/python"),
+                "--timeout-seconds", "10800",
+            ]
+
+            with (
+                redirect_stdout(StringIO()),
+                patch.object(generation_worker, "GenerationJobRunner") as runner,
+            ):
+                runner.return_value.run.return_value = {"generation_id": "001"}
+                self.assertEqual(generation_worker.main(arguments), 0)
+
+            runner.return_value.run.assert_called_once_with(
+                job.id, "project", "clip-001", contract)
+            mismatched = list(arguments)
+            mismatched[mismatched.index("--project") + 1] = "other-project"
+            with self.assertRaisesRegex(ValueError, "do not match persisted job"):
+                generation_worker.main(mismatched)
 
     def test_failure_after_submission_cancels_queue_verifies_it_and_clears_vram(self):
         with tempfile.TemporaryDirectory() as directory:

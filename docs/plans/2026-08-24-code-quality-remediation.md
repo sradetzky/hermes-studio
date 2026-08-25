@@ -738,7 +738,9 @@ They are being closed in this order before another feature wave:
    context containing the typed contract, target, prompt identity, job identity,
    and ComfyUI endpoint. Archival no longer reads SQLite or ambient job variables,
    and graph construction receives the exact validated input paths, including
-   clip-local derived continuity frames.
+   clip-local derived continuity frames. The worker accepts the immediately prior
+   command's project/clip/profile flags only as rollover compatibility assertions
+   and rejects any value that differs from the persisted running job.
 3. **Unified specialist dispatch lifecycle — complete.** Local specialists and
    `studio-grok` now use one profile-configured command, persistent scoped session,
    process-group timeout, failure, event, and session-publication lifecycle. A

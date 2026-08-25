@@ -301,6 +301,8 @@ project/clip chat scope and exact IDs.
   persisted running job instead of accepting a serialized command-line contract.
 - [x] Pass generation archival an explicit typed context and exact resolved input
   paths instead of reloading contracts through ambient process state.
+- [x] Keep that worker boundary compatible across one live-service source rollover;
+  legacy identity flags are checked against, but never replace, the persisted job.
 - [x] Unify local and Grok specialist dispatch behind one lifecycle and fail
   closed when web-correlated event projection cannot attach.
 - [x] Remove the redundant unlocked generation-route preflight and retain the
