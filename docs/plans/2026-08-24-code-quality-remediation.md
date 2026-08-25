@@ -218,6 +218,12 @@ exists; `pip-audit` was unavailable during review.
 
 ### P0.4 Decide and document runtime event retention
 
+**Status (2026-08-25): complete.** Read-only measurement of the running preview
+database found 1,348 events across 16 finished jobs in an 843,776-byte database.
+Event storage projected to about 40 MiB per 1,000 similarly active jobs. The
+explicit preview policy is therefore durable retention with measured revisit
+triggers, not speculative pruning; see `docs/runtime-event-retention.md`.
+
 **Problem:** `job_events` is append-only with no explicit retention policy.
 This is not yet a proven production defect, so do not add speculative pruning.
 

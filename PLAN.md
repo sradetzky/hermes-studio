@@ -1,8 +1,7 @@
 # PLAN.md — Hermes Studio
 
-**Status**: `v0.1.0-preview.3` released; Phase 5.5 remediation P0.1–P0.3 are
-complete and the runtime-event retention decision is next. Phase 6 remains
-blocked.
+**Status**: `v0.1.0-preview.3` released; Phase 5.5 remediation P0 is complete and
+P1 canonical runtime/orchestration extraction is next. Phase 6 remains blocked.
 **Owner**: Sven (local setup on RTX 5060 Ti 16GB)  
 **Updated**: 2026-08-25
 **Goal**: Fully local, agent-orchestrated creative studio centered on MiniMax H3 + Hermes, with a simple self-hosted web UI.
@@ -245,8 +244,9 @@ project/clip chat scope and exact IDs.
 - [ ] Execute immutable generation contracts directly instead of using an LLM as
   a deterministic shell-command proxy; split scheduling, process supervision,
   agent, generation, and movie execution ownership.
-- [ ] Type job kinds/scopes/phases/payloads at persistence boundaries and decide
-  an explicit runtime-event retention policy from measured data.
+- [x] Measure runtime-event growth and document an explicit durable-retention
+  policy with concrete revisit triggers.
+- [ ] Type job kinds/scopes/phases/payloads at persistence boundaries.
 - [ ] Give conversation/reference/media browser controllers explicit local state,
   reconcile stable activity nodes, fix follow-latest scrolling, and split the
   behavioral Chromium mega-scenario.

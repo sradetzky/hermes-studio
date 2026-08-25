@@ -16,6 +16,9 @@ preview and production releases.
   launcher and added a complete Python dependency lock, vulnerability audit,
   supported Hermes/MCP contract checks, and incremental correctness linting to
   the canonical gate
+- Established measured durable retention for runtime job activity: the preview
+  database keeps events with their owning jobs and defines concrete size, row,
+  latency, and lifecycle triggers for a future transaction-safe bounded policy
 
 ### Fixed
 

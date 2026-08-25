@@ -40,6 +40,7 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
 - `docs/comfyui-mcp.md` — production transport, queue/cleanup transaction
 - `docs/grok-backup.md` — Grok 4.6 web/X/Imagine backup profile + dispatch
 - `docs/frontend-plan.md` — web UI stack, layout, API surface, milestones
+- `docs/runtime-event-retention.md` — measured `job_events` retention policy
 - `docs/plans/2026-08-24-code-quality-remediation.md` — blocking remediation
   sequence, acceptance gates, and deferred Phase 6 additions
 
@@ -205,10 +206,12 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
 - Remediation P0.3 made user-service installation checkout-independent through a
   verified stable launcher and added locked Python dependencies, `pip-audit`,
   supported Hermes/MCP contract checks, and incremental Ruff correctness linting.
+- Remediation P0.4 measured 1,348 activity events across 16 finished jobs and
+  established intentional durable retention with explicit size/latency revisit
+  triggers instead of speculative pruning.
 
 ## Next steps
 
-- [ ] Remediation P0: measure and decide the runtime event-retention policy.
 - [ ] Remediation P1: create `studio_core`, extract migration/domain ownership,
   remove the LLM generation proxy, split job runners, and type job boundaries.
 - [ ] Remediation P2: extract browser controllers, reconcile stable activity
