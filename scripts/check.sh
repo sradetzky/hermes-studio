@@ -37,12 +37,18 @@ git archive --format=tar --output="$archive_dir/source.tar" HEAD
 sha256sum "$archive_dir/source.tar"
 mkdir "$archive_dir/source"
 tar -xf "$archive_dir/source.tar" -C "$archive_dir/source"
-for excluded in .venv .runtime studio-root/projects; do
-  if [[ -e "$archive_dir/source/$excluded" ]]; then
-    echo "private/runtime path present in source archive: $excluded" >&2
-    exit 1
-  fi
-done
+ARCHIVE_SOURCE="$archive_dir/source" "$PYTHON" -c '
+import os
+from pathlib import Path
+
+root = Path(os.environ["ARCHIVE_SOURCE"])
+for excluded in (".venv", ".runtime"):
+    if (root / excluded).exists():
+        raise SystemExit(f"private/runtime path present in source archive: {excluded}")
+projects = root / "studio-root/projects"
+if projects.exists() and {entry.name for entry in projects.iterdir()} - {".gitkeep"}:
+    raise SystemExit("project data present in source archive")
+'
 
 cd "$archive_dir/source"
 echo "== Python tests =="
