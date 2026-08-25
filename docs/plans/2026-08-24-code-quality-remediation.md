@@ -465,6 +465,12 @@ upload, and generation-settings tests remain green.
 
 ### P2.3 Split the browser regression harness from scenarios
 
+**Status (2026-08-25): complete.** `frontend_browser_harness.mjs` now owns
+fixture-app startup, isolated Chromium/CDP lifecycle, interception helpers,
+runtime-error collection, diagnostics, and cleanup. Five independently named
+tests cover media playback, stale dialogs, stale chat, latest-request queue
+sequencing, and conversation scrolling/stable-node behavior.
+
 **Problem:** `tests/test_frontend_browser.mjs` contains one large scenario,
 making failures hard to isolate and Phase 6 coverage risky to extend.
 

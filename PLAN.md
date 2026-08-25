@@ -256,7 +256,7 @@ project/clip chat scope and exact IDs.
   scroll-away behavior with deferred real-Chromium coverage.
 - [x] Give references and media/settings explicit local controller ownership;
   shared browser state now contains workspace identity/context only.
-- [ ] Split the behavioral Chromium mega-scenario into independently named tests
+- [x] Split the behavioral Chromium mega-scenario into independently named tests
   behind a reusable CDP fixture.
 - [ ] Complete every acceptance criterion in
   `docs/plans/2026-08-24-code-quality-remediation.md` before new additions.

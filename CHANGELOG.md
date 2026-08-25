@@ -42,6 +42,9 @@ preview and production releases.
 - Extracted reference refresh/uploads into a controller and moved media,
   generation-settings, project-dialog, refresh, and queue-request state out of
   the shared browser singleton
+- Split the monolithic Chromium regression into five independently named
+  playback, dialog, chat, queue-ordering, and conversation-scroll scenarios on
+  one reusable disposable-app/CDP harness
 
 ### Fixed
 

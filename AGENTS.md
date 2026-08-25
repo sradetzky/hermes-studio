@@ -230,10 +230,13 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
 - Remediation P2.2 established explicit reference-controller ownership and made
   media review, generation settings, project dialog, refresh, and queue request
   flags module-local; shared browser state now contains workspace context only.
+- Remediation P2.3 extracted reusable fixture-app/Chromium/CDP lifecycle and
+  interception helpers; five independent scenarios now identify playback,
+  dialog, chat, queue-ordering, and conversation-scroll failures directly.
 
 ## Next steps
 
-- [ ] Remediation P2.3: split behavioral browser scenarios behind a reusable CDP
-  fixture.
+- [ ] Run and document the complete remediation release gate from clean,
+  committed source.
 - [ ] Only after the remediation gate passes, add scoped Hermes `clarify`
   responses and typed previous-selected-take last-frame generation inputs.

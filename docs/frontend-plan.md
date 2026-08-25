@@ -51,6 +51,9 @@ no state in the UI that isn't already on disk; minimal dependencies.
   controls with dialog, operation, readiness, and settings state held locally
 - `shared.js` — workspace identity/context only; module operation and dialog flags
   stay with their owners
+- `tests/frontend_browser_harness.mjs` — disposable fixture app plus isolated raw
+  CDP/Chromium lifecycle, request interception, diagnostics, and cleanup shared by
+  independently named behavioral scenarios
 
 ## Layout (single page)
 
