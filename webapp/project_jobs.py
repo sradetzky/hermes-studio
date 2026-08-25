@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-from webapp.safe_files import SafeFilesystemError, open_directory
+from studio_core.safe_files import SafeFilesystemError, open_directory
 
 
 class ProjectJobGuardError(ValueError):

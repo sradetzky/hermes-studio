@@ -15,14 +15,14 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from scripts import design_studio as ds
-from webapp.clip_store import ClipStore
+from studio_core.projects import studio_root
+from studio_core.projects import ClipStore
 from webapp.comfy_queue import ComfyQueueClient
 from webapp.config import Settings
 from webapp.generation_settings_store import GenerationSettingsStore
-from webapp.job_store import JobStore
+from studio_core.job_store import JobStore
 from webapp.media_review_store import MediaReviewStore
-from webapp.models import Job
+from studio_core.models import Job
 from webapp.movie_store import MovieStore
 from webapp.reference_store import ReferenceStore
 from webapp.routes import router
@@ -48,7 +48,7 @@ def create_app(settings: Settings | None = None,
 
     @asynccontextmanager
     async def lifespan(application: FastAPI):
-        ds.studio_root(str(settings.studio_root))
+        studio_root(str(settings.studio_root))
         store = JobStore(settings.database_path)
         references = ReferenceStore(settings)
         media_reviews = MediaReviewStore()

@@ -14,7 +14,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from webapp.reference_store import REFERENCE_EXTENSIONS
-from webapp.safe_files import (
+from studio_core.safe_files import (
     OpenedRegularFile,
     SafeFilesystemError,
     atomic_move_no_replace_at,

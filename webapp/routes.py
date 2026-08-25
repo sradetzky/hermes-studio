@@ -7,8 +7,13 @@ from typing import NoReturn
 from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel, ConfigDict, Field
 
-from scripts import design_studio as ds
-from webapp.clip_store import (
+from studio_core.projects import (
+    create_project as create_project_directory,
+    list_projects as list_project_directories,
+    project_path,
+    read_project_text,
+)
+from studio_core.projects import (
     ClipNotFoundError,
     ClipStore,
     ClipStoreError,
@@ -20,7 +25,7 @@ from webapp.generation_settings_store import (
     GenerationSettingsError,
     GenerationSettingsStore,
 )
-from webapp.job_store import ActiveJobError, JobNotFoundError, JobStore
+from studio_core.job_store import ActiveJobError, JobNotFoundError, JobStore
 from webapp.media_review_store import (
     MediaNotFoundError,
     MediaReviewError,
@@ -180,7 +185,7 @@ def _inactive_project_write(request: Request, project: Path, action: str):
 
 def resolve_project(request: Request, project_id: str) -> Path:
     try:
-        return ds.project_path(_settings(request).studio_root, project_id)
+        return project_path(_settings(request).studio_root, project_id)
     except FileNotFoundError:
         raise HTTPException(404, f"project not found: {project_id}")
     except ValueError as exc:
@@ -200,7 +205,7 @@ def resolve_clip(request: Request, project: Path, clip_id: str) -> Path:
 def list_projects(request: Request):
     root = _settings(request).studio_root
     projects = []
-    for name in reversed(ds.list_projects(root)):
+    for name in reversed(list_project_directories(root)):
         try:
             metadata = _clips(request).describe_project(
                 root / "projects" / name)
@@ -237,7 +242,7 @@ def get_comfy_queue(request: Request, include_recent: bool = False):
 @router.post("/api/projects")
 def create_project(request: Request, body: ProjectIn):
     try:
-        project = ds.create_project(
+        project = create_project_directory(
             _settings(request).studio_root, body.name, body.brief)
     except FileExistsError:
         raise HTTPException(409, "project already exists")
@@ -340,7 +345,7 @@ def get_clip(request: Request, project_id: str, clip_id: str):
         raise HTTPException(400, str(exc))
     return {
         **entry,
-        "current_prompt": ds.read_project_text(clip, "current_prompt.txt"),
+        "current_prompt": read_project_text(clip, "current_prompt.txt"),
         "generation_settings": generation_settings,
     }
 

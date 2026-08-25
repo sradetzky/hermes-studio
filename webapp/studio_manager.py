@@ -16,15 +16,20 @@ from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
-from scripts import design_studio as ds
-from webapp.clip_store import ClipStore
+from studio_core.generation_archive import parse_generation_job_payload
+from studio_core.projects import (
+    next_generation_dir,
+    project_path,
+    read_project_text,
+)
+from studio_core.projects import ClipStore
 from webapp.config import Settings
-from webapp.generation_contract import parse_generation_job_payload
+
 from webapp.generation_settings_store import GenerationSettingsStore
-from webapp.hermes_events import HermesSessionEventBridge
-from webapp.job_store import ActiveJobError, JobStore, JobStoreError
+from studio_core.hermes_events import HermesSessionEventBridge
+from studio_core.job_store import ActiveJobError, JobStore, JobStoreError
 from webapp.media_review_store import MediaReviewStore
-from webapp.models import Job, JobStatus
+from studio_core.models import Job, JobStatus
 from webapp.movie_store import MOVIE_FILENAME, MovieStore
 from webapp.project_jobs import project_job_guard
 
@@ -121,8 +126,8 @@ class StudioJobManager:
 
     def submit_project_chat(self, project: str, message: str,
                             profile: str | None = None) -> Job:
-        project_path = ds.project_path(self.settings.studio_root, project)
-        with project_job_guard(project_path):
+        project_directory = project_path(self.settings.studio_root, project)
+        with project_job_guard(project_directory):
             chat_path = self._chat_path(project)
             self.store.import_chat_if_empty(project, chat_path)
             job = self.store.create_project_chat_job(
@@ -133,8 +138,8 @@ class StudioJobManager:
 
     def submit_chat(self, project: str, clip_id: str, message: str,
                     profile: str | None = None) -> Job:
-        project_path = ds.project_path(self.settings.studio_root, project)
-        with project_job_guard(project_path):
+        project_directory = project_path(self.settings.studio_root, project)
+        with project_job_guard(project_directory):
             chat_path = self._chat_path(project, clip_id)
             self.store.import_chat_if_empty(
                 project, chat_path, clip_id=clip_id)
@@ -148,10 +153,10 @@ class StudioJobManager:
     def submit_generation(self, project: str, clip_id: str,
                           prompt_sha256: str,
                           settings_updated_at: str) -> Job:
-        project_path = ds.project_path(self.settings.studio_root, project)
-        with project_job_guard(project_path):
+        project_directory = project_path(self.settings.studio_root, project)
+        with project_job_guard(project_directory):
             request = self._generation_request(
-                project_path, project, clip_id,
+                project_directory, project, clip_id,
                 prompt_sha256, settings_updated_at)
             chat_path = self._chat_path(project, clip_id)
             self.store.import_chat_if_empty(
@@ -163,11 +168,11 @@ class StudioJobManager:
         return job
 
     def submit_movie_export(self, project: str) -> Job:
-        project_path = ds.project_path(self.settings.studio_root, project)
-        with project_job_guard(project_path):
+        project_directory = project_path(self.settings.studio_root, project)
+        with project_job_guard(project_directory):
             if any(job.project == project for job in self.store.active_jobs()):
                 raise ActiveJobError("project already has an active Studio job")
-            contract = MovieStore().build_contract(project_path)
+            contract = MovieStore().build_contract(project_directory)
             job = self.store.create_movie_export_job(
                 project,
                 json.dumps(
@@ -198,7 +203,7 @@ class StudioJobManager:
         current = settings_store.validate_generation_request(
             project_path, clip, prompt_sha256, settings_updated_at)
         normalized_settings = settings_store.normalize(current["settings"])
-        prompt = ds.read_project_text(
+        prompt = read_project_text(
             clip, "current_prompt.txt", required=True)
         payload = {
             "schema_version": 1,
@@ -217,7 +222,7 @@ class StudioJobManager:
                 "timing": current["readiness"]["timing"],
                 "references": current["readiness"]["references"],
             },
-            "expected_generation_id": ds.next_generation_dir(
+            "expected_generation_id": next_generation_dir(
                 self.settings.studio_root, project, clip_id).name,
         }
         request = json.dumps(
@@ -449,7 +454,7 @@ class StudioJobManager:
                 self._processes.pop(job.id, None)
 
     def _execute_movie(self, job: Job) -> None:
-        project = ds.project_path(self.settings.studio_root, job.project)
+        project = project_path(self.settings.studio_root, job.project)
         try:
             contract = json.loads(job.message)
             MovieStore._validate_contract(contract)
@@ -460,7 +465,7 @@ class StudioJobManager:
             return
         command = [
             sys.executable,
-            str(self.settings.repo / "scripts" / "assemble_movie.py"),
+            str(self.settings.repo / "webapp" / "movie_runner.py"),
             "--project", str(project),
             "--job-id", job.id,
             "--contract", job.message,
@@ -711,7 +716,7 @@ class StudioJobManager:
 
     def _validate_generation_job(self, job: Job) -> dict:
         request = parse_generation_job_payload(job.message)
-        project = ds.project_path(self.settings.studio_root, job.project)
+        project = project_path(self.settings.studio_root, job.project)
         clip_store = ClipStore()
         manifest = clip_store.describe(project)
         entry = next(
@@ -739,12 +744,12 @@ class StudioJobManager:
             "timing": current["readiness"]["timing"],
             "references": current["readiness"]["references"],
         }
-        if (ds.read_project_text(clip, "current_prompt.txt", required=True)
+        if (read_project_text(clip, "current_prompt.txt", required=True)
                 != request["prompt"]
                 or current_settings != request["settings_manifest"]
                 or current_execution != request["execution"]):
             raise ValueError("generation contract changed after enqueue")
-        expected_generation_id = ds.next_generation_dir(
+        expected_generation_id = next_generation_dir(
             self.settings.studio_root, job.project, job.clip_id).name
         if expected_generation_id != request["expected_generation_id"]:
             raise ValueError("generation archive sequence changed after enqueue")
@@ -752,7 +757,7 @@ class StudioJobManager:
 
     def _verify_generation_completion(self, job: Job) -> None:
         contract = parse_generation_job_payload(job.message)
-        project = ds.project_path(self.settings.studio_root, job.project)
+        project = project_path(self.settings.studio_root, job.project)
         clip = ClipStore().resolve_clip(project, job.clip_id)
         generation_id = contract["expected_generation_id"]
         try:
@@ -775,7 +780,7 @@ class StudioJobManager:
             raise ValueError(
                 "generation archive does not match its immutable job contract")
         try:
-            archived_settings = json.loads(ds.read_project_text(
+            archived_settings = json.loads(read_project_text(
                 clip / "generations" / generation_id,
                 "settings.json",
                 required=True,

@@ -212,11 +212,14 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
 - Remediation P1.1 moved the 2,077-line legacy migration engine behind a lazy CLI
   import, made all migration suites directly discoverable, and moved cohesive
   safe-file primitives into dependency-neutral `studio_core` ownership.
+- Remediation P1.2 established canonical dependency-neutral ownership for
+  projects, archival, dispatch, runtime persistence, identifiers, and events;
+  static tests prohibit reverse imports from `studio_core` or `scripts`.
 
 ## Next steps
 
-- [ ] Remediation P1: create `studio_core`, extract migration/domain ownership,
-  remove the LLM generation proxy, split job runners, and type job boundaries.
+- [ ] Remediation P1: remove the LLM generation proxy, split job runners, and
+  type job boundaries on the completed `studio_core` ownership layer.
 - [ ] Remediation P2: extract browser controllers, reconcile stable activity
   nodes, fix follow-latest scrolling, and split behavioral browser scenarios.
 - [ ] Only after the remediation gate passes, add scoped Hermes `clarify`

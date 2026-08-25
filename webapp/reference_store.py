@@ -12,7 +12,7 @@ from typing import BinaryIO, Protocol
 from urllib.parse import quote
 
 from webapp.config import Settings
-from webapp.safe_files import (
+from studio_core.safe_files import (
     OpenedRegularFile,
     SafeFilesystemError,
     atomic_move_no_replace_at,

@@ -9,7 +9,7 @@ from starlette.datastructures import Headers
 from starlette.responses import Response
 from starlette.types import Receive, Scope, Send
 
-from webapp.safe_files import OpenedRegularFile
+from studio_core.safe_files import OpenedRegularFile
 
 
 _CHUNK_SIZE = 1024 * 1024

@@ -267,6 +267,13 @@ normal webapp imports no longer import migration implementation transitively.
 
 ### P1.2 Create a dependency-neutral Studio core
 
+**Status (2026-08-25): complete.** Project/clip/prompt operations,
+authoritative generation contracts and archival, profile dispatch, runtime
+models/schema/persistence, identifiers, and Hermes event projection now have
+canonical `studio_core` ownership. Web modules retain compatibility aliases for
+the old import paths, the movie CLI moved under its web runner owner, and static
+tests reject both `studio_core -> webapp/scripts` and `scripts -> webapp` edges.
+
 **Problem:** The webapp imports `scripts.design_studio` as a domain layer while
 that script imports `webapp.*`, creating bidirectional layering.
 
@@ -279,7 +286,7 @@ that script imports `webapp.*`, creating bidirectional layering.
   web scheduler concern.
 - `studio_core/paths.py` — canonical roots from P0.2.
 
-**Modify:** `scripts/design_studio.py`, `scripts/assemble_movie.py`, `webapp/app.py`,
+**Modify:** `scripts/design_studio.py`, the movie runner, `webapp/app.py`,
 `webapp/routes.py`, `webapp/studio_manager.py`, and imports/tests that target the
 old ownership.
 

@@ -13,7 +13,7 @@ from typing import Any
 
 from webapp.config import Settings
 from webapp.reference_store import ReferenceStore, ReferenceStoreError
-from webapp.safe_files import (
+from studio_core.safe_files import (
     SafeFilesystemError,
     atomic_write_bytes_at,
     open_directory,

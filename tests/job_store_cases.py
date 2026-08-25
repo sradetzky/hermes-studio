@@ -646,7 +646,7 @@ class JobStoreTests(WebAppTestCase):
             json.dumps({"role": "assistant", "content": "two"}) + "\n",
             encoding="utf-8",
         )
-        with self.assertLogs("webapp.job_store", level="WARNING"):
+        with self.assertLogs("studio_core.job_store", level="WARNING"):
             store.import_chat_if_empty("project", chat)
         store.import_chat_if_empty("project", chat)
         cursor, events = store.chat_events("project")

@@ -1,7 +1,7 @@
 # PLAN.md — Hermes Studio
 
-**Status**: `v0.1.0-preview.3` released; Phase 5.5 remediation P0 is complete and
-P1 canonical runtime/orchestration extraction is next. Phase 6 remains blocked.
+**Status**: `v0.1.0-preview.3` released; Phase 5.5 remediation P1 core ownership
+is complete and direct generation execution is next. Phase 6 remains blocked.
 **Owner**: Sven (local setup on RTX 5060 Ti 16GB)  
 **Updated**: 2026-08-25
 **Goal**: Fully local, agent-orchestrated creative studio centered on MiniMax H3 + Hermes, with a simple self-hosted web UI.
@@ -239,7 +239,7 @@ project/clip chat scope and exact IDs.
   dependency gate with the supported tool-version and audit contract.
 - [x] Centralize profile, fleet, real-home, and ComfyUI path resolution across
   Python and shell; verify both normal and profile-isolated environments.
-- [ ] Establish a dependency-neutral `studio_core` layer, extract the legacy
+- [x] Establish a dependency-neutral `studio_core` layer, extract the legacy
   migration engine, and remove bidirectional `webapp`/`scripts` imports.
 - [ ] Execute immutable generation contracts directly instead of using an LLM as
   a deterministic shell-command proxy; split scheduling, process supervision,

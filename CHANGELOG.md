@@ -22,6 +22,9 @@ preview and production releases.
 - Isolated the legacy clip-migration state machine in a lazily imported
   `studio_core.migration` module, made each migration suite directly discoverable,
   and moved cohesive safe-file primitives into the dependency-neutral core
+- Established one-way dependency-neutral ownership for project/clip operations,
+  generation contracts and archives, profile dispatch, runtime persistence, and
+  event projection; static checks now reject reverse core and script imports
 
 ### Fixed
 

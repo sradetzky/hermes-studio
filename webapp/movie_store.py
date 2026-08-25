@@ -14,15 +14,15 @@ from fractions import Fraction
 from pathlib import Path
 from urllib.parse import quote
 
-from webapp.clip_store import ClipStore, ClipStoreError
-from webapp.identifiers import CLIP_ID_RE
+from studio_core.projects import ClipStore, ClipStoreError
+from studio_core.identifiers import CLIP_ID_RE
 from webapp.media_review_store import (
     MediaReviewError,
     MediaReviewStore,
     UnsupportedMediaError,
     VIDEO_EXTENSIONS,
 )
-from webapp.safe_files import (
+from studio_core.safe_files import (
     SafeFilesystemError,
     atomic_move_no_replace_at,
     open_directory,
