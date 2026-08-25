@@ -202,6 +202,29 @@ class ImportBoundaryTests(unittest.TestCase):
         self.assertNotIn("subprocess.run(", dispatch)
         self.assertNotIn("except Exception:\n            store = None", dispatch)
 
+    def test_generation_route_delegates_preflight_to_the_coordinated_service(self):
+        routes = ast.parse(
+            (ROOT / "webapp" / "routes.py").read_text(encoding="utf-8"))
+        route = next(
+            node for node in routes.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "generate_current_prompt"
+        )
+        attributes = {
+            node.func.attr for node in ast.walk(route)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+        }
+        names = {
+            node.func.id for node in ast.walk(route)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+        }
+        self.assertIn("submit_generation", attributes)
+        self.assertNotIn("validate_generation_request", attributes)
+        self.assertNotIn("describe", attributes)
+        self.assertNotIn("resolve_clip", names)
+
 
 if __name__ == "__main__":
     unittest.main()

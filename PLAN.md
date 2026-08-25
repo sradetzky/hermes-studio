@@ -302,7 +302,7 @@ project/clip chat scope and exact IDs.
   paths instead of reloading contracts through ambient process state.
 - [x] Unify local and Grok specialist dispatch behind one lifecycle and fail
   closed when web-correlated event projection cannot attach.
-- [ ] Remove the redundant unlocked generation-route preflight and retain the
+- [x] Remove the redundant unlocked generation-route preflight and retain the
   coordinated generation service as the single validation owner.
 - [ ] Pass the full committed-source non-GPU release gate.
 

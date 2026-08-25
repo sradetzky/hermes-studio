@@ -301,9 +301,11 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
   timeout, failure, event, and publication lifecycle. Correlated handoffs require
   an exact running parent scope and abort before launch if event projection cannot
   attach or prepare, recording setup failures whenever the job store is available.
+- Generation submission routes now resolve only the project identity and delegate
+  readiness, enabled-clip, prompt/settings revision, input snapshot, and enqueue
+  validation to the service under the project coordination lock.
 
 ## Next steps
 
-- Complete the remaining second thermo-nuclear closure slices in documented
-  order: remove the redundant generation route preflight, then run the committed-
-  source release gate.
+- Run the committed-source release gate for the completed second thermo-nuclear
+  closure series.

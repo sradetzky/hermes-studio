@@ -430,19 +430,6 @@ def put_generation_settings(request: Request, project_id: str, clip_id: str,
 def generate_current_prompt(request: Request, project_id: str, clip_id: str,
                             body: GenerateIn):
     project = resolve_project(request, project_id)
-    clip = resolve_clip(request, project, clip_id)
-    try:
-        manifest = _clips(request).describe(project)
-    except ClipStoreError as exc:
-        _raise_clip_store_error(exc)
-    entry = next(item for item in manifest["clips"] if item["id"] == clip_id)
-    if not entry["enabled"]:
-        raise HTTPException(409, "enable this clip before generating")
-    try:
-        _generation_settings(request).validate_generation_request(
-            project, clip, body.prompt_sha256, body.settings_updated_at)
-    except GenerationSettingsError as exc:
-        raise HTTPException(409, str(exc))
     try:
         job = _manager(request).submit_generation(
             project.name,
@@ -451,7 +438,13 @@ def generate_current_prompt(request: Request, project_id: str, clip_id: str,
             body.settings_updated_at,
             body.use_previous_take_last_frame,
         )
-    except (ActiveJobError, ProjectJobGuardError, ValueError) as exc:
+    except (
+        ActiveJobError,
+        ClipStoreError,
+        GenerationSettingsError,
+        ProjectJobGuardError,
+        ValueError,
+    ) as exc:
         raise HTTPException(409, str(exc))
     return job.to_dict()
 

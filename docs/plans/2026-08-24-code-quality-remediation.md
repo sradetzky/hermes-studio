@@ -745,7 +745,11 @@ They are being closed in this order before another feature wave:
    correlated handoff must bind to the exact running parent job and successfully
    prepare event projection before the specialist process starts; setup failure
    aborts and records `handoff.failed` when persistence is available.
-4. **Single coordinated generation preflight owner — pending.**
+4. **Single coordinated generation preflight owner — complete.** The HTTP route
+   now resolves only the project identity and translates domain failures. Enabled-
+   clip, prompt/settings revision, readiness, exact input snapshot, and enqueue
+   validation run once in `GenerationJobService` while the manager holds the
+   project job guard.
 
 Each item follows the slice protocol in section 2. Run the complete committed-
 source gate after all four are verified.
