@@ -262,7 +262,12 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
   of the exact project image. Filenames, memory, metadata, inherited prompts, and
   other-agent prose are not visual evidence; unavailable vision produces an
   explicit no-inference warning without inspecting generated takes or videos.
+- The final Phase 6 checkpoint passed the clean committed-source gate (278 Python
+  and 28 frontend/Chromium tests) and a real two-clip chained R2V render. Clip 2
+  consumed the selected clip-1 video and exact derived final frame with matching
+  archived hashes/provenance, identical source/archive output bytes, an empty
+  queue, and generation-owned VRAM cleanup.
 
 ## Next steps
 
-- [ ] Run the final clean release gate and a real two-clip chained H3 render E2E.
+- No active implementation slice; choose the next scoped milestone explicitly.

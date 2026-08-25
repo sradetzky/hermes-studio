@@ -615,6 +615,15 @@ fails closed. Backend extraction tests prove the final blue frame is selected fr
 a red-to-blue source, API tests prove immutable materialization/provenance, and a
 real Chromium scenario proves the eligible checkbox submits the exact typed flag.
 
+**Live acceptance (2026-08-25): complete.** The final committed-source gate
+passed 278 Python tests and 28 frontend/Chromium tests plus compilation, Ruff,
+dependency/audit, external-tool, profile-drift, CSS, and repository-integrity
+checks. A real two-clip R2V checkpoint then rendered clip 2 at 928×544 with the
+project reference in slot 1 and the exact selected clip-1 final frame in slot 2.
+The immutable contract, archived metadata, source-video hash, derived-frame hash,
+prompt hash, and source/archive video bytes matched; ComfyUI finished with an
+empty queue and the generation-owned cleanup event.
+
 ---
 
 ## 8. Traceability: every review finding

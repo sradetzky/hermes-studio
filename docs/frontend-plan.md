@@ -342,12 +342,16 @@ auto-chained, and their result never starts a render without a separate request.
   dependency-neutral runtime ownership, direct deterministic generation, typed
   jobs, locally owned browser controllers, stable activity reconciliation, and
   real-browser follow-latest scroll coverage.
-- M6 (planned after M5.5): interaction and continuity additions:
+- M6 (done): interaction and continuity additions:
   - present Hermes `clarify` questions in the exact scoped web conversation and
     submit single-select, multi-select, or free-text answers to the waiting job;
   - add a References-view **Use previous selected take's last frame** checkbox,
     enabled only when the immediately preceding clip has a valid selected video
     take, with exact source provenance in the generation contract.
+  The final committed-source gate passed 278 Python and 28 frontend/Chromium
+  tests. A real two-clip 928×544 R2V run consumed the selected predecessor's
+  exact derived final frame in slot 2, archived matching typed provenance and
+  source bytes, then left ComfyUI idle after generation-owned cleanup.
 
 ## Out of scope (v1)
 

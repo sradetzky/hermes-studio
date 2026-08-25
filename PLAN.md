@@ -1,8 +1,8 @@
 # PLAN.md — Hermes Studio
 
-**Status**: `v0.1.0-preview.3` released; Phase 5.5 remediation and Phase 6
-interaction/continuity implementation are complete. The live chained-render
-release checkpoint is next.
+**Status**: `v0.1.0-preview.3` released; Phase 5.5 remediation, Phase 6
+interaction/continuity, and the live chained-render release checkpoint are
+complete.
 **Owner**: Sven (local setup on RTX 5060 Ti 16GB)  
 **Updated**: 2026-08-25
 **Goal**: Fully local, agent-orchestrated creative studio centered on MiniMax H3 + Hermes, with a simple self-hosted web UI.
@@ -278,6 +278,10 @@ project/clip chat scope and exact IDs.
   generation contract and invalidate it when ordering, selection, source bytes,
   or derived bytes change. Contract schema 2 uses ordered discriminated inputs,
   and archives retain exact source/derived provenance.
+- [x] Pass the committed-source release gate and a real two-clip chained R2V
+  checkpoint: the second 928×544 clip consumed the exact selected first-clip
+  video and derived final frame as ordered inputs, archived matching provenance
+  and source bytes, and completed with an empty ComfyUI queue and VRAM cleanup.
 
 ---
 
