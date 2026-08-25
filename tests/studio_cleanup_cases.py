@@ -18,9 +18,9 @@ from unittest.mock import MagicMock, patch
 from scripts import design_studio as ds
 from scripts import krea2_image
 from scripts.krea2_image import parse_loras
-from webapp import clip_store, safe_files
-from webapp.clip_store import ClipStore, ClipStoreError
-from webapp.job_store import JobStore
+from studio_core import projects as clip_store, safe_files
+from studio_core.projects import ClipStore, ClipStoreError
+from studio_core.job_store import JobStore
 
 
 class LegacyCleanupTests(unittest.TestCase):

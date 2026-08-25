@@ -525,6 +525,11 @@ and every repo/live Studio profile guard reserves web H3 execution for the
 deterministic worker. Negative nested-contract, chat failure/timeout/shutdown,
 generation recovery, toolset, and profile-semantic tests enforce those boundaries.
 
+A subsequent maintainability pass removed the eight `sys.modules` compatibility
+aliases under `webapp/` after all internal imports and patch targets moved to the
+canonical `studio_core` owners. The dependency-boundary suite now asserts those
+deprecated module paths remain absent instead of preserving their identity.
+
 The canonical local non-GPU gate is:
 
 ```bash

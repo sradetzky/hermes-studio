@@ -9,6 +9,10 @@ preview and production releases.
 
 ### Changed
 
+- Removed eight magical `webapp` module-identity aliases after migrating the
+  remaining tests and fault-injection targets to their canonical `studio_core`
+  owners; an import-boundary test now prevents those compatibility shims from
+  returning.
 - Made MCP graph-submission tests visible to standard Python discovery, expanded
   them across ordered multi-reference and deterministic failure paths, and added
   one clean-commit local non-GPU release-check entry point

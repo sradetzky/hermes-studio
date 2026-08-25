@@ -18,9 +18,9 @@ from unittest.mock import MagicMock, patch
 from scripts import design_studio as ds
 from scripts import krea2_image
 from scripts.krea2_image import parse_loras
-from webapp import clip_store, safe_files
-from webapp.clip_store import ClipStore, ClipStoreError
-from webapp.job_store import JobStore
+from studio_core import projects as clip_store, safe_files
+from studio_core.projects import ClipStore, ClipStoreError
+from studio_core.job_store import JobStore
 
 
 class ProjectPathTests(unittest.TestCase):
@@ -202,7 +202,7 @@ class ProjectPathTests(unittest.TestCase):
                 self.project.symlink_to(outside, target_is_directory=True)
             return real_open(path, flags, mode, dir_fd=dir_fd)
 
-        with patch("webapp.safe_files.os.open",
+        with patch("studio_core.safe_files.os.open",
                    side_effect=swap_parent_at_final_open):
             value = ds.read_project_text(self.project, "brief.md")
 
@@ -229,7 +229,7 @@ class ProjectPathTests(unittest.TestCase):
             return real_open(path, flags, mode, dir_fd=dir_fd)
 
         with (
-            patch("webapp.safe_files.os.open",
+            patch("studio_core.safe_files.os.open",
                   side_effect=swap_parent_at_final_open),
             self.assertRaisesRegex(ValueError, "regular file"),
         ):
@@ -858,7 +858,7 @@ class ProjectPathTests(unittest.TestCase):
             return real_open(path, flags, mode, dir_fd=dir_fd)
 
         with (
-            patch("webapp.safe_files.os.open", side_effect=swap_at_open),
+            patch("studio_core.safe_files.os.open", side_effect=swap_at_open),
             self.assertRaises(ValueError),
         ):
             ds.archive_outputs(
@@ -904,7 +904,7 @@ class ProjectPathTests(unittest.TestCase):
             return real_open(path, flags, mode, dir_fd=dir_fd)
 
         with (
-            patch("webapp.safe_files.os.open", side_effect=swap_at_open),
+            patch("studio_core.safe_files.os.open", side_effect=swap_at_open),
             self.assertRaises(ValueError),
         ):
             ds.archive_outputs(
@@ -935,7 +935,7 @@ class ProjectPathTests(unittest.TestCase):
             return real_open(path, flags, mode, dir_fd=dir_fd)
 
         with (
-            patch("webapp.safe_files.os.open", side_effect=swap_at_open),
+            patch("studio_core.safe_files.os.open", side_effect=swap_at_open),
             self.assertRaises(ValueError),
         ):
             ds.archive_outputs(
@@ -975,7 +975,7 @@ class ProjectPathTests(unittest.TestCase):
             return real_copy(source, target)
 
         with (
-            patch("webapp.safe_files.os.open",
+            patch("studio_core.safe_files.os.open",
                   side_effect=swap_parent_at_final_open),
             patch.object(ds, "copy_opened_file", side_effect=inspect_copy),
             self.assertRaises(ValueError),
@@ -1110,7 +1110,7 @@ class ProjectPathTests(unittest.TestCase):
             return real_open(path, flags, mode, dir_fd=dir_fd)
 
         with (
-            patch("webapp.safe_files.os.open",
+            patch("studio_core.safe_files.os.open",
                   side_effect=swap_parent_before_root_open),
             self.assertRaises(ValueError),
         ):

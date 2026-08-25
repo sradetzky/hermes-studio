@@ -18,9 +18,9 @@ from unittest.mock import MagicMock, patch
 from scripts import design_studio as ds
 from scripts import krea2_image
 from scripts.krea2_image import parse_loras
-from webapp import clip_store, safe_files
-from webapp.clip_store import ClipStore, ClipStoreError
-from webapp.job_store import JobStore
+from studio_core import projects as clip_store, safe_files
+from studio_core.projects import ClipStore, ClipStoreError
+from studio_core.job_store import JobStore
 
 
 class ClipStoreTests(unittest.TestCase):
@@ -347,7 +347,7 @@ class ClipStoreTests(unittest.TestCase):
             return real_open(path, flags, mode, dir_fd=dir_fd)
 
         with (
-            patch("webapp.safe_files.os.open", side_effect=swap_at_open),
+            patch("studio_core.safe_files.os.open", side_effect=swap_at_open),
             self.assertRaisesRegex(ClipStoreError, "missing or unsafe"),
         ):
             self.store.describe(self.project)
@@ -372,7 +372,7 @@ class ClipStoreTests(unittest.TestCase):
             return real_open(path, flags, mode, dir_fd=dir_fd)
 
         with (
-            patch("webapp.safe_files.os.open",
+            patch("studio_core.safe_files.os.open",
                   side_effect=swap_parent_at_final_open),
             self.assertRaisesRegex(ClipStoreError, "missing or unsafe"),
         ):

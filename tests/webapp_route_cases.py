@@ -20,11 +20,11 @@ from fastapi.testclient import TestClient
 from scripts import design_studio as ds
 from webapp.app import create_app
 from webapp.config import Settings
-from webapp.hermes_events import HermesSessionEventBridge
-from webapp.job_store import ActiveJobError, JobStore, JobStoreError
-from webapp.models import JobStatus
-from webapp.runtime_schema import CURRENT_SCHEMA_VERSION, LEGACY_CLIP_ERROR
-from webapp import safe_files
+from studio_core.hermes_events import HermesSessionEventBridge
+from studio_core.job_store import ActiveJobError, JobStore, JobStoreError
+from studio_core.models import JobStatus
+from studio_core.runtime_schema import CURRENT_SCHEMA_VERSION, LEGACY_CLIP_ERROR
+from studio_core import safe_files
 from webapp.studio_manager import StudioJobManager, process_start_time
 
 
@@ -1189,7 +1189,7 @@ class AppFactoryTests(WebAppTestCase):
                     root.symlink_to(outside, target_is_directory=True)
                 return real_open(path, flags, mode, dir_fd=dir_fd)
 
-            with patch("webapp.safe_files.os.open",
+            with patch("studio_core.safe_files.os.open",
                        side_effect=swap_parent_at_final_open):
                 listing = client.get("/api/projects").json()["projects"]
 
@@ -1443,7 +1443,7 @@ class AppFactoryTests(WebAppTestCase):
             )
 
             with patch(
-                    "webapp.clip_store.remove_published_directory_if_same",
+                    "studio_core.projects.remove_published_directory_if_same",
                     return_value=False):
                 response = client.delete(
                     f"/api/project/{project}/clips/clip-001/generations/001")

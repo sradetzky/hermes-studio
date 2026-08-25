@@ -6,10 +6,10 @@ import unittest
 from pathlib import Path
 
 from scripts import design_studio as ds
-from webapp.clip_store import ClipStore
+from studio_core.projects import ClipStore
 from webapp.config import Settings
-from webapp.job_store import JobStore
-from webapp.models import JobStatus
+from studio_core.job_store import JobStore
+from studio_core.models import JobStatus
 from webapp.movie_store import MovieStore, MovieStoreError
 from webapp.studio_manager import StudioJobManager
 

@@ -271,6 +271,9 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
   revalidation, and archive verification out of `StudioJobManager`. Continuity
   now rejects non-R2V modes before extraction with HTTP 409, while the browser
   exposes but disables the eligible control until R2V is selected.
+- Removed the eight `sys.modules` webapp compatibility aliases; tests and
+  fault-injection patches now import the canonical `studio_core` domain owners,
+  and the import-boundary suite prevents the deprecated paths from returning.
 
 ## Next steps
 

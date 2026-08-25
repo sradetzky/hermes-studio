@@ -21,11 +21,11 @@ from scripts import design_studio as ds
 from studio_core.paths import StudioPaths
 from webapp.app import create_app
 from webapp.config import Settings
-from webapp.hermes_events import HermesSessionEventBridge
-from webapp.job_store import ActiveJobError, JobStore, JobStoreError
-from webapp.models import JobStatus
-from webapp.runtime_schema import CURRENT_SCHEMA_VERSION, LEGACY_CLIP_ERROR
-from webapp import runtime_schema, safe_files
+from studio_core.hermes_events import HermesSessionEventBridge
+from studio_core.job_store import ActiveJobError, JobStore, JobStoreError
+from studio_core.models import JobStatus
+from studio_core.runtime_schema import CURRENT_SCHEMA_VERSION, LEGACY_CLIP_ERROR
+from studio_core import runtime_schema, safe_files
 from webapp.studio_manager import StudioJobManager, process_start_time
 
 

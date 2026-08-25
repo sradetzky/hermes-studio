@@ -23,13 +23,13 @@ from webapp.app import create_app
 from webapp.config import Settings
 from webapp.generation_settings_store import GenerationSettingsStore
 from webapp.generation_runner import GenerationJobRunner, GenerationRuntime
-from webapp.hermes_events import HermesSessionEventBridge
-from webapp.job_store import ActiveJobError, JobStore, JobStoreError
-from webapp.models import JobStatus
+from studio_core.hermes_events import HermesSessionEventBridge
+from studio_core.job_store import ActiveJobError, JobStore, JobStoreError
+from studio_core.models import JobStatus
 from webapp.project_jobs import project_job_guard
 from webapp.process_runner import SupervisedProcessRunner, process_start_time
-from webapp.runtime_schema import CURRENT_SCHEMA_VERSION, LEGACY_CLIP_ERROR
-from webapp import safe_files
+from studio_core.runtime_schema import CURRENT_SCHEMA_VERSION, LEGACY_CLIP_ERROR
+from studio_core import safe_files
 from webapp.studio_manager import StudioJobManager
 
 
