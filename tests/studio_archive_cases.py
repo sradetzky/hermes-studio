@@ -11,9 +11,13 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from scripts import design_studio as ds
+from studio_core.generation_archive import (
+    GenerationArchiveContext,
+    archive_outputs as archive_generation_outputs,
+)
+from studio_core.generation_contracts import parse_generation_contract
 from studio_core import safe_files
 from studio_core.projects import ClipStore, ClipStoreError
-from studio_core.job_store import JobStore
 
 
 class GenerationArchiveTests(unittest.TestCase):
@@ -78,9 +82,6 @@ class GenerationArchiveTests(unittest.TestCase):
         }
         (clip / "current_generation.json").write_text(
             json.dumps(settings_manifest) + "\n", encoding="utf-8")
-        runtime_root = Path(self.temp.name) / "runtime"
-        store = JobStore(runtime_root / "studio.db")
-        store.initialize()
         generation_inputs = [{
             "type": "project_reference",
             "slot": 1,
@@ -117,13 +118,7 @@ class GenerationArchiveTests(unittest.TestCase):
             },
             "expected_generation_id": "001",
         }
-        job = store.create_generation_job(
-            self.project.name,
-            json.dumps(payload, sort_keys=True, separators=(",", ":")),
-            "studio",
-            clip_id="clip-001",
-        )
-        self.assertIsNotNone(store.claim_next("worker"))
+        contract = parse_generation_contract(payload)
         ds.write_prompt(
             self.root, self.project.name, "clip-001", "mutated 10-second prompt")
         (clip / "current_generation.json").write_text(
@@ -233,22 +228,13 @@ class GenerationArchiveTests(unittest.TestCase):
                 },
             },
         }
-        environment = {
-            "HERMES_STUDIO_JOB_KIND": "generate",
-            "HERMES_STUDIO_JOB_ID": job.id,
-            "HERMES_STUDIO_PROJECT": self.project.name,
-            "HERMES_STUDIO_CLIP": "clip-001",
-            "HERMES_STUDIO_RUNTIME_ROOT": str(runtime_root),
-            "COMFYUI_URL": "http://127.0.0.1:8188",
-        }
         with (
-            patch.dict(os.environ, environment),
             patch(
                 "scripts.design_studio.urllib.request.urlopen",
                 return_value=closing(StringIO(json.dumps(history))),
             ) as fetch,
         ):
-            generation = ds.archive_outputs(
+            generation = archive_generation_outputs(
                 self.root,
                 self.project.name,
                 "clip-001",
@@ -260,6 +246,14 @@ class GenerationArchiveTests(unittest.TestCase):
                     "width": 32,
                 },
                 source_root=comfy_output,
+                generation_context=GenerationArchiveContext(
+                    job_id="job-id",
+                    project=self.project.name,
+                    clip_id="clip-001",
+                    contract=contract,
+                    prompt_id=prompt_id,
+                    comfy_url="http://127.0.0.1:8188",
+                ),
             )
 
         meta = json.loads((generation / "meta.json").read_text())
@@ -267,7 +261,7 @@ class GenerationArchiveTests(unittest.TestCase):
             fetch.call_args.args[0].full_url,
             f"http://127.0.0.1:8188/history/{prompt_id}",
         )
-        self.assertEqual(meta["studio_job_id"], job.id)
+        self.assertEqual(meta["studio_job_id"], "job-id")
         self.assertEqual(meta["output_node_id"], "save")
         self.assertEqual(meta["generation_contract_version"], 2)
         self.assertEqual(meta["generation_inputs"], generation_inputs)
@@ -398,7 +392,7 @@ class GenerationArchiveTests(unittest.TestCase):
                 "scripts.design_studio.urllib.request.urlopen",
                 return_value=closing(StringIO(json.dumps(history)))):
             metadata = ds._h3_history_metadata(
-                prompt_id, ["result.mp4"])
+                "http://127.0.0.1:8188", prompt_id, ["result.mp4"])
         self.assertEqual(metadata["mode"], "t2va")
         self.assertEqual(metadata["output_node_id"], "save")
         self.assertEqual(metadata["executed_prompt_sha256"], hashlib.sha256(
@@ -428,28 +422,58 @@ class GenerationArchiveTests(unittest.TestCase):
             ),
             self.assertRaisesRegex(ValueError, "one exact producer"),
         ):
-            ds._h3_history_metadata(prompt_id, ["result.mp4"])
+            ds._h3_history_metadata(
+                "http://127.0.0.1:8188", prompt_id, ["result.mp4"])
 
     def test_web_generation_archive_rejects_missing_history_identity(self):
         comfy_output = Path(self.temp.name) / "web-missing-history"
         comfy_output.mkdir()
         (comfy_output / "result.mp4").write_bytes(b"video")
-        environment = {
-            "HERMES_STUDIO_JOB_KIND": "generate",
-            "HERMES_STUDIO_PROJECT": self.project.name,
-            "HERMES_STUDIO_CLIP": "clip-001",
-        }
-        with (
-            patch.dict(os.environ, environment),
-            self.assertRaisesRegex(ValueError, "requires a prompt_id"),
-        ):
-            ds.archive_outputs(
+        prompt = "valid 5-second prompt\n"
+        digest = hashlib.sha256(prompt.encode()).hexdigest()
+        contract = parse_generation_contract({
+            "schema_version": 2,
+            "action": "generate-current-prompt",
+            "prompt": prompt,
+            "prompt_sha256": digest,
+            "settings_updated_at": "2026-08-25T00:00:00+00:00",
+            "settings_manifest": {
+                "schema_version": 2,
+                "prompt_sha256": digest,
+                "updated_at": "2026-08-25T00:00:00+00:00",
+                "mode": "t2va", "aspect": "16:9", "mp": 0.4,
+                "width": None, "height": None, "seed": None,
+                "steps": 8, "accel": False,
+            },
+            "execution": {
+                "resolution": {
+                    "mode": "mp", "width": 832, "height": 480,
+                    "megapixels": 0.399,
+                },
+                "timing": {
+                    "requested_seconds": 5.0, "frames": 124,
+                    "actual_seconds": 5.167, "fps": 24,
+                },
+                "inputs": [],
+            },
+            "expected_generation_id": "001",
+        })
+        with self.assertRaisesRegex(ValueError, "requires a prompt_id"):
+            archive_generation_outputs(
                 self.root,
                 self.project.name,
                 "clip-001",
                 ["result.mp4"],
                 {"kind": "video"},
                 source_root=comfy_output,
+                generation_context=GenerationArchiveContext(
+                    job_id="job-id",
+                    project=self.project.name,
+                    clip_id="clip-001",
+                    contract=contract,
+                    prompt_id="",
+                    comfy_url="http://127.0.0.1:8188",
+                ),
             )
         generations = self.project / "clips" / "clip-001" / "generations"
         self.assertEqual(list(generations.iterdir()), [])

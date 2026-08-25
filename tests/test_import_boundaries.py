@@ -180,6 +180,20 @@ class ImportBoundaryTests(unittest.TestCase):
         self.assertNotIn("contract = job.payload.contract.to_dict()", runner)
         self.assertNotIn('"--contract"', runner)
 
+    def test_generation_archival_uses_an_explicit_typed_context(self):
+        archive = (ROOT / "studio_core" / "generation_archive.py").read_text(
+            encoding="utf-8")
+        runner = (ROOT / "webapp" / "generation_runner.py").read_text(
+            encoding="utf-8")
+        worker = (ROOT / "webapp" / "generation_worker.py").read_text(
+            encoding="utf-8")
+        self.assertIn("class GenerationArchiveContext:", archive)
+        self.assertNotIn("import sqlite3", archive)
+        self.assertNotIn("load_running_generation_contract", archive)
+        self.assertNotIn("HERMES_STUDIO_JOB_ID", archive)
+        self.assertIn("generation_context=GenerationArchiveContext(", runner)
+        self.assertNotIn("os.environ.update", worker)
+
 
 if __name__ == "__main__":
     unittest.main()

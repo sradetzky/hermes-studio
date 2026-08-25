@@ -733,7 +733,12 @@ They are being closed in this order before another feature wave:
    serialization occurs only at persistence/provenance boundaries. The supervised
    worker reloads the exact persisted running job instead of accepting an entire
    contract through process arguments.
-2. **Explicit generation archive context — pending.**
+2. **Explicit generation archive context — complete.** The worker loads the
+   exact running job once through `JobStore` and passes an immutable archive
+   context containing the typed contract, target, prompt identity, job identity,
+   and ComfyUI endpoint. Archival no longer reads SQLite or ambient job variables,
+   and graph construction receives the exact validated input paths, including
+   clip-local derived continuity frames.
 3. **Unified specialist dispatch lifecycle — pending.**
 4. **Single coordinated generation preflight owner — pending.**
 

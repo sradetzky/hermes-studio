@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 
 from studio_core.comfyui_mcp import cleanup_comfyui
+from studio_core.generation_archive import GenerationArchiveContext
 from studio_core.generation_contracts import (
     GenerationContract,
     parse_generation_contract,
@@ -172,13 +173,33 @@ class GenerationJobRunnerTests(unittest.TestCase):
                 "action": "wait", "batch_id": "batch-id", "timeout_s": 600,
             })
             self.assertEqual(archived[0][0][3], ["h3/render.mp4"])
-            self.assertEqual(archived[0][0][4], {"prompt_id": "prompt-id"})
+            context = archived[0][1]["generation_context"]
+            self.assertIsInstance(context, GenerationArchiveContext)
+            self.assertEqual(context.job_id, "job-id")
+            self.assertEqual(context.contract, self._contract())
+            self.assertEqual(context.prompt_id, "prompt-id")
+            self.assertEqual(context.comfy_url, runtime.comfy_url)
             self.assertEqual(
                 archived[0][1]["source_root"],
                 runtime.comfy_root.resolve() / "output",
             )
             self.assertIn("generation.archive", [item[0][0] for item in events])
             self.assertEqual(responses, [])
+
+    def test_graph_command_uses_the_exact_validated_input_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runtime, project, clip = self._fixture(root)
+            derived = clip / "generation-inputs" / "derived.png"
+            derived.parent.mkdir()
+            derived.write_bytes(b"derived")
+            runner = GenerationJobRunner(runtime)
+
+            command = runner._graph_command(
+                clip, self._contract(), Path("graph.json"), [derived])
+
+            self.assertIn(str(derived), command)
+            self.assertNotIn(str(project / "references" / "ref.jpg"), command)
 
     def test_failure_after_submission_cancels_queue_verifies_it_and_clears_vram(self):
         with tempfile.TemporaryDirectory() as directory:

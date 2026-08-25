@@ -5,7 +5,7 @@ import logging
 import subprocess
 import sys
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -18,7 +18,7 @@ from studio_core.comfyui_mcp import (
     submit_exact_h3_graph,
     unwrap_content,
 )
-from studio_core.generation_archive import archive_outputs
+from studio_core.generation_archive import GenerationArchiveContext, archive_outputs
 from studio_core.generation_contracts import (
     GenerationContract,
     LEGACY_CONTRACT_SCHEMA_VERSION,
@@ -82,10 +82,8 @@ class GenerationJobRunner:
             event_type, summary, phase=phase, detail=detail or {})
 
     def _graph_command(
-            self, project: str, clip_id: str, contract: GenerationContract,
-            output: Path) -> list[str]:
-        project_path = self.runtime.studio_root / "projects" / project
-        clip_path = project_path / "clips" / clip_id
+            self, clip_path: Path, contract: GenerationContract,
+            output: Path, references: Sequence[Path]) -> list[str]:
         settings = contract.settings_manifest
         execution = contract.execution
         command = [
@@ -103,9 +101,8 @@ class GenerationJobRunner:
             command.extend(("--seed", str(settings.seed)))
         if settings.accel:
             command.append("--accel")
-        for filename in execution.references:
-            command.extend((
-                "--image", str(project_path / "references" / filename)))
+        for reference in references:
+            command.extend(("--image", str(reference)))
         command.extend(("--dry-run", "--output-json", str(output)))
         return command
 
@@ -251,7 +248,7 @@ class GenerationJobRunner:
                     dir=self.runtime.runtime_root) as directory:
                 graph_path = Path(directory) / "h3-graph.json"
                 command = self._graph_command(
-                    project, clip_id, contract, graph_path)
+                    clip_path, contract, graph_path, references)
                 self._event(
                     JobEventType.GENERATION_GRAPH,
                     "Building the exact H3 graph",
@@ -322,10 +319,17 @@ class GenerationJobRunner:
                     project,
                     clip_id,
                     files,
-                    {"prompt_id": prompt_id},
                     source_root=(
                         self.runtime.comfy_root.resolve(strict=True) / "output"),
                     transport="comfyui-mcp",
+                    generation_context=GenerationArchiveContext(
+                        job_id=job_id,
+                        project=project,
+                        clip_id=clip_id,
+                        contract=contract,
+                        prompt_id=prompt_id,
+                        comfy_url=self.runtime.comfy_url,
+                    ),
                 )
                 if generation.name != contract.expected_generation_id:
                     raise RuntimeError(
@@ -387,9 +391,6 @@ class GenerationWorkerRunner:
             sys.executable,
             str(self.settings.repo / "webapp" / "generation_worker.py"),
             "--job-id", job.id,
-            "--project", job.project,
-            "--clip", job.clip_id,
-            "--profile", job.profile,
             "--studio-root", str(self.settings.studio_root),
             "--runtime-root", str(self.settings.runtime_root),
             "--profile-home", str(self.settings.profile_home(job.profile)),

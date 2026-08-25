@@ -329,8 +329,11 @@ class StudioManagerTests(WebAppTestCase):
             timeout_seconds=self.settings.job_timeout_seconds,
         ))
         command = runner._graph_command(
-            project.name, "clip-001", manager.generation_jobs.validate(job),
-            Path("graph.json"))
+            clip,
+            manager.generation_jobs.validate(job),
+            Path("graph.json"),
+            [references / "one.jpg", references / "two.jpg"],
+        )
 
         self.assertIn("r2v", command)
         self.assertIn("362", command)

@@ -7,18 +7,16 @@ import json
 import re
 import os
 import shutil
-import sqlite3
 import urllib.parse
 import urllib.request
 import uuid
-from contextlib import ExitStack, closing
+from contextlib import ExitStack
+from dataclasses import dataclass
 from pathlib import Path
 
 from studio_core.generation_contracts import (
     GenerationContract,
-    GenerationContractError,
     executed_generation_prompt_sha256,
-    parse_generation_job_payload,
 )
 from studio_core.paths import StudioPaths
 from studio_core.projects import clip_path, next_generation_dir, read_project_text
@@ -31,27 +29,14 @@ from studio_core.safe_files import (
 )
 
 
-def load_running_generation_contract(
-        runtime_root: Path, job_id: str, project: str,
-        clip_id: str) -> GenerationContract:
-    database = runtime_root / "studio.db"
-    try:
-        with closing(sqlite3.connect(
-                f"{database.resolve().as_uri()}?mode=ro", uri=True,
-                timeout=0.25)) as connection:
-            row = connection.execute(
-                "SELECT project, clip_id, kind, status, message FROM jobs "
-                "WHERE id = ?",
-                (job_id,),
-            ).fetchone()
-    except sqlite3.Error as exc:
-        raise GenerationContractError(
-            "could not read the immutable generation contract") from exc
-    if (row is None or row[0] != project or row[1] != clip_id
-            or row[2] != "generate" or row[3] != "running"):
-        raise GenerationContractError(
-            "web generation contract does not match its running job")
-    return parse_generation_job_payload(row[4])
+@dataclass(frozen=True)
+class GenerationArchiveContext:
+    job_id: str
+    project: str
+    clip_id: str
+    contract: GenerationContract
+    prompt_id: str
+    comfy_url: str
 
 COMFY_OUTPUT = StudioPaths.from_environment().comfy_root / "output"
 
@@ -153,9 +138,9 @@ def _history_output_producers(entry: dict) -> dict[str, set[str]]:
         raise ValueError("ComfyUI history contains no output files")
     return producers
 
-def _h3_history_metadata(prompt_id: str, outputs: list[str]) -> dict:
-    base_url = os.environ.get(
-        "COMFYUI_URL", "http://127.0.0.1:8188").rstrip("/")
+def _h3_history_metadata(
+        comfy_url: str, prompt_id: str, outputs: list[str]) -> dict:
+    base_url = comfy_url.rstrip("/")
     parsed = urllib.parse.urlsplit(base_url)
     if (parsed.scheme not in {"http", "https"} or not parsed.netloc
             or parsed.username or parsed.password or parsed.query or parsed.fragment):
@@ -292,74 +277,58 @@ def _h3_history_metadata(prompt_id: str, outputs: list[str]) -> dict:
     }
 
 def _validate_authoritative_generation_contract(
-        authoritative: dict, contract: dict) -> None:
-    settings = contract["settings_manifest"]
-    execution = contract["execution"]
-    resolution = execution["resolution"]
-    timing = execution["timing"]
-    inputs = execution.get("inputs")
-    expected_references = (
-        [
-            item["filename"]
-            if item["type"] == "project_reference"
-            else item["derived_filename"]
-            for item in inputs
-        ]
-        if isinstance(inputs, list)
-        else execution["references"]
-    )
+        authoritative: dict, contract: GenerationContract) -> None:
+    settings = contract.settings_manifest
+    execution = contract.execution
     expected = {
         "executed_prompt_sha256": executed_generation_prompt_sha256(
-            contract["prompt"]),
-        "mode": settings["mode"],
-        "width": resolution["width"],
-        "height": resolution["height"],
-        "length": timing["frames"],
-        "fps": timing["fps"],
-        "steps": settings["steps"],
-        "accel": settings["accel"],
-        "references": expected_references,
+            contract.prompt),
+        "mode": settings.mode,
+        "width": execution.resolution.width,
+        "height": execution.resolution.height,
+        "length": execution.timing.frames,
+        "fps": execution.timing.fps,
+        "steps": settings.steps,
+        "accel": settings.accel,
+        "references": list(execution.references),
     }
     for field, value in expected.items():
         if authoritative.get(field) != value:
             raise ValueError(
                 f"ComfyUI history {field} does not match the generation contract")
-    if settings["seed"] is not None:
-        if authoritative.get("seed") != int(settings["seed"]):
+    if settings.seed is not None:
+        if authoritative.get("seed") != settings.seed:
             raise ValueError(
                 "ComfyUI history seed does not match the generation contract")
 
-def _web_generation_metadata(project: str, clip_id: str, outputs: list[str],
-                             metadata: dict) -> tuple[dict, dict | None]:
-    if os.environ.get("HERMES_STUDIO_JOB_KIND", "") != "generate":
+
+def _generation_metadata(
+        project: str, clip_id: str, outputs: list[str], metadata: dict,
+        context: GenerationArchiveContext | None,
+) -> tuple[dict, GenerationContract | None]:
+    if context is None:
         return metadata, None
-    if (os.environ.get("HERMES_STUDIO_PROJECT") != project
-            or os.environ.get("HERMES_STUDIO_CLIP") != clip_id):
+    if context.project != project or context.clip_id != clip_id:
         raise ValueError("web generation archive target does not match its job")
-    prompt_id = metadata.get("prompt_id")
-    if not isinstance(prompt_id, str) or not prompt_id:
-        raise ValueError("web generation archive requires a prompt_id")
-    job_id = os.environ.get("HERMES_STUDIO_JOB_ID", "")
-    if not job_id:
+    if not context.job_id:
         raise ValueError("web generation archive requires a Studio job id")
-    runtime_root = os.environ.get("HERMES_STUDIO_RUNTIME_ROOT", "")
-    if not runtime_root:
-        raise ValueError("web generation archive requires its runtime root")
-    try:
-        contract = load_running_generation_contract(
-            Path(runtime_root), job_id, project, clip_id).to_dict()
-    except GenerationContractError as exc:
-        raise ValueError(str(exc)) from exc
-    authoritative = _h3_history_metadata(prompt_id, outputs)
+    if not context.prompt_id:
+        raise ValueError("web generation archive requires a prompt_id")
+    if (metadata.get("prompt_id", context.prompt_id) != context.prompt_id):
+        raise ValueError("web generation archive prompt does not match its context")
+    contract = context.contract
+    authoritative = _h3_history_metadata(
+        context.comfy_url, context.prompt_id, outputs)
     _validate_authoritative_generation_contract(authoritative, contract)
     return {
         **metadata,
         **authoritative,
-        "prompt_sha256": contract["prompt_sha256"],
-        "studio_job_id": job_id,
-        "generation_contract_version": contract["schema_version"],
-        "settings_updated_at": contract["settings_updated_at"],
-        "generation_inputs": contract["execution"].get("inputs", []),
+        "prompt_sha256": contract.prompt_sha256,
+        "studio_job_id": context.job_id,
+        "generation_contract_version": contract.schema_version,
+        "settings_updated_at": contract.settings_updated_at,
+        "generation_inputs": contract.execution.to_dict(
+            contract.schema_version).get("inputs", []),
     }, contract
 
 def archive_outputs(root: Path, project: str, clip_id: str,
@@ -367,12 +336,13 @@ def archive_outputs(root: Path, project: str, clip_id: str,
                     source_root: Path | None = None,
                     transport: str = "comfyui-mcp",
                     prompt_text: str | None = None, *,
+                    generation_context: GenerationArchiveContext | None = None,
                     copier=copy_opened_file,
                     publisher=atomic_publish_directory) -> Path:
     """Archive outputs beneath one exact clip from one trusted source root."""
     clip = clip_path(root, project, clip_id)
-    archive_metadata, generation_contract = _web_generation_metadata(
-        project, clip_id, outputs, dict(metadata or {}))
+    archive_metadata, generation_contract = _generation_metadata(
+        project, clip_id, outputs, dict(metadata or {}), generation_context)
     output_root = Path(os.path.abspath(
         os.path.expanduser(os.fspath(source_root or COMFY_OUTPUT))))
     with ExitStack() as source_descriptors:
@@ -410,7 +380,7 @@ def archive_outputs(root: Path, project: str, clip_id: str,
             gen_dir = next_generation_dir(root, project, clip_id)
             if (generation_contract is not None
                     and gen_dir.name
-                    != generation_contract["expected_generation_id"]):
+                    != generation_contract.expected_generation_id):
                 raise ValueError(
                     "generation archive sequence does not match its job contract")
             staging = generations / f".publishing-{uuid.uuid4().hex}"
@@ -427,11 +397,11 @@ def archive_outputs(root: Path, project: str, clip_id: str,
                 supplied_prompt = (
                     None if prompt_text is None else prompt_text.rstrip() + "\n")
                 if (generation_contract is not None and supplied_prompt is not None
-                        and supplied_prompt != generation_contract["prompt"]):
+                        and supplied_prompt != generation_contract.prompt):
                     raise ValueError(
                         "provided prompt does not match the generation contract")
                 archived_prompt = (
-                    generation_contract["prompt"]
+                    generation_contract.prompt
                     if generation_contract is not None else
                     read_project_text(clip, "current_prompt.txt", required=True)
                     if supplied_prompt is None else supplied_prompt
@@ -447,7 +417,7 @@ def archive_outputs(root: Path, project: str, clip_id: str,
                 if generation_contract is not None:
                     (staging / "settings.json").write_text(
                         json.dumps(
-                            generation_contract["settings_manifest"],
+                            generation_contract.settings_manifest.to_dict(),
                             indent=2,
                             ensure_ascii=False,
                         ) + "\n",

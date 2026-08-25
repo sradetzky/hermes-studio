@@ -293,9 +293,13 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
   through canonical construction, worker execution, export, and verification;
   movie workers reload the exact persisted running job instead of receiving a
   serialized contract through process arguments.
+- Generation workers now load their typed contract once from the canonical job
+  store, pass explicit job/contract/prompt/ComfyUI archive context, and give the
+  graph builder the exact validated input paths; archival no longer opens SQLite
+  or discovers identity through process-global environment variables.
 
 ## Next steps
 
 - Complete the remaining second thermo-nuclear closure slices in documented
-  order: explicit typed generation archive context, unified specialist dispatch,
-  redundant route-preflight removal, then the committed-source release gate.
+  order: unified specialist dispatch, redundant route-preflight removal, then the
+  committed-source release gate.
