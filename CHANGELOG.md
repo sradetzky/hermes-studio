@@ -12,6 +12,9 @@ preview and production releases.
 - Consolidated the duplicated disposable web-app test case, passive manager,
   multiprocessing job creator, and generation-settings fixture into one test
   support module while retaining the route suite's specialized manager.
+- Closed every direct SQLite connection in the interaction migration regression;
+  the complete webapp suite now runs with `ResourceWarning` visibility enabled
+  without leaking database handles.
 - Removed eight magical `webapp` module-identity aliases after migrating the
   remaining tests and fault-injection targets to their canonical `studio_core`
   owners; an import-boundary test now prevents those compatibility shims from

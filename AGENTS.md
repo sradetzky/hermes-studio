@@ -276,6 +276,8 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
   and the import-boundary suite prevents the deprecated paths from returning.
 - Consolidated three copies of common disposable-app test infrastructure into
   `tests/webapp_test_support.py`, leaving route-specific manager behavior local.
+- Closed leaked SQLite handles in the interaction migration regression; the
+  complete webapp suite is clean with `ResourceWarning` visibility enabled.
 
 ## Next steps
 

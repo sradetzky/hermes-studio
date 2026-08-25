@@ -533,6 +533,10 @@ The same pass consolidated three identical copies of the disposable web-app
 test base, passive manager, concurrent-job helper, and generation-settings
 fixture into `tests/webapp_test_support.py`; the route suite now carries only its
 genuinely different manager behavior.
+Tracemalloc isolated the remaining three SQLite `ResourceWarning` reports to
+transaction context managers in one interaction migration test: `sqlite3`
+commits on context exit but does not close. Explicit `closing(...)` ownership now
+makes the full webapp suite warning-clean under `PYTHONWARNINGS=always::ResourceWarning`.
 
 The canonical local non-GPU gate is:
 

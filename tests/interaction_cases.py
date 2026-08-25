@@ -2,6 +2,7 @@ import sqlite3
 import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -230,7 +231,7 @@ class InteractionStoreTests(unittest.TestCase):
     def test_schema_7_migrates_and_malformed_payload_fails_closed(self):
         request = self.interactions.create(
             self.job.id, "hermes-session", self.payload())
-        with sqlite3.connect(self.database) as connection:
+        with closing(sqlite3.connect(self.database)) as connection, connection:
             connection.execute(
                 "UPDATE interaction_requests SET payload = '{}' WHERE id = ?",
                 (request.id,),
@@ -242,11 +243,11 @@ class InteractionStoreTests(unittest.TestCase):
         migrated_database = Path(self.temp.name) / "migration" / "runtime.sqlite3"
         migrated_jobs = JobStore(migrated_database)
         migrated_jobs.initialize()
-        with sqlite3.connect(migrated_database) as connection:
+        with closing(sqlite3.connect(migrated_database)) as connection, connection:
             connection.execute("DROP TABLE interaction_requests")
             connection.execute("PRAGMA user_version = 6")
         migrated_jobs.initialize()
-        with sqlite3.connect(migrated_database) as connection:
+        with closing(sqlite3.connect(migrated_database)) as connection:
             version = connection.execute("PRAGMA user_version").fetchone()[0]
             columns = {
                 row[1] for row in connection.execute(
