@@ -9,6 +9,35 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 class ImportBoundaryTests(unittest.TestCase):
+    def test_job_manager_protocol_covers_every_route_submission(self):
+        routes = ast.parse(
+            (ROOT / "webapp" / "routes.py").read_text(encoding="utf-8"))
+        app = ast.parse(
+            (ROOT / "webapp" / "app.py").read_text(encoding="utf-8"))
+        route_calls = {
+            node.func.attr
+            for node in ast.walk(routes)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Call)
+            and isinstance(node.func.value.func, ast.Name)
+            and node.func.value.func.id == "_manager"
+        }
+        protocol = next(
+            node for node in app.body
+            if isinstance(node, ast.ClassDef) and node.name == "JobManager")
+        protocol_methods = {
+            node.name for node in protocol.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        self.assertEqual(route_calls, {
+            "submit_project_chat",
+            "submit_chat",
+            "submit_generation",
+            "submit_movie_export",
+        })
+        self.assertLessEqual(route_calls, protocol_methods)
+
     def test_project_domain_is_owned_by_studio_core(self):
         from scripts import design_studio
         from studio_core import projects

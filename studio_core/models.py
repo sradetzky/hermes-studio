@@ -4,6 +4,14 @@ from dataclasses import asdict, dataclass
 from enum import StrEnum
 from typing import Any, Literal
 
+from studio_core.job_contracts import (
+    ChatScope,
+    JobEventType,
+    JobKind,
+    JobPayload,
+    JobPhase,
+)
+
 
 class JobStatus(StrEnum):
     QUEUED = "queued"
@@ -20,8 +28,8 @@ class Job:
     id: str
     project: str
     clip_id: str
-    chat_scope: str
-    kind: str
+    chat_scope: ChatScope
+    kind: JobKind
     profile: str
     status: JobStatus
     message: str
@@ -32,10 +40,14 @@ class Job:
     owner_id: str
     pid: int | None
     pid_start_time: int | None
+    payload: JobPayload
     reply: str = ""
 
     def to_dict(self) -> dict:
         result = asdict(self)
+        result.pop("payload")
+        result["chat_scope"] = self.chat_scope.value
+        result["kind"] = self.kind.value
         result["status"] = self.status.value
         return result
 
@@ -69,11 +81,16 @@ class JobEvent:
     project: str
     job_id: str
     profile: str
-    event_type: str
-    status: str
+    event_type: JobEventType
+    phase: JobPhase
     summary: str
     detail: dict[str, Any]
     created_at: str
+
+    @property
+    def status(self) -> str:
+        """Compatibility alias for the existing HTTP event field."""
+        return self.phase.value
 
     def to_dict(self) -> dict:
         return {
@@ -81,8 +98,8 @@ class JobEvent:
             "project": self.project,
             "job_id": self.job_id,
             "profile": self.profile,
-            "event_type": self.event_type,
-            "status": self.status,
+            "event_type": self.event_type.value,
+            "status": self.phase.value,
             "summary": self.summary,
             "detail": self.detail,
             "ts": self.created_at,

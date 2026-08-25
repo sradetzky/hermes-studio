@@ -11,6 +11,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from studio_core.identifiers import validate_clip_id
+from studio_core.job_contracts import (
+    ChatScope,
+    JobContractError,
+    JobEventType,
+    JobKind,
+    JobPhase,
+    decode_job_payload,
+    parse_chat_scope,
+    parse_job_kind,
+    validate_job_binding,
+)
 from studio_core.models import ChatEvent, Job, JobEvent, JobStatus
 from studio_core.runtime_schema import RuntimeSchemaError, initialize_runtime_schema
 from studio_core.safe_files import (
@@ -119,14 +130,23 @@ class JobStore:
 
     @staticmethod
     def _job_from_row(row: sqlite3.Row, reply: str = "") -> Job:
+        try:
+            kind = parse_job_kind(row["kind"])
+            scope = parse_chat_scope(row["chat_scope"])
+            clip_id = validate_job_binding(kind, scope, row["clip_id"])
+            payload = decode_job_payload(kind, row["message"])
+            status = JobStatus(row["status"])
+        except (JobContractError, ValueError) as exc:
+            raise JobStoreError(
+                f"persisted job {row['id']} is invalid: {exc}") from exc
         return Job(
             id=row["id"],
             project=row["project"],
-            clip_id=row["clip_id"],
-            chat_scope=row["chat_scope"],
-            kind=row["kind"],
+            clip_id=clip_id,
+            chat_scope=scope,
+            kind=kind,
             profile=row["profile"],
-            status=JobStatus(row["status"]),
+            status=status,
             message=row["message"],
             error=row["error"],
             created_at=row["created_at"],
@@ -135,6 +155,7 @@ class JobStore:
             owner_id=row["owner_id"],
             pid=row["pid"],
             pid_start_time=row["pid_start_time"],
+            payload=payload,
             reply=reply,
         )
 
@@ -148,8 +169,9 @@ class JobStore:
 
     @staticmethod
     def _append_job_event(connection: sqlite3.Connection, *, project: str,
-                          job_id: str, profile: str, event_type: str,
-                          status: str, summary: str,
+                          job_id: str, profile: str,
+                          event_type: JobEventType,
+                          phase: JobPhase, summary: str,
                           detail: dict | None = None,
                           created_at: str | None = None) -> None:
         connection.execute(
@@ -157,25 +179,22 @@ class JobStore:
             "(project, job_id, profile, event_type, status, summary, detail, "
             "created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
-                project, job_id, profile, event_type, status, summary,
+                project, job_id, profile, event_type.value, phase.value, summary,
                 json.dumps(detail or {}, ensure_ascii=False),
                 created_at or utc_now(),
             ),
         )
 
     def _create_job(self, project: str, message: str, profile: str, *,
-                    clip_id: str, chat_scope: str, kind: str,
+                    clip_id: str, chat_scope: ChatScope, kind: JobKind,
                     chat_content: str) -> Job:
-        if chat_scope == "clip":
-            try:
-                clip_id = validate_clip_id(clip_id)
-            except ValueError as exc:
-                raise JobStoreError(str(exc)) from exc
-        elif (chat_scope == "project" and kind in {"chat", "export_movie"}
-              and not clip_id):
-            pass
-        else:
-            raise JobStoreError("invalid active job chat scope")
+        try:
+            kind = parse_job_kind(kind)
+            chat_scope = parse_chat_scope(chat_scope)
+            clip_id = validate_job_binding(kind, chat_scope, clip_id)
+            payload = decode_job_payload(kind, message)
+        except JobContractError as exc:
+            raise JobStoreError(str(exc)) from exc
         now = utc_now()
         job = Job(
             id=uuid.uuid4().hex,
@@ -193,6 +212,7 @@ class JobStore:
             owner_id="",
             pid=None,
             pid_start_time=None,
+            payload=payload,
         )
         try:
             with self._transaction() as connection:
@@ -204,8 +224,8 @@ class JobStore:
                     "pid_start_time) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
-                        job.id, job.project, job.clip_id, job.chat_scope,
-                        job.kind, job.profile, job.status.value,
+                        job.id, job.project, job.clip_id, job.chat_scope.value,
+                        job.kind.value, job.profile, job.status.value,
                         job.message, job.error, job.created_at, job.started_at,
                         job.finished_at, job.owner_id, job.pid,
                         job.pid_start_time,
@@ -228,13 +248,13 @@ class JobStore:
                     project=job.project,
                     job_id=job.id,
                     profile=job.profile,
-                    event_type="job.queued",
-                    status="queued",
+                    event_type=JobEventType.JOB_QUEUED,
+                    phase=JobPhase.QUEUED,
                     summary=(
                         f"{job.profile} generation queued"
-                        if kind == "generate"
+                        if kind is JobKind.GENERATE
                         else "Project movie export queued"
-                        if kind == "export_movie"
+                        if kind is JobKind.EXPORT_MOVIE
                         else f"{job.profile} queued"),
                     created_at=now,
                 )
@@ -246,28 +266,32 @@ class JobStore:
     def create_chat_job(self, project: str, message: str,
                         profile: str = "studio", *, clip_id: str) -> Job:
         return self._create_job(
-            project, message, profile, clip_id=clip_id, chat_scope="clip",
-            kind="chat",
+            project, message, profile, clip_id=clip_id,
+            chat_scope=ChatScope.CLIP,
+            kind=JobKind.CHAT,
             chat_content=message)
 
     def create_project_chat_job(self, project: str, message: str,
                                 profile: str = "studio") -> Job:
         return self._create_job(
-            project, message, profile, clip_id="", chat_scope="project",
-            kind="chat", chat_content=message)
+            project, message, profile, clip_id="",
+            chat_scope=ChatScope.PROJECT,
+            kind=JobKind.CHAT, chat_content=message)
 
     def create_generation_job(self, project: str, request: str,
                               profile: str = "studio", *, clip_id: str) -> Job:
         return self._create_job(
-            project, request, profile, clip_id=clip_id, chat_scope="clip",
-            kind="generate",
+            project, request, profile, clip_id=clip_id,
+            chat_scope=ChatScope.CLIP,
+            kind=JobKind.GENERATE,
             chat_content="Generate with this prompt")
 
     def create_movie_export_job(self, project: str, contract: str,
                                 profile: str = "studio") -> Job:
         return self._create_job(
-            project, contract, profile, clip_id="", chat_scope="project",
-            kind="export_movie",
+            project, contract, profile, clip_id="",
+            chat_scope=ChatScope.PROJECT,
+            kind=JobKind.EXPORT_MOVIE,
             chat_content="Export selected takes as movie")
 
     def get_job(self, job_id: str) -> Job:
@@ -349,8 +373,8 @@ class JobStore:
                 project=row["project"],
                 job_id=job_id,
                 profile=row["profile"],
-                event_type="job.started",
-                status="running",
+                event_type=JobEventType.JOB_STARTED,
+                phase=JobPhase.RUNNING,
                 summary=f"{row['profile']} started",
                 created_at=started_at,
             )
@@ -384,8 +408,8 @@ class JobStore:
                 project=job_row["project"],
                 job_id=row["id"],
                 profile=job_row["profile"],
-                event_type="job.started",
-                status="running",
+                event_type=JobEventType.JOB_STARTED,
+                phase=JobPhase.RUNNING,
                 summary=f"{job_row['profile']} started",
                 created_at=started_at,
             )
@@ -463,8 +487,8 @@ class JobStore:
                 project=row["project"],
                 job_id=job_id,
                 profile=row["profile"],
-                event_type="job.completed",
-                status="completed",
+                event_type=JobEventType.JOB_COMPLETED,
+                phase=JobPhase.COMPLETED,
                 summary=f"{row['profile']} completed",
                 created_at=now,
             )
@@ -497,8 +521,8 @@ class JobStore:
                 project=row["project"],
                 job_id=job_id,
                 profile=row["profile"],
-                event_type="job.failed",
-                status="failed",
+                event_type=JobEventType.JOB_FAILED,
+                phase=JobPhase.FAILED,
                 summary=error,
                 created_at=now,
             )
@@ -623,9 +647,15 @@ class JobStore:
                 (project, clip_id, role, content, utc_now()),
             )
 
-    def append_job_event(self, job_id: str, profile: str, event_type: str,
-                         summary: str, status: str = "",
+    def append_job_event(self, job_id: str, profile: str,
+                         event_type: JobEventType,
+                         summary: str, phase: JobPhase = JobPhase.NONE,
                          detail: dict | None = None) -> None:
+        try:
+            event_type = JobEventType(event_type)
+            phase = JobPhase(phase)
+        except ValueError as exc:
+            raise JobStoreError("job event type or phase is invalid") from exc
         with self._transaction() as connection:
             row = connection.execute(
                 "SELECT project FROM jobs WHERE id = ?", (job_id,)
@@ -638,7 +668,7 @@ class JobStore:
                 job_id=job_id,
                 profile=profile,
                 event_type=event_type,
-                status=status,
+                phase=phase,
                 summary=summary,
                 detail=detail,
             )
@@ -679,15 +709,20 @@ class JobStore:
             for row in rows:
                 try:
                     detail = json.loads(row["detail"] or "{}")
-                except (json.JSONDecodeError, TypeError):
-                    detail = {}
+                    if not isinstance(detail, dict):
+                        raise ValueError("event detail is not an object")
+                    event_type = JobEventType(row["event_type"])
+                    phase = JobPhase(row["status"])
+                except (json.JSONDecodeError, TypeError, ValueError) as exc:
+                    raise JobStoreError(
+                        f"persisted job event {row['id']} is invalid") from exc
                 events.append(JobEvent(
                     id=row["id"],
                     project=row["project"],
                     job_id=row["job_id"],
                     profile=row["profile"],
-                    event_type=row["event_type"],
-                    status=row["status"],
+                    event_type=event_type,
+                    phase=phase,
                     summary=row["summary"],
                     detail=detail,
                     created_at=row["created_at"],

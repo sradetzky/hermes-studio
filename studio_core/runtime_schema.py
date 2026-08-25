@@ -5,7 +5,7 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 
 
-CURRENT_SCHEMA_VERSION = 5
+CURRENT_SCHEMA_VERSION = 6
 LEGACY_CLIP_ERROR = "Legacy active job lacked an exact clip binding"
 
 
@@ -304,6 +304,42 @@ def _migration_5_project_movie_jobs(connection: sqlite3.Connection) -> None:
     """)
 
 
+def _migration_6_typed_job_contracts(connection: sqlite3.Connection) -> None:
+    """Reject unknown kinds and invalid kind/scope bindings on every write."""
+    connection.execute("DROP TRIGGER IF EXISTS jobs_require_active_clip_on_insert")
+    connection.execute("DROP TRIGGER IF EXISTS jobs_require_active_clip_on_update")
+    invalid_contract = """
+        NEW.kind NOT IN ('chat', 'generate', 'export_movie')
+        OR NEW.chat_scope NOT IN ('project', 'clip')
+        OR (NEW.chat_scope = 'clip' AND trim(NEW.clip_id) = '')
+        OR (NEW.kind = 'generate' AND NEW.chat_scope <> 'clip')
+        OR (
+            NEW.kind = 'export_movie'
+            AND (NEW.chat_scope <> 'project' OR trim(NEW.clip_id) <> '')
+        )
+        OR (
+            NEW.chat_scope = 'project'
+            AND NEW.kind NOT IN ('chat', 'export_movie')
+        )
+    """
+    connection.execute(f"""
+        CREATE TRIGGER jobs_validate_contract_on_insert
+        BEFORE INSERT ON jobs
+        WHEN {invalid_contract}
+        BEGIN
+            SELECT RAISE(ABORT, 'job has an invalid typed contract');
+        END
+    """)
+    connection.execute(f"""
+        CREATE TRIGGER jobs_validate_contract_on_update
+        BEFORE UPDATE OF clip_id, kind, chat_scope ON jobs
+        WHEN {invalid_contract}
+        BEGIN
+            SELECT RAISE(ABORT, 'job has an invalid typed contract');
+        END
+    """)
+
+
 Migration = Callable[[sqlite3.Connection], None]
 MIGRATIONS: tuple[Migration, ...] = (
     _migration_1_job_columns,
@@ -311,6 +347,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     _migration_3_exact_active_clips,
     _migration_4_chat_and_session_scopes,
     _migration_5_project_movie_jobs,
+    _migration_6_typed_job_contracts,
 )
 
 

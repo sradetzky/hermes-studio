@@ -8,6 +8,13 @@ import time
 from collections.abc import Callable
 
 from studio_core.hermes_events import HermesSessionEventBridge
+from studio_core.job_contracts import (
+    ChatJobPayload,
+    ChatScope,
+    JobEventType,
+    JobKind,
+    JobPhase,
+)
 from studio_core.job_store import JobStore
 from studio_core.models import Job
 from webapp.config import Settings
@@ -54,7 +61,7 @@ class AgentJobRunner:
 
     @staticmethod
     def scope_clip_id(job: Job) -> str:
-        return job.clip_id if job.chat_scope == "clip" else ""
+        return job.clip_id if job.chat_scope is ChatScope.CLIP else ""
 
     @staticmethod
     def session_source(job: Job) -> str:
@@ -78,15 +85,17 @@ class AgentJobRunner:
         return command
 
     def agent_query(self, job: Job) -> str:
-        if job.kind == "generate":
-            raise ValueError("generation jobs never execute through Hermes chat")
+        if job.kind is not JobKind.CHAT or not isinstance(
+                job.payload, ChatJobPayload):
+            raise ValueError("agent runner requires a validated chat payload")
+        message = job.payload.message
         project_path = self.settings.studio_root / "projects" / job.project
         path_context = (
             "Path roots: use $HERMES_HOME for active-profile Hermes data and "
             "skills; use $HERMES_REAL_HOME for account files such as ComfyUI, "
             "Documents, and repos. Do not derive either root from $HOME or `~`.\n"
         )
-        if job.chat_scope == "project":
+        if job.chat_scope is ChatScope.PROJECT:
             target_context = (
                 f"This migrated project-scope job explicitly targets clip "
                 f"{job.clip_id}.\n"
@@ -102,7 +111,7 @@ class AgentJobRunner:
                 "Work only on project-wide planning, continuity, shared references, "
                 "research, or final assembly. Do not choose or mutate a clip unless "
                 "the user explicitly identifies one.\n\n"
-                f"User request:\n{job.message}"
+                f"User request:\n{message}"
             )
         clip_path = project_path / "clips" / job.clip_id
         context = (
@@ -115,7 +124,7 @@ class AgentJobRunner:
             "Project chat and references are shared. Read or write prompt, settings, "
             "and generation files only under the active clip path.\n\n"
         )
-        return context + f"User request:\n{job.message}"
+        return context + f"User request:\n{message}"
 
     def _prepare_event_bridge(self, bridge: HermesSessionEventBridge) -> bool:
         deadline = time.monotonic() + 2.0
@@ -148,9 +157,9 @@ class AgentJobRunner:
             self.store.append_job_event(
                 job.id,
                 job.profile,
-                "job.prepare",
+                JobEventType.JOB_PREPARE,
                 error,
-                status="failed",
+                phase=JobPhase.FAILED,
             )
             self._fail(job, error)
             return
@@ -167,9 +176,9 @@ class AgentJobRunner:
             self.store.append_job_event(
                 job.id,
                 job.profile,
-                "job.prepare",
+                JobEventType.JOB_PREPARE,
                 error,
-                status="failed",
+                phase=JobPhase.FAILED,
             )
             self._fail(job, error)
             return
@@ -187,17 +196,17 @@ class AgentJobRunner:
             self.store.append_job_event(
                 job.id,
                 job.profile,
-                "job.timeout",
+                JobEventType.JOB_TIMEOUT,
                 f"Exceeded the {self.settings.job_timeout_seconds}s job limit",
-                status="failed",
+                phase=JobPhase.FAILED,
             )
             if self.owns_gpu(job):
                 self.store.append_job_event(
                     job.id,
                     job.profile,
-                    "comfyui.cleanup",
+                    JobEventType.COMFYUI_CLEANUP,
                     "Cancelling ComfyUI work after Studio timeout",
-                    status="running",
+                    phase=JobPhase.RUNNING,
                 )
                 self.cleanup()
             self._fail(

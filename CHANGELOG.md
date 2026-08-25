@@ -32,6 +32,10 @@ preview and production releases.
 - Split FIFO scheduling from process, agent, generation, and movie execution:
   one typed dispatch table now selects cohesive runners, while one process owner
   handles supervised groups, PID-safe recovery, termination, and timeouts
+- Added discriminated job kinds, chat scopes, activity phases/event types, and
+  per-kind payload codecs at the SQLite boundary; invalid persisted contracts
+  now fail closed, schema migration 6 enforces kind/scope combinations, and the
+  manager protocol covers every route submission
 
 ### Fixed
 

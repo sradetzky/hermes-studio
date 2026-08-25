@@ -12,7 +12,13 @@ from pathlib import Path
 from typing import Protocol
 
 from studio_core.comfyui_mcp import cleanup_comfyui, mcp_environment
-from studio_core.generation_archive import parse_generation_job_payload
+from studio_core.job_contracts import (
+    ChatScope,
+    GenerationJobPayload,
+    JobEventType,
+    JobKind,
+    JobPhase,
+)
 from studio_core.projects import (
     next_generation_dir,
     project_path,
@@ -74,10 +80,10 @@ class StudioJobManager:
         self.movie_runner = MovieJobRunner(
             settings, store, self.owner_id, self.process_runner,
             self._job_environment, self._export_job_chat)
-        self._runners: dict[str, JobRunner] = {
-            "chat": self.agent_runner,
-            "generate": self.generation_runner,
-            "export_movie": self.movie_runner,
+        self._runners: dict[JobKind, JobRunner] = {
+            JobKind.CHAT: self.agent_runner,
+            JobKind.GENERATE: self.generation_runner,
+            JobKind.EXPORT_MOVIE: self.movie_runner,
         }
 
     def start(self) -> None:
@@ -224,7 +230,6 @@ class StudioJobManager:
         request = json.dumps(
             payload, sort_keys=True, separators=(",", ":"),
             ensure_ascii=False)
-        parse_generation_job_payload(request)
         return request
 
     def _scheduler_loop(self) -> None:
@@ -307,7 +312,9 @@ class StudioJobManager:
         runner.execute(job)
 
     def _validate_generation_job(self, job: Job) -> dict:
-        request = parse_generation_job_payload(job.message)
+        if not isinstance(job.payload, GenerationJobPayload):
+            raise ValueError("generation runner received the wrong payload type")
+        request = job.payload.contract
         project = project_path(self.settings.studio_root, job.project)
         clip_store = ClipStore()
         manifest = clip_store.describe(project)
@@ -348,7 +355,9 @@ class StudioJobManager:
         return request
 
     def _verify_generation_completion(self, job: Job) -> None:
-        contract = parse_generation_job_payload(job.message)
+        if not isinstance(job.payload, GenerationJobPayload):
+            raise ValueError("generation runner received the wrong payload type")
+        contract = job.payload.contract
         project = project_path(self.settings.studio_root, job.project)
         clip = ClipStore().resolve_clip(project, job.clip_id)
         generation_id = contract["expected_generation_id"]
@@ -396,9 +405,9 @@ class StudioJobManager:
             "HERMES_STUDIO_PROJECT": job.project,
             "HERMES_STUDIO_CLIP": job.clip_id,
             "HERMES_STUDIO_CLIP_PATH": str(clip_path) if clip_path else "",
-            "HERMES_STUDIO_CHAT_SCOPE": job.chat_scope,
+            "HERMES_STUDIO_CHAT_SCOPE": job.chat_scope.value,
             "HERMES_STUDIO_PROFILE": job.profile,
-            "HERMES_STUDIO_JOB_KIND": job.kind,
+            "HERMES_STUDIO_JOB_KIND": job.kind.value,
         })
         return environment
 
@@ -410,7 +419,7 @@ class StudioJobManager:
 
     @staticmethod
     def _scope_clip_id(job: Job) -> str:
-        return job.clip_id if job.chat_scope == "clip" else ""
+        return job.clip_id if job.chat_scope is ChatScope.CLIP else ""
 
     def _export_job_chat(self, job: Job) -> None:
         self._export_chat(job.project, self._scope_clip_id(job))
@@ -439,9 +448,9 @@ class StudioJobManager:
                 self.store.append_job_event(
                     job.id,
                     job.profile,
-                    "job.recovery_blocked",
+                    JobEventType.JOB_RECOVERY_BLOCKED,
                     "Recovery blocked: possible Studio process is still alive",
-                    status="running",
+                    phase=JobPhase.RUNNING,
                 )
             except Exception:
                 log.exception("Could not record blocked recovery for job %s", job.id)
@@ -457,7 +466,7 @@ class StudioJobManager:
     def _job_may_own_gpu(self, job: Job) -> bool:
         return (
             job.profile == self.settings.studio_profile
-            and job.kind != "export_movie"
+            and job.kind is not JobKind.EXPORT_MOVIE
         )
 
     def _cleanup_comfy(self) -> None:

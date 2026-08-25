@@ -10,6 +10,7 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from studio_core.generation_archive import load_running_generation_contract
+from studio_core.job_contracts import JobEventType, JobPhase
 from studio_core.job_store import JobStore
 from webapp.generation_runner import GenerationJobRunner, GenerationRuntime
 
@@ -49,14 +50,15 @@ def main(argv: list[str] | None = None) -> int:
     store = JobStore(args.runtime_root / "studio.db")
 
     def event(
-            event_type: str, summary: str, *, status: str = "running",
+            event_type: JobEventType, summary: str, *,
+            phase: JobPhase = JobPhase.RUNNING,
             detail: dict | None = None) -> None:
         store.append_job_event(
             args.job_id,
             args.profile,
             event_type,
             summary,
-            status=status,
+            phase=phase,
             detail=detail,
         )
 

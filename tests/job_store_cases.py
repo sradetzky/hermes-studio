@@ -111,8 +111,8 @@ class JobStoreTests(WebAppTestCase):
         historical = store.create_chat_job(
             "project", "message", clip_id="clip-001")
         with closing(sqlite3.connect(self.settings.database_path)) as connection:
-            connection.execute("DROP TRIGGER jobs_require_active_clip_on_insert")
-            connection.execute("DROP TRIGGER jobs_require_active_clip_on_update")
+            connection.execute("DROP TRIGGER jobs_validate_contract_on_insert")
+            connection.execute("DROP TRIGGER jobs_validate_contract_on_update")
             connection.execute("ALTER TABLE jobs DROP COLUMN clip_id")
             connection.execute("ALTER TABLE jobs DROP COLUMN chat_scope")
             connection.execute("PRAGMA user_version = 0")
@@ -256,7 +256,7 @@ class JobStoreTests(WebAppTestCase):
             connection.execute(
                 "UPDATE jobs SET status = 'failed' WHERE id = ?", (job.id,))
             with self.assertRaisesRegex(
-                    sqlite3.IntegrityError, "invalid chat scope"):
+                    sqlite3.IntegrityError, "invalid typed contract"):
                 connection.execute(
                     "UPDATE jobs SET status = 'queued', clip_id = '', "
                     "kind = 'generate' WHERE id = ?",
@@ -372,7 +372,7 @@ class JobStoreTests(WebAppTestCase):
         cursor, initial = store.job_events("project")
         self.assertEqual(len(initial), 1)
         store.append_job_event(
-            job.id, "studio", "commentary", "Still working", status="running")
+            job.id, "studio", "commentary", "Still working", phase="running")
         next_cursor, added = store.job_events("project", cursor)
         self.assertEqual([event.summary for event in added], ["Still working"])
         self.assertGreater(next_cursor, cursor)

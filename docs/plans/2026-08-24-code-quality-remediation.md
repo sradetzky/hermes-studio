@@ -373,6 +373,14 @@ the 1,000-line ceiling, and the GPU-cleanup boundary.
 
 ### P1.5 Type job and persistence boundaries
 
+**Status (2026-08-25): complete.** `studio_core.job_contracts` now owns
+discriminated job kinds, chat scopes, activity phases/event types, and typed
+chat/generation/movie payload codecs. `JobStore` validates combinations and
+decodes payloads at enqueue and row-read boundaries, so runners receive domain
+payloads rather than reparsing SQLite text. Ordered schema migration 6 rejects
+unknown or mismatched kind/scope writes without rewriting stable rows. Route
+contract coverage now proves `JobManager` declares every submission method.
+
 **Problem:** Raw `kind`, `scope`, status/event strings and nested dictionaries
 allow runtime drift; the current `JobManager` protocol does not describe all
 route usage.

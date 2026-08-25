@@ -146,6 +146,12 @@ worker leases prevent one live worker from recovering another worker's job,
 while surviving schedulers continuously take over expired peer leases before
 advancing the global queue.
 
+Runtime schema 6 keeps SQLite text and JSON dictionaries inside persistence
+adapters. Jobs are decoded into discriminated kind/scope enums plus typed
+chat, generation, or movie payloads before scheduler dispatch; unknown kinds,
+invalid scope bindings, malformed payloads, and unknown activity phases/events
+fail at enqueue or read boundaries rather than reaching a runner.
+
 The Studio wall-clock limit defaults to 10,800 seconds (override with
 `HERMES_STUDIO_JOB_TIMEOUT_SECONDS`). This deliberately exceeds the H3 runner's
 7,200-second render wait; the old 600-second limit could kill the agent after it

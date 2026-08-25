@@ -221,11 +221,12 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
 - Remediation P1.4 reduced `StudioJobManager` to FIFO, leases, lifecycle, and one
   typed dispatch table; cohesive process, agent, generation, and movie runners
   now own execution, timeout, recovery, event, and cleanup behavior.
+- Remediation P1.5 added discriminated job kinds/scopes/activity phases and
+  per-kind payload codecs at SQLite boundaries; schema migration 6 rejects
+  invalid contracts and the route/manager protocol is statically complete.
 
 ## Next steps
 
-- [ ] Remediation P1: type job and persistence boundaries on the completed
-  runner, direct-generation, and `studio_core` ownership layers.
 - [ ] Remediation P2: extract browser controllers, reconcile stable activity
   nodes, fix follow-latest scrolling, and split behavioral browser scenarios.
 - [ ] Only after the remediation gate passes, add scoped Hermes `clarify`

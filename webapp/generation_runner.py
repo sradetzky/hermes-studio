@@ -22,6 +22,7 @@ from studio_core.generation_archive import (
     archive_outputs,
     parse_generation_job_payload,
 )
+from studio_core.job_contracts import JobEventType, JobPhase
 from studio_core.safe_files import (
     SafeFilesystemError,
     open_regular_file,
@@ -67,10 +68,11 @@ class GenerationJobRunner:
         self.event_callback = event_callback or (lambda *_args, **_kwargs: None)
 
     def _event(
-            self, event_type: str, summary: str, *, status: str = "running",
+            self, event_type: JobEventType, summary: str, *,
+            phase: JobPhase = JobPhase.RUNNING,
             detail: dict[str, Any] | None = None) -> None:
         self.event_callback(
-            event_type, summary, status=status, detail=detail or {})
+            event_type, summary, phase=phase, detail=detail or {})
 
     def _graph_command(
             self, project: str, clip_id: str, contract: dict,
@@ -233,7 +235,8 @@ class GenerationJobRunner:
                 command = self._graph_command(
                     project, clip_id, parsed, graph_path)
                 self._event(
-                    "generation.graph", "Building the exact H3 graph",
+                    JobEventType.GENERATION_GRAPH,
+                    "Building the exact H3 graph",
                     detail={"mode": parsed["settings_manifest"]["mode"]})
                 result = self.command_runner(
                     command,
@@ -250,7 +253,7 @@ class GenerationJobRunner:
                 self._read_graph(graph_path)
 
                 self._event(
-                    "generation.submit",
+                    JobEventType.GENERATION_SUBMIT,
                     "Uploading references and submitting one exact workflow",
                     detail={"reference_count": len(references)})
                 submission = submit_exact_h3_graph(
@@ -269,7 +272,8 @@ class GenerationJobRunner:
                         or not isinstance(prompt_id, str) or not prompt_id):
                     raise RuntimeError("H3 submission returned invalid identifiers")
                 self._event(
-                    "generation.wait", "Waiting for ComfyUI generation",
+                    JobEventType.GENERATION_WAIT,
+                    "Waiting for ComfyUI generation",
                     detail={"prompt_id": prompt_id, "batch_id": batch_id})
                 while True:
                     waited = self.mcp_call(
@@ -290,7 +294,8 @@ class GenerationJobRunner:
                 files = self._output_files(
                     output, batch_id, prompt_id, graph_path)
                 self._event(
-                    "generation.archive", "Archiving verified ComfyUI output",
+                    JobEventType.GENERATION_ARCHIVE,
+                    "Archiving verified ComfyUI output",
                     detail={"prompt_id": prompt_id, "files": files})
                 generation = self.archiver(
                     self.runtime.studio_root,
@@ -316,7 +321,8 @@ class GenerationJobRunner:
         finally:
             try:
                 self._event(
-                    "comfyui.cleanup", "Releasing ComfyUI queue and VRAM",
+                    JobEventType.COMFYUI_CLEANUP,
+                    "Releasing ComfyUI queue and VRAM",
                     detail={"cancel": not completed})
                 cleanup_comfyui(
                     environment,
@@ -386,8 +392,8 @@ class GenerationWorkerRunner:
         except Exception as exc:
             error = f"Generation request validation failed: {exc}"
             self.store.append_job_event(
-                job.id, job.profile, "generation.validation", error,
-                status="failed")
+                job.id, job.profile, JobEventType.GENERATION_VALIDATION, error,
+                phase=JobPhase.FAILED)
             self._fail(job, error)
             return
         try:
@@ -398,9 +404,9 @@ class GenerationWorkerRunner:
             return
         except subprocess.TimeoutExpired:
             self.store.append_job_event(
-                job.id, job.profile, "job.timeout",
+                job.id, job.profile, JobEventType.JOB_TIMEOUT,
                 f"Exceeded the {self.settings.job_timeout_seconds}s job limit",
-                status="failed")
+                phase=JobPhase.FAILED)
             self.cleanup()
             self._fail(
                 job,

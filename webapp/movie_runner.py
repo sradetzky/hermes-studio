@@ -11,6 +11,11 @@ from pathlib import Path
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from studio_core.job_contracts import (
+    JobEventType,
+    JobPhase,
+    MovieExportJobPayload,
+)
 from studio_core.job_store import JobStore
 from studio_core.models import Job
 from studio_core.projects import project_path
@@ -41,13 +46,15 @@ class MovieJobRunner:
         self.environment = environment
         self.export_chat = export_chat
 
-    def command(self, job: Job, project: Path) -> list[str]:
+    def command(self, job: Job, project: Path, contract: dict) -> list[str]:
         return [
             sys.executable,
             str(self.settings.repo / "webapp" / "movie_runner.py"),
             "--project", str(project),
             "--job-id", job.id,
-            "--contract", job.message,
+            "--contract", json.dumps(
+                contract, sort_keys=True, separators=(",", ":"),
+                ensure_ascii=False),
         ]
 
     def _fail(self, job: Job, error: str) -> None:
@@ -57,23 +64,25 @@ class MovieJobRunner:
     def execute(self, job: Job) -> None:
         project = project_path(self.settings.studio_root, job.project)
         try:
-            contract = json.loads(job.message)
+            if not isinstance(job.payload, MovieExportJobPayload):
+                raise ValueError("movie runner received the wrong payload type")
+            contract = job.payload.contract
             MovieStore._validate_contract(contract)
-        except (json.JSONDecodeError, ValueError) as exc:
+        except ValueError as exc:
             self._fail(job, f"Movie export contract is invalid: {exc}")
             return
         self.store.append_job_event(
             job.id,
             job.profile,
-            "movie.export",
+            JobEventType.MOVIE_EXPORT,
             f"Assembling {len(contract['sources'])} selected takes with hard cuts",
-            status="running",
+            phase=JobPhase.RUNNING,
             detail={"mode": contract["assembly"]["mode"]},
         )
         try:
             result = self.process_runner.run(
                 job,
-                self.command(job, project),
+                self.command(job, project, contract),
                 self.environment(job),
             )
         except ProcessCancelled:

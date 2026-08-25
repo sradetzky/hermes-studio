@@ -333,7 +333,7 @@ class StudioManagerTests(WebAppTestCase):
             **_generation_settings_payload(),
         })
         self.assertEqual(payload["expected_generation_id"], "001")
-        with self.assertRaisesRegex(ValueError, "never execute through Hermes"):
+        with self.assertRaisesRegex(ValueError, "validated chat payload"):
             manager.agent_runner.agent_query(job)
         command = manager.generation_runner.command(job)
         self.assertIn("webapp/generation_worker.py", " ".join(command))

@@ -50,8 +50,10 @@ def _generation_settings_payload(**overrides):
     payload.update(overrides)
     return payload
 class PassiveManager:
-    def __init__(self, _settings, store):
+    def __init__(self, settings, store):
         self.store = store
+        self.manager = StudioJobManager(
+            settings, store, cleanup_callback=lambda: None)
 
     def start(self):
         self.store.initialize()
@@ -69,16 +71,33 @@ class PassiveManager:
 
     def submit_generation(self, project, clip_id, prompt_sha256,
                           settings_updated_at):
-        request = json.dumps({
-            "action": "generate-current-prompt",
-            "prompt_sha256": prompt_sha256,
-            "settings_updated_at": settings_updated_at,
-        }, sort_keys=True, separators=(",", ":"))
-        return self.store.create_generation_job(
-            project, request, "studio", clip_id=clip_id)
+        return self.manager.submit_generation(
+            project, clip_id, prompt_sha256, settings_updated_at)
 
     def submit_movie_export(self, project):
-        return self.store.create_movie_export_job(project, "{}")
+        return self.store.create_movie_export_job(project, json.dumps({
+            "schema_version": 1,
+            "action": "export-selected-takes",
+            "sources": [{
+                "clip_id": "clip-001",
+                "clip_title": "Main clip",
+                "generation": "001",
+                "filename": "take.mp4",
+                "size": 1,
+                "sha256": "0" * 64,
+                "probe": {},
+            }],
+            "assembly": {
+                "mode": "stream-copy",
+                "hard_cuts": True,
+                "target": {},
+            },
+            "output": {
+                "id": "movie-001",
+                "filename": "movie.mp4",
+                "provenance": "provenance.json",
+            },
+        }))
 
 
 class WebAppTestCase(unittest.TestCase):
@@ -753,10 +772,15 @@ class AppFactoryTests(WebAppTestCase):
             self.assertEqual(job["profile"], "studio")
             self.assertEqual(job["clip_id"], "clip-001")
             self.assertEqual(job["status"], "queued")
-            self.assertEqual(json.loads(job["message"]), {
-                "action": "generate-current-prompt",
-                **token,
-            })
+            payload = json.loads(job["message"])
+            self.assertEqual(payload["action"], "generate-current-prompt")
+            self.assertEqual(payload["schema_version"], 1)
+            self.assertEqual(payload["prompt_sha256"], token["prompt_sha256"])
+            self.assertEqual(
+                payload["settings_updated_at"], token["settings_updated_at"])
+            self.assertEqual(
+                payload["prompt"], "A complete 5-second H3 generation prompt\n")
+            self.assertEqual(payload["expected_generation_id"], "001")
             chat = client.get(
                 f"/api/project/{project}/clips/clip-001/chat"
             ).json()["messages"]

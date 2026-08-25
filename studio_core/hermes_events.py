@@ -9,6 +9,7 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any, Protocol
 
+from studio_core.job_contracts import JobEventType, JobPhase
 from studio_core.job_store import JobStore
 from studio_core.models import Job
 
@@ -148,9 +149,9 @@ class HermesSessionEventBridge:
                     self.store.append_job_event(
                         self.job.id,
                         self.job.profile,
-                        "profile.connected",
+                        JobEventType.PROFILE_CONNECTED,
                         f"Connected to {self.job.profile} session",
-                        status="running",
+                        phase=JobPhase.RUNNING,
                         detail={"session_id": self.session_id},
                     )
                     self._connected = True
@@ -193,9 +194,9 @@ class HermesSessionEventBridge:
                 self.store.append_job_event(
                     self.job.id,
                     self.job.profile,
-                    "reasoning",
+                    JobEventType.REASONING,
                     visible[:500],
-                    status="running",
+                    phase=JobPhase.RUNNING,
                     detail={"text": visible},
                 )
             content = (row["content"] or "").strip()
@@ -204,9 +205,9 @@ class HermesSessionEventBridge:
                 self.store.append_job_event(
                     self.job.id,
                     self.job.profile,
-                    "commentary",
+                    JobEventType.COMMENTARY,
                     content[:500],
-                    status="running",
+                    phase=JobPhase.RUNNING,
                     detail={"text": content[:4000]},
                 )
             for call_id, tool_name, arguments in calls:
@@ -215,9 +216,9 @@ class HermesSessionEventBridge:
                 self.store.append_job_event(
                     self.job.id,
                     self.job.profile,
-                    "tool.started",
+                    JobEventType.TOOL_STARTED,
                     _tool_summary(tool_name, safe, completed=False),
-                    status="running",
+                    phase=JobPhase.RUNNING,
                     detail={"tool": tool_name, "arguments": safe},
                 )
         elif role == "tool":
@@ -238,9 +239,9 @@ class HermesSessionEventBridge:
             self.store.append_job_event(
                 self.job.id,
                 self.job.profile,
-                "tool.completed",
+                JobEventType.TOOL_COMPLETED,
                 _tool_summary(tool_name, safe, completed=True),
-                status="failed" if failed else "completed",
+                phase=JobPhase.FAILED if failed else JobPhase.COMPLETED,
                 detail={
                     "tool": tool_name,
                     "arguments": safe,

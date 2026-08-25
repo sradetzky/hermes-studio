@@ -248,7 +248,9 @@ project/clip chat scope and exact IDs.
   execution ownership.
 - [x] Measure runtime-event growth and document an explicit durable-retention
   policy with concrete revisit triggers.
-- [ ] Type job kinds/scopes/phases/payloads at persistence boundaries.
+- [x] Type job kinds/scopes/phases/payloads at persistence boundaries, validate
+  per-kind contracts on enqueue/read, and enforce combinations through ordered
+  runtime schema migration 6.
 - [ ] Give conversation/reference/media browser controllers explicit local state,
   reconcile stable activity nodes, fix follow-latest scrolling, and split the
   behavioral Chromium mega-scenario.

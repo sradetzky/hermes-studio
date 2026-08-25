@@ -10,6 +10,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from studio_core.hermes_events import HermesSessionEventBridge
+from studio_core.job_contracts import JobEventType, JobPhase
 from studio_core.job_store import JobStore
 from studio_core.paths import StudioPaths
 from studio_core.projects import clip_path, project_path
@@ -120,9 +121,9 @@ def dispatch_profile(root: Path, project: str, profile: str, task: str,
             store.append_job_event(
                 job_id,
                 profile,
-                "handoff.started",
+                JobEventType.HANDOFF_STARTED,
                 f"Handoff started: {profile}",
-                status="running",
+                phase=JobPhase.RUNNING,
                 detail={"task": task[:500]},
             )
             bridge = bridge_type(
@@ -155,8 +156,9 @@ def dispatch_profile(root: Path, project: str, profile: str, task: str,
                 process.communicate()
                 if store:
                     store.append_job_event(
-                        job_id, profile, "handoff.failed",
-                        f"Handoff timed out after {timeout}s", status="failed")
+                        job_id, profile, JobEventType.HANDOFF_FAILED,
+                        f"Handoff timed out after {timeout}s",
+                        phase=JobPhase.FAILED)
                 raise TimeoutError(
                     f"Studio specialist {profile} timed out after {timeout}s")
             try:
@@ -171,8 +173,8 @@ def dispatch_profile(root: Path, project: str, profile: str, task: str,
         error = stderr.strip() or f"exit code {process.returncode}"
         if store:
             store.append_job_event(
-                job_id, profile, "handoff.failed",
-                f"{profile} failed", status="failed",
+                job_id, profile, JobEventType.HANDOFF_FAILED,
+                f"{profile} failed", phase=JobPhase.FAILED,
                 detail={"error": error[:500]})
         raise RuntimeError(f"{profile} failed ({process.returncode}): {error}")
     reply = stdout.strip()
@@ -187,8 +189,8 @@ def dispatch_profile(root: Path, project: str, profile: str, task: str,
         temp.replace(session_file)
     if store:
         store.append_job_event(
-            job_id, profile, "handoff.completed",
-            f"Handoff completed: {profile}", status="completed",
+            job_id, profile, JobEventType.HANDOFF_COMPLETED,
+            f"Handoff completed: {profile}", phase=JobPhase.COMPLETED,
             detail={"session_id": resolved_session or ""})
     return reply
 
