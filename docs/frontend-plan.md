@@ -45,8 +45,12 @@ no state in the UI that isn't already on disk; minimal dependencies.
 - `conversation-controller.js` — scoped chat context/revisions, incremental
   cursors, jobs/activity, stable event-card reconciliation, and authoritative
   outer/nested follow-latest anchoring
+- `reference-controller.js` — static-reference refresh/rendering, guarded uploads,
+  signature invalidation, and project-context response rejection
 - `media-review.js` / `generation-settings.js` — media review and generation
-  controls; their remaining local-state extraction is tracked by remediation P2.2
+  controls with dialog, operation, readiness, and settings state held locally
+- `shared.js` — workspace identity/context only; module operation and dialog flags
+  stay with their owners
 
 ## Layout (single page)
 

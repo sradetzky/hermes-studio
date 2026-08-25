@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import test from 'node:test';
 
-import {showEmpty} from '../webapp/static/shared.js';
+import {showEmpty, state} from '../webapp/static/shared.js';
 import {updateRefreshStatus} from '../webapp/static/refresh-status.mjs';
 
 class FakeElement {
@@ -98,4 +98,23 @@ test('conversation controller owns incremental activity and viewport state', () 
     /viewport\.following \? element\.scrollHeight : viewport\.scrollTop/,
   );
   assert.doesNotMatch(controller, /card\.replaceChildren/);
+});
+
+test('shared state contains only workspace identity and context', () => {
+  assert.deepEqual(Object.keys(state), [
+    'current',
+    'project',
+    'currentClip',
+    'workspacePane',
+    'projectRevision',
+    'clipRevision',
+    'clips',
+    'projects',
+    'profiles',
+  ]);
+  const references = readFileSync(
+    new URL('../webapp/static/reference-controller.js', import.meta.url), 'utf8');
+  assert.match(references, /let referenceSignature = ''/);
+  assert.match(references, /let uploading = false/);
+  assert.match(references, /refreshReferencePlane/);
 });

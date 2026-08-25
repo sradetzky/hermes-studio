@@ -12,6 +12,14 @@ import {
 } from './frontend-contracts.mjs';
 
 let refreshProject = async () => {};
+let initialized = false;
+
+const generation = {
+  contract: null,
+  options: null,
+  submitting: false,
+  opener: null,
+};
 
 export function generationActionState(
   contract, clipEnabled, jobActive, submitting,
@@ -64,10 +72,10 @@ export function generationRequestPayload(contract) {
 
 function renderGenerationAction() {
   const action = generationActionState(
-    state.generationSettings,
+    generation.contract,
     activeClip()?.enabled ?? null,
     conversationJobActive(),
-    state.generationSubmitting,
+    generation.submitting,
   );
   const button = $('#generate-current-prompt');
   button.disabled = !action.enabled;
@@ -76,7 +84,7 @@ function renderGenerationAction() {
 }
 
 function renderGenerationReadiness(contract) {
-  state.generationSettings = contract;
+  generation.contract = contract;
   const readiness = contract?.readiness || {
     ready: false, status: 'not-configured', reasons: ['Generation settings unavailable'],
     warnings: [], resolution: {}, timing: {},
@@ -122,8 +130,8 @@ function renderGenerationReadiness(contract) {
     details.append(item);
   }
   const actionStatus = $('#generation-action-status');
-  if ((!contract && !state.generationSubmitting)
-      || (!conversationJobActive() && !state.generationSubmitting
+  if ((!contract && !generation.submitting)
+      || (!conversationJobActive() && !generation.submitting
           && actionStatus.textContent === 'Generation queued.')) {
     actionStatus.textContent = '';
   }
@@ -132,15 +140,15 @@ function renderGenerationReadiness(contract) {
 
 async function submitGeneration() {
   const action = generationActionState(
-    state.generationSettings,
+    generation.contract,
     activeClip()?.enabled ?? null,
     conversationJobActive(),
-    state.generationSubmitting,
+    generation.submitting,
   );
   if (!action.enabled) return;
   const context = captureClipContext(state);
-  const contract = state.generationSettings;
-  state.generationSubmitting = true;
+  const contract = generation.contract;
+  generation.submitting = true;
   renderGenerationAction();
   const status = $('#generation-action-status');
   status.textContent = 'Submitting generation request…';
@@ -160,7 +168,7 @@ async function submitGeneration() {
     await refreshProject();
   } finally {
     if (isClipContextCurrent(state, context)) {
-      state.generationSubmitting = false;
+      generation.submitting = false;
       renderGenerationAction();
     }
   }
@@ -168,11 +176,11 @@ async function submitGeneration() {
 
 async function openGenerationSettings(opener = null) {
   if (!state.current || !state.currentClip) return;
-  state.settingsOpener = opener || state.settingsOpener;
+  generation.opener = opener || generation.opener;
   const dialog = $('#generation-settings-dialog');
   const save = $('#generation-settings-save');
   save.disabled = true;
-  state.generationSettingsOptions = null;
+  generation.options = null;
   $('#generation-settings-status').textContent = 'Loading settings…';
   if (!dialog.open) dialog.showModal();
   const context = captureClipContext(state);
@@ -180,8 +188,8 @@ async function openGenerationSettings(opener = null) {
     const contract = await requestJson(
       apiPaths.generationSettings(context.projectId, context.clipId));
     if (!isClipContextCurrent(state, context) || !dialog.open) return;
-    state.generationSettings = contract;
-    state.generationSettingsOptions = contract.options;
+    generation.contract = contract;
+    generation.options = contract.options;
     populateGenerationSettings(contract);
     save.disabled = false;
     $('#generation-settings-status').textContent = '';
@@ -242,7 +250,7 @@ function updateComputedSettings() {
 
 function updateSeedValidity() {
   const input = $('#setting-seed');
-  const maxSeed = state.generationSettingsOptions?.max_seed || MAX_SAFE_SEED;
+  const maxSeed = generation.options?.max_seed || MAX_SAFE_SEED;
   input.setCustomValidity(isSeedWithinRange(input.value.trim(), maxSeed)
     ? '' : `Seed must be decimal digits from 0 to ${maxSeed}`);
 }
@@ -269,7 +277,7 @@ async function saveGenerationSettings(event) {
   if (!form.reportValidity()) return;
   const status = $('#generation-settings-status');
   const save = $('#generation-settings-save');
-  if (save.disabled || !state.generationSettingsOptions) return;
+  if (save.disabled || !generation.options) return;
   save.disabled = true;
   status.textContent = 'Saving settings…';
   const context = captureClipContext(state);
@@ -302,18 +310,31 @@ function applySettingsPreset(mp, steps) {
 
 function closeGenerationSettings(restoreFocus = true) {
   const dialog = $('#generation-settings-dialog');
-  const opener = state.settingsOpener;
-  state.settingsOpener = null;
-  state.generationSettingsOptions = null;
+  const opener = generation.opener;
+  generation.opener = null;
+  generation.options = null;
   $('#generation-settings-save').disabled = true;
   if (dialog.open) dialog.close();
   if (restoreFocus && opener?.isConnected) queueMicrotask(() => opener.focus());
+}
+
+export function rerenderGenerationReadiness() {
+  renderGenerationReadiness(generation.contract);
+}
+
+export function resetGenerationSettings() {
+  closeGenerationSettings(false);
+  generation.contract = null;
+  generation.submitting = false;
+  renderGenerationReadiness(null);
 }
 
 export {closeGenerationSettings, renderGenerationReadiness};
 
 export function initializeGenerationSettings(refresh) {
   refreshProject = refresh;
+  if (initialized) return;
+  initialized = true;
   const dialog = $('#generation-settings-dialog');
   $('#generate-current-prompt').addEventListener('click', submitGeneration);
   $('#edit-generation-settings').addEventListener('click', event =>

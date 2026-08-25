@@ -3,6 +3,7 @@ import {
   conversationJobActive,
   queueConversationJob,
 } from './conversation-controller.js';
+import {invalidateReferences} from './reference-controller.js';
 import {apiPaths} from './api-paths.mjs';
 import {
   captureProjectContext,
@@ -12,6 +13,29 @@ import {
 } from './frontend-contracts.mjs';
 
 let refreshProject = async () => {};
+let initialized = false;
+
+const media = {
+  movieProject: null,
+  movieSubmitting: false,
+  generations: [],
+  filteredGenerations: [],
+  generationDetail: null,
+  selectedGenerationFile: null,
+  generationOpener: null,
+  dialogRevision: 0,
+  dialogContext: null,
+  actioning: false,
+  generationSignature: '',
+};
+
+function dialogContextState() {
+  return {...state, generationDialogRevision: media.dialogRevision};
+}
+
+function isDialogCurrent(context) {
+  return isGenerationDialogContextCurrent(dialogContextState(), context);
+}
 
 export function movieExportState(movieProject, jobActive, submitting) {
   const label = 'Export selected takes as movie';
@@ -95,14 +119,14 @@ function reconcileMovies(movies) {
 
 export function updateMovieExportControls() {
   const action = movieExportState(
-    state.movieProject, conversationJobActive(), state.movieSubmitting);
+    media.movieProject, conversationJobActive(), media.movieSubmitting);
   const button = $('#export-movie');
   button.textContent = action.label;
   button.disabled = !action.enabled;
   $('#movie-readiness').textContent = action.status;
   const blockers = $('#movie-blockers');
   blockers.replaceChildren();
-  for (const blocker of state.movieProject?.readiness?.blocking || []) {
+  for (const blocker of media.movieProject?.readiness?.blocking || []) {
     const item = document.createElement('li');
     item.textContent = `${blocker.title}: ${blocker.reason}`;
     blockers.append(item);
@@ -110,7 +134,7 @@ export function updateMovieExportControls() {
 }
 
 export function renderMovieProject(movieProject) {
-  state.movieProject = movieProject;
+  media.movieProject = movieProject;
   reconcileMovies(movieProject?.movies || []);
   updateMovieExportControls();
 }
@@ -118,9 +142,9 @@ export function renderMovieProject(movieProject) {
 async function exportMovie() {
   const context = captureProjectContext(state);
   const action = movieExportState(
-    state.movieProject, conversationJobActive(), state.movieSubmitting);
+    media.movieProject, conversationJobActive(), media.movieSubmitting);
   if (!action.enabled || !context.projectId) return;
-  state.movieSubmitting = true;
+  media.movieSubmitting = true;
   updateMovieExportControls();
   let failure = '';
   try {
@@ -132,7 +156,7 @@ async function exportMovie() {
     failure = `Export failed: ${error.message}`;
   } finally {
     if (isProjectContextCurrent(state, context)) {
-      state.movieSubmitting = false;
+      media.movieSubmitting = false;
       updateMovieExportControls();
       if (failure) $('#movie-readiness').textContent = failure;
     }
@@ -160,7 +184,7 @@ function generationRecipe(generation) {
 function updateGenerationRecipeFilter() {
   const select = $('#generation-recipe-filter');
   const selected = select.value || 'all';
-  const recipes = [...new Set(state.generations.map(generationRecipe))].sort();
+  const recipes = [...new Set(media.generations.map(generationRecipe))].sort();
   select.replaceChildren();
   const all = document.createElement('option');
   all.value = 'all';
@@ -191,18 +215,18 @@ function generationMatchesFilters(generation) {
 function renderGenerations() {
   const container = $('#gens');
   container.replaceChildren();
-  state.filteredGenerations = state.generations.filter(generationMatchesFilters);
-  $('#generation-count').textContent = state.generations.length
-    ? `${state.filteredGenerations.length}/${state.generations.length}` : '';
-  if (!state.generations.length) {
+  media.filteredGenerations = media.generations.filter(generationMatchesFilters);
+  $('#generation-count').textContent = media.generations.length
+    ? `${media.filteredGenerations.length}/${media.generations.length}` : '';
+  if (!media.generations.length) {
     showEmpty(container, 'none yet');
     return;
   }
-  if (!state.filteredGenerations.length) {
+  if (!media.filteredGenerations.length) {
     showEmpty(container, 'no matching generations');
     return;
   }
-  for (const generation of state.filteredGenerations) {
+  for (const generation of media.filteredGenerations) {
     const mediaItems = generation.media || [];
     const primary = mediaItems.find(item => item.kind === 'video') ||
       mediaItems.find(item => item.kind === 'image') || mediaItems[0];
@@ -276,24 +300,24 @@ function showGenerationLoading(generationId) {
 
 async function openGeneration(generationId, opener = null) {
   const dialog = $('#generation-dialog');
-  state.generationDialogRevision += 1;
-  const context = captureGenerationDialogContext(state, generationId);
-  state.generationDialogContext = context;
-  state.generationOpener = opener || state.generationOpener;
-  state.generationDetail = null;
-  state.selectedGenerationFile = null;
-  state.mediaActioning = false;
+  media.dialogRevision += 1;
+  const context = captureGenerationDialogContext(dialogContextState(), generationId);
+  media.dialogContext = context;
+  media.generationOpener = opener || media.generationOpener;
+  media.generationDetail = null;
+  media.selectedGenerationFile = null;
+  media.actioning = false;
   showGenerationLoading(generationId);
   if (!dialog.open) dialog.showModal();
   try {
     const detail = await requestJson(
       apiPaths.generation(context.projectId, context.clipId, generationId));
-    if (!isGenerationDialogContextCurrent(state, context) || !dialog.open) return;
-    state.generationDetail = detail;
-    state.selectedGenerationFile = detail.media[0]?.name || null;
+    if (!isDialogCurrent(context) || !dialog.open) return;
+    media.generationDetail = detail;
+    media.selectedGenerationFile = detail.media[0]?.name || null;
     renderGenerationDetail();
   } catch (error) {
-    if (!isGenerationDialogContextCurrent(state, context) || !dialog.open) return;
+    if (!isDialogCurrent(context) || !dialog.open) return;
     $('#media-action-status').textContent = `Unable to load: ${error.message}`;
     $('#generation-media').replaceChildren();
     showEmpty($('#generation-media'), 'take unavailable');
@@ -301,7 +325,7 @@ async function openGeneration(generationId, opener = null) {
 }
 
 function renderGenerationDetail() {
-  const detail = state.generationDetail;
+  const detail = media.generationDetail;
   if (!detail) return;
   $('#generation-title').textContent = `Take ${detail.gen}`;
   $('#generation-prompt').textContent = detail.prompt || '—';
@@ -311,11 +335,12 @@ function renderGenerationDetail() {
   for (const item of detail.media) {
     const button = document.createElement('button');
     button.type = 'button';
-    button.className = `media-file ${item.name === state.selectedGenerationFile ? 'active' : ''}`;
+    button.className =
+      `media-file ${item.name === media.selectedGenerationFile ? 'active' : ''}`;
     button.textContent = `${item.kind} · ${item.name}`;
     button.title = item.name;
     button.addEventListener('click', () => {
-      state.selectedGenerationFile = item.name;
+      media.selectedGenerationFile = item.name;
       renderGenerationDetail();
     });
     files.append(button);
@@ -337,13 +362,13 @@ function renderGenerationDetail() {
 }
 
 function selectedGenerationMedia() {
-  return state.generationDetail?.media.find(
-    item => item.name === state.selectedGenerationFile) || null;
+  return media.generationDetail?.media.find(
+    item => item.name === media.selectedGenerationFile) || null;
 }
 
 function renderSelectedGenerationMedia() {
   const item = selectedGenerationMedia();
-  $('#delete-generation').disabled = !state.generationDetail || state.mediaActioning;
+  $('#delete-generation').disabled = !media.generationDetail || media.actioning;
   const stage = $('#generation-media');
   if (!item) {
     stage.replaceChildren();
@@ -356,28 +381,28 @@ function renderSelectedGenerationMedia() {
   }
   delete stage.dataset.empty;
   const mediaKey = JSON.stringify([item.kind, item.url]);
-  let media = stage.querySelector('.detail-media');
-  if (media?.dataset.mediaKey !== mediaKey) {
+  let mediaNode = stage.querySelector('.detail-media');
+  if (mediaNode?.dataset.mediaKey !== mediaKey) {
     if (item.kind === 'video') {
-      media = document.createElement('video');
-      media.controls = true;
-      media.preload = 'metadata';
-      media.playsInline = true;
+      mediaNode = document.createElement('video');
+      mediaNode.controls = true;
+      mediaNode.preload = 'metadata';
+      mediaNode.playsInline = true;
     } else if (item.kind === 'image') {
-      media = document.createElement('img');
-      media.alt = item.name;
+      mediaNode = document.createElement('img');
+      mediaNode.alt = item.name;
     } else {
-      media = document.createElement('audio');
-      media.controls = true;
+      mediaNode = document.createElement('audio');
+      mediaNode.controls = true;
     }
-    media.src = item.url;
-    media.className = 'detail-media';
-    media.dataset.mediaKey = mediaKey;
-    stage.replaceChildren(media);
+    mediaNode.src = item.url;
+    mediaNode.className = 'detail-media';
+    mediaNode.dataset.mediaKey = mediaKey;
+    stage.replaceChildren(mediaNode);
   }
   $('#generation-filename').textContent = `${item.name} · ${formatBytes(item.size)}`;
   const states = [];
-  const selectedTake = isSelectedTake(state.generationDetail.gen, item.name);
+  const selectedTake = isSelectedTake(media.generationDetail.gen, item.name);
   if (item.promoted) states.push('Promoted to final');
   if (item.reference) states.push('Reference');
   if (selectedTake) states.push('Selected take');
@@ -388,10 +413,10 @@ function renderSelectedGenerationMedia() {
   select.textContent = selectedTake ? 'Selected take ✓' : 'Select take';
   promote.textContent = item.promoted ? 'Promoted ✓' : 'Promote to final';
   reference.textContent = item.reference ? 'Reference ✓' : 'Use as reference';
-  select.disabled = state.mediaActioning || item.kind !== 'video' ||
+  select.disabled = media.actioning || item.kind !== 'video' ||
     selectedTake || !activeClip()?.enabled;
-  promote.disabled = state.mediaActioning || item.promoted;
-  reference.disabled = state.mediaActioning || item.reference;
+  promote.disabled = media.actioning || item.promoted;
+  reference.disabled = media.actioning || item.reference;
 }
 
 function formatBytes(size) {
@@ -402,13 +427,13 @@ function formatBytes(size) {
 }
 
 async function performMediaAction(action) {
-  const detail = state.generationDetail;
+  const detail = media.generationDetail;
   const item = selectedGenerationMedia();
-  if (!detail || !item || state.mediaActioning) return;
-  const context = state.generationDialogContext;
+  if (!detail || !item || media.actioning) return;
+  const context = media.dialogContext;
   if (!context || context.generationId !== detail.gen ||
-      !isGenerationDialogContextCurrent(state, context)) return;
-  state.mediaActioning = true;
+      !isDialogCurrent(context)) return;
+  media.actioning = true;
   renderSelectedGenerationMedia();
   const status = $('#media-action-status');
   status.textContent = action === 'promote' ? 'Promoting…' : 'Copying reference…';
@@ -422,40 +447,40 @@ async function performMediaAction(action) {
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({filename: item.name}),
       });
-    if (!isGenerationDialogContextCurrent(state, context)) return;
+    if (!isDialogCurrent(context)) return;
     status.textContent = action === 'promote'
       ? `Promoted as ${response.result.target}`
       : `Reference saved as ${response.result.target}`;
     const refreshed = await requestJson(
       apiPaths.generation(context.projectId, context.clipId, detail.gen));
-    if (!isGenerationDialogContextCurrent(state, context)) return;
-    state.generationDetail = refreshed;
-    state.selectedGenerationFile = item.name;
-    state.generationSignature = '';
-    if (action === 'reference') state.referenceSignature = '';
+    if (!isDialogCurrent(context)) return;
+    media.generationDetail = refreshed;
+    media.selectedGenerationFile = item.name;
+    media.generationSignature = '';
+    if (action === 'reference') invalidateReferences();
     renderGenerationDetail();
     await refreshProject();
   } catch (error) {
-    if (!isGenerationDialogContextCurrent(state, context)) return;
+    if (!isDialogCurrent(context)) return;
     status.textContent = `Action failed: ${error.message}`;
   } finally {
-    if (isGenerationDialogContextCurrent(state, context)) {
-      state.mediaActioning = false;
+    if (isDialogCurrent(context)) {
+      media.actioning = false;
       renderSelectedGenerationMedia();
     }
   }
 }
 
 async function selectTake() {
-  const detail = state.generationDetail;
+  const detail = media.generationDetail;
   const item = selectedGenerationMedia();
   const clip = activeClip();
   if (!detail || !item || item.kind !== 'video' || !clip?.enabled ||
-      state.mediaActioning) return;
-  const context = state.generationDialogContext;
+      media.actioning) return;
+  const context = media.dialogContext;
   if (!context || context.generationId !== detail.gen ||
-      !isGenerationDialogContextCurrent(state, context)) return;
-  state.mediaActioning = true;
+      !isDialogCurrent(context)) return;
+  media.actioning = true;
   renderSelectedGenerationMedia();
   const status = $('#media-action-status');
   status.textContent = 'Selecting take…';
@@ -466,38 +491,38 @@ async function selectTake() {
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({generation: detail.gen, filename: item.name}),
       });
-    if (!isGenerationDialogContextCurrent(state, context)) return;
+    if (!isDialogCurrent(context)) return;
     state.clips = state.clips.map(entry =>
       entry.id === context.clipId ? response.clip : entry);
-    state.generationSignature = '';
+    media.generationSignature = '';
     status.textContent = `Selected ${detail.gen}/${item.name}`;
     renderGenerationDetail();
     renderGenerations();
     await refreshProject();
   } catch (error) {
-    if (!isGenerationDialogContextCurrent(state, context)) return;
+    if (!isDialogCurrent(context)) return;
     status.textContent = `Selection failed: ${error.message}`;
   } finally {
-    if (isGenerationDialogContextCurrent(state, context)) {
-      state.mediaActioning = false;
+    if (isDialogCurrent(context)) {
+      media.actioning = false;
       renderSelectedGenerationMedia();
     }
   }
 }
 
 async function deleteTake() {
-  const detail = state.generationDetail;
+  const detail = media.generationDetail;
   const clip = activeClip();
-  if (!detail || state.mediaActioning) return;
+  if (!detail || media.actioning) return;
   if (!globalThis.confirm(
     takeDeletionMessage(
       detail.gen, clip?.selected_take?.generation === detail.gen),
   )) return;
 
-  const context = state.generationDialogContext;
+  const context = media.dialogContext;
   if (!context || context.generationId !== detail.gen ||
-      !isGenerationDialogContextCurrent(state, context)) return;
-  state.mediaActioning = true;
+      !isDialogCurrent(context)) return;
+  media.actioning = true;
   renderSelectedGenerationMedia();
   const status = $('#media-action-status');
   status.textContent = 'Deleting take…';
@@ -506,58 +531,84 @@ async function deleteTake() {
       apiPaths.generation(context.projectId, context.clipId, detail.gen),
       {method: 'DELETE'},
     );
-    if (!isGenerationDialogContextCurrent(state, context)) return;
+    if (!isDialogCurrent(context)) return;
     state.clips = state.clips.map(entry =>
       entry.id === context.clipId ? response.clip : entry);
-    state.generationSignature = '';
+    media.generationSignature = '';
     closeGenerationDialog(false);
     await refreshProject();
   } catch (error) {
-    if (!isGenerationDialogContextCurrent(state, context)) return;
+    if (!isDialogCurrent(context)) return;
     status.textContent = `Delete failed: ${error.message}`;
   } finally {
-    if (isGenerationDialogContextCurrent(state, context)
-        && state.generationDetail?.gen === detail.gen) {
-      state.mediaActioning = false;
+    if (isDialogCurrent(context)
+        && media.generationDetail?.gen === detail.gen) {
+      media.actioning = false;
       renderSelectedGenerationMedia();
     }
   }
 }
 
 function updateGenerationNavigation() {
-  const current = state.generationDetail?.gen;
-  const index = state.filteredGenerations.findIndex(item => item.gen === current);
-  $('#generation-previous').disabled = index < 0 || index >= state.filteredGenerations.length - 1;
+  const current = media.generationDetail?.gen;
+  const index = media.filteredGenerations.findIndex(item => item.gen === current);
+  $('#generation-previous').disabled =
+    index < 0 || index >= media.filteredGenerations.length - 1;
   $('#generation-next').disabled = index <= 0;
 }
 
 function navigateGeneration(direction) {
-  const current = state.generationDetail?.gen;
-  const index = state.filteredGenerations.findIndex(item => item.gen === current);
+  const current = media.generationDetail?.gen;
+  const index = media.filteredGenerations.findIndex(item => item.gen === current);
   const nextIndex = index + direction;
-  if (index < 0 || nextIndex < 0 || nextIndex >= state.filteredGenerations.length) return;
-  openGeneration(state.filteredGenerations[nextIndex].gen);
+  if (index < 0 || nextIndex < 0 || nextIndex >= media.filteredGenerations.length) return;
+  openGeneration(media.filteredGenerations[nextIndex].gen);
 }
 
 function closeGenerationDialog(restoreFocus = true) {
   const dialog = $('#generation-dialog');
-  const opener = state.generationOpener;
-  if (state.generationDialogContext || dialog.open) {
-    state.generationDialogRevision += 1;
+  const opener = media.generationOpener;
+  if (media.dialogContext || dialog.open) {
+    media.dialogRevision += 1;
   }
-  state.generationDialogContext = null;
-  state.generationDetail = null;
-  state.selectedGenerationFile = null;
-  state.generationOpener = null;
-  state.mediaActioning = false;
+  media.dialogContext = null;
+  media.generationDetail = null;
+  media.selectedGenerationFile = null;
+  media.generationOpener = null;
+  media.actioning = false;
   if (dialog.open) dialog.close();
   if (restoreFocus && opener?.isConnected) queueMicrotask(() => opener.focus());
+}
+
+export function applyGenerations(generations) {
+  const signature = JSON.stringify(generations.generations);
+  if (signature === media.generationSignature) return;
+  media.generationSignature = signature;
+  media.generations = generations.generations;
+  updateGenerationRecipeFilter();
+  renderGenerations();
+}
+
+export function resetMediaReview() {
+  closeGenerationDialog(false);
+  media.generations = [];
+  media.filteredGenerations = [];
+  media.generationSignature = '';
+  $('#gens').replaceChildren();
+  $('#generation-count').textContent = '';
+}
+
+export function resetMovieReview() {
+  media.movieSubmitting = false;
+  renderMovieProject(null);
 }
 
 export {closeGenerationDialog, renderGenerations, updateGenerationRecipeFilter};
 
 export function initializeMediaReview(refresh) {
   refreshProject = refresh;
+  if (initialized) return;
+  initialized = true;
   const dialog = $('#generation-dialog');
   for (const filter of [
     $('#generation-kind-filter'),

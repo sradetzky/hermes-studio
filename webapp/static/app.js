@@ -1,15 +1,18 @@
 import {
   closeGenerationSettings,
   initializeGenerationSettings,
+  rerenderGenerationReadiness,
   renderGenerationReadiness,
+  resetGenerationSettings,
 } from './generation-settings.js';
 import {
+  applyGenerations,
   closeGenerationDialog,
   initializeMediaReview,
   renderMovieProject,
-  renderGenerations,
+  resetMediaReview,
+  resetMovieReview,
   updateMovieExportControls,
-  updateGenerationRecipeFilter,
 } from './media-review.js';
 import {apiPaths} from './api-paths.mjs';
 import {
@@ -28,7 +31,6 @@ import {
 } from './frontend-contracts.mjs';
 import {
   refreshClipPlane,
-  refreshReferencePlane,
 } from './refresh-planes.mjs';
 import {
   conversationJobActive,
@@ -39,12 +41,39 @@ import {
   resetConversation,
   switchConversationScope,
 } from './conversation-controller.js';
+import {
+  initializeReferenceController,
+  refreshReferences,
+  resetReferences,
+} from './reference-controller.js';
 import {updateRefreshStatus} from './refresh-status.mjs';
 import {$, activeClip, requestJson, showEmpty, state} from './shared.js';
 import {
   moveWorkspacePane,
   normalizeWorkspacePane,
 } from './workspace-panes.mjs';
+
+const appState = {
+  comfyQueueRequestRevision: 0,
+  refreshing: false,
+  refreshPending: false,
+  refreshErrors: {},
+  projectMetadataSaving: false,
+  projectMetadataOpener: null,
+  projectMetadataDialogRevision: 0,
+  projectMetadataDialogContext: null,
+};
+
+function projectMetadataContextState() {
+  return {
+    ...state,
+    projectMetadataDialogRevision: appState.projectMetadataDialogRevision,
+  };
+}
+
+function isProjectMetadataContextCurrent(context) {
+  return isProjectDialogContextCurrent(projectMetadataContextState(), context);
+}
 
 async function loadProfiles() {
   const data = await requestJson(apiPaths.profiles);
@@ -133,16 +162,16 @@ function renderComfyQueue(snapshot) {
 }
 
 async function refreshComfyQueue() {
-  state.comfyQueueRequestRevision += 1;
-  const requestRevision = state.comfyQueueRequestRevision;
+  appState.comfyQueueRequestRevision += 1;
+  const requestRevision = appState.comfyQueueRequestRevision;
   try {
     const includeRecent = $('#comfy-queue').open ? '?include_recent=true' : '';
     const snapshot = await requestJson(
       `${apiPaths.comfyQueue}${includeRecent}`, {cache: 'no-store'});
-    if (requestRevision !== state.comfyQueueRequestRevision) return;
+    if (requestRevision !== appState.comfyQueueRequestRevision) return;
     renderComfyQueue(snapshot);
   } catch (error) {
-    if (requestRevision !== state.comfyQueueRequestRevision) return;
+    if (requestRevision !== appState.comfyQueueRequestRevision) return;
     renderComfyQueue({
       available: false, running: [], pending: [], error: error.message,
     });
@@ -227,20 +256,21 @@ function renderProjects() {
 
 function renderProjectMetadataControls() {
   const unavailable = !state.project || conversationJobActive() ||
-    state.projectMetadataSaving;
+    appState.projectMetadataSaving;
   $('#edit-project').disabled = unavailable;
-  $('#project-metadata-display-title').disabled = state.projectMetadataSaving;
-  $('#project-metadata-brief').disabled = state.projectMetadataSaving;
+  $('#project-metadata-display-title').disabled = appState.projectMetadataSaving;
+  $('#project-metadata-brief').disabled = appState.projectMetadataSaving;
   $('#project-metadata-save').disabled = unavailable;
-  $('#project-metadata-cancel').disabled = state.projectMetadataSaving;
-  $('#project-metadata-close').disabled = state.projectMetadataSaving;
+  $('#project-metadata-cancel').disabled = appState.projectMetadataSaving;
+  $('#project-metadata-close').disabled = appState.projectMetadataSaving;
 }
 
 function openProjectMetadata() {
-  if (!state.project || conversationJobActive() || state.projectMetadataSaving) return;
-  state.projectMetadataDialogRevision += 1;
-  state.projectMetadataDialogContext = captureProjectDialogContext(state);
-  state.projectMetadataOpener = document.activeElement;
+  if (!state.project || conversationJobActive() || appState.projectMetadataSaving) return;
+  appState.projectMetadataDialogRevision += 1;
+  appState.projectMetadataDialogContext =
+    captureProjectDialogContext(projectMetadataContextState());
+  appState.projectMetadataOpener = document.activeElement;
   $('#project-metadata-id').textContent = state.project.id;
   $('#project-metadata-display-title').value = state.project.title;
   $('#project-metadata-brief').value = state.project.brief;
@@ -251,12 +281,12 @@ function openProjectMetadata() {
 
 function closeProjectMetadata(restoreFocus = true, force = false) {
   const dialog = $('#project-metadata-dialog');
-  if (state.projectMetadataSaving && !force) return;
-  const opener = state.projectMetadataOpener;
-  state.projectMetadataDialogRevision += 1;
-  state.projectMetadataDialogContext = null;
-  state.projectMetadataSaving = false;
-  state.projectMetadataOpener = null;
+  if (appState.projectMetadataSaving && !force) return;
+  const opener = appState.projectMetadataOpener;
+  appState.projectMetadataDialogRevision += 1;
+  appState.projectMetadataDialogContext = null;
+  appState.projectMetadataSaving = false;
+  appState.projectMetadataOpener = null;
   if (dialog.open) dialog.close();
   if (restoreFocus && opener?.isConnected) {
     opener.focus();
@@ -266,16 +296,16 @@ function closeProjectMetadata(restoreFocus = true, force = false) {
 
 async function saveProjectMetadata(event) {
   event.preventDefault();
-  if (!state.project || conversationJobActive() || state.projectMetadataSaving) return;
-  const context = state.projectMetadataDialogContext;
-  if (!context || !isProjectDialogContextCurrent(state, context)) return;
+  if (!state.project || conversationJobActive() || appState.projectMetadataSaving) return;
+  const context = appState.projectMetadataDialogContext;
+  if (!context || !isProjectMetadataContextCurrent(context)) return;
   const title = $('#project-metadata-display-title').value.trim();
   const brief = $('#project-metadata-brief').value;
   if (!title) {
     $('#project-metadata-status').textContent = 'Display title is required';
     return;
   }
-  state.projectMetadataSaving = true;
+  appState.projectMetadataSaving = true;
   $('#project-metadata-status').textContent = 'Saving project…';
   renderProjectMetadataControls();
   try {
@@ -284,39 +314,29 @@ async function saveProjectMetadata(event) {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({title, brief}),
     });
-    if (!isProjectDialogContextCurrent(state, context)) return;
+    if (!isProjectMetadataContextCurrent(context)) return;
     state.project = response.project;
-    state.projectMetadataSaving = false;
+    appState.projectMetadataSaving = false;
     closeProjectMetadata(false);
     await loadProjects();
     if (!isProjectContextCurrent(state, context)) return;
     await refreshProject();
   } catch (error) {
-    if (isProjectDialogContextCurrent(state, context)) {
+    if (isProjectMetadataContextCurrent(context)) {
       $('#project-metadata-status').textContent = error.message;
     }
   } finally {
-    if (isProjectDialogContextCurrent(state, context)) {
-      state.projectMetadataSaving = false;
+    if (isProjectMetadataContextCurrent(context)) {
+      appState.projectMetadataSaving = false;
       renderProjectMetadataControls();
     }
   }
 }
 
 function resetClipState() {
-  state.generations = [];
-  state.filteredGenerations = [];
-  state.generationDetail = null;
-  state.selectedGenerationFile = null;
-  state.mediaActioning = false;
-  state.generationSettings = null;
-  state.generationSettingsOptions = null;
-  state.generationSubmitting = false;
-  state.generationSignature = '';
   $('#prompt').textContent = '—';
-  $('#gens').replaceChildren();
-  $('#generation-count').textContent = '';
-  renderGenerationReadiness(null);
+  resetMediaReview();
+  resetGenerationSettings();
 }
 
 function renderClips() {
@@ -459,14 +479,11 @@ async function selectProject(projectId) {
   state.currentClip = null;
   state.clipRevision += 1;
   state.clips = [];
-  state.movieProject = null;
-  state.movieSubmitting = false;
-  state.refreshErrors = {};
+  appState.refreshErrors = {};
   resetConversation('clip');
   resetClipState();
-  state.referenceSignature = '';
-  $('#refs').replaceChildren();
-  renderMovieProject(null);
+  resetReferences();
+  resetMovieReview();
   renderProjects();
   renderClips();
   await refreshProject();
@@ -487,7 +504,7 @@ async function createProject() {
 }
 
 function reportRefreshPlane(name, error) {
-  updateRefreshStatus(state.refreshErrors, $('#status'), name, error);
+  updateRefreshStatus(appState.refreshErrors, $('#status'), name, error);
 }
 
 function applyProjectNavigation(project) {
@@ -504,25 +521,16 @@ function applyProjectNavigation(project) {
     resetClipState();
     if (conversationScope() === 'clip') {
       resetConversation('clip');
-      state.refreshPending = true;
+      appState.refreshPending = true;
     }
   }
   if (!state.currentClip && conversationScope() === 'clip') {
     resetConversation('project');
-    state.refreshPending = true;
+    appState.refreshPending = true;
   }
   renderProjects();
   renderClips();
   document.title = `${project.title} — Hermes Studio`;
-}
-
-function applyGenerations(generations) {
-  const generationSignature = JSON.stringify(generations.generations);
-  if (generationSignature === state.generationSignature) return;
-  state.generationSignature = generationSignature;
-  state.generations = generations.generations;
-  updateGenerationRecipeFilter();
-  renderGenerations();
 }
 
 async function refreshNavigationPlane(context) {
@@ -562,11 +570,11 @@ async function refreshNavigationPlane(context) {
 
 async function refreshProject() {
   if (!state.current) return;
-  if (state.refreshing) {
-    state.refreshPending = true;
+  if (appState.refreshing) {
+    appState.refreshPending = true;
     return;
   }
-  state.refreshing = true;
+  appState.refreshing = true;
   const projectContext = captureProjectContext(state);
   const isProjectCurrent = () =>
     isProjectContextCurrent(state, projectContext);
@@ -574,19 +582,7 @@ async function refreshProject() {
     await Promise.all([
       refreshNavigationPlane(projectContext),
       refreshConversation(reportRefreshPlane),
-      refreshReferencePlane({
-        requestJson,
-        paths: apiPaths,
-        context: projectContext,
-        isCurrent: isProjectCurrent,
-        apply: references => {
-          const signature = JSON.stringify(references.references);
-          if (signature === state.referenceSignature) return;
-          state.referenceSignature = signature;
-          renderReferences(references.references);
-        },
-        report: reportRefreshPlane,
-      }),
+      refreshReferences(projectContext, isProjectCurrent, reportRefreshPlane),
       requestJson(apiPaths.movie(projectContext.projectId)).then(movieProject => {
         if (!isProjectCurrent()) return;
         reportRefreshPlane('movie', null);
@@ -596,92 +592,14 @@ async function refreshProject() {
       }),
     ]);
   } finally {
-    state.refreshing = false;
-    if (state.refreshPending) {
-      state.refreshPending = false;
+    appState.refreshing = false;
+    if (appState.refreshPending) {
+      appState.refreshPending = false;
       queueMicrotask(refreshProject);
     }
   }
 }
 
-function renderReferences(references) {
-  const container = $('#refs');
-  container.replaceChildren();
-  for (const filename of references) {
-    const source = `/media/projects/${encodeURIComponent(state.current)}/references/${encodeURIComponent(filename)}`;
-    const card = document.createElement('div');
-    card.className = 'ref-card';
-    if (/\.(png|jpe?g|webp|gif)$/i.test(filename)) {
-      const image = document.createElement('img');
-      image.className = 'thumb';
-      image.loading = 'lazy';
-      image.src = source;
-      image.alt = filename;
-      card.append(image);
-    } else if (/\.(mp4|mov|webm)$/i.test(filename)) {
-      const video = document.createElement('video');
-      video.className = 'thumb';
-      video.src = source;
-      video.muted = true;
-      video.preload = 'metadata';
-      card.append(video);
-    } else {
-      const icon = document.createElement('div');
-      icon.className = 'audio-icon panel';
-      icon.textContent = '♪';
-      card.append(icon);
-    }
-    const name = document.createElement('div');
-    name.className = 'ref-name';
-    name.textContent = filename;
-    name.title = filename;
-    card.append(name);
-    container.append(card);
-  }
-}
-
-function uploadReferences(files) {
-  if (!state.current || !files.length || state.uploading) return Promise.resolve();
-  state.uploading = true;
-  const form = new FormData();
-  for (const file of files) form.append('files', file);
-  const dropText = $('#drop-text');
-  dropText.textContent = `Uploading ${files.length} file${files.length === 1 ? '' : 's'}…`;
-  $('#dropzone').classList.add('uploading');
-  return new Promise((resolve, reject) => {
-    const request = new XMLHttpRequest();
-    request.open('POST', apiPaths.references(state.current));
-    request.upload.onprogress = event => {
-      if (event.lengthComputable) {
-        dropText.textContent = `Uploading… ${Math.round(event.loaded / event.total * 100)}%`;
-      }
-    };
-    request.onload = () => {
-      if (request.status >= 200 && request.status < 300) resolve();
-      else {
-        let message = request.status;
-        try { message = JSON.parse(request.responseText).detail || message; } catch (_) {}
-        reject(new Error(message));
-      }
-    };
-    request.onerror = () => reject(new Error('upload network error'));
-    request.send(form);
-  }).then(async () => {
-    state.referenceSignature = '';
-    $('#status').textContent = '';
-    await refreshProject();
-  }).catch(error => {
-    $('#status').textContent = `upload error: ${error.message}`;
-  }).finally(() => {
-    state.uploading = false;
-    $('#dropzone').classList.remove('uploading');
-    dropText.textContent = 'Drop references here or click to browse';
-    $('#file-input').value = '';
-  });
-}
-
-const dropzone = $('#dropzone');
-const fileInput = $('#file-input');
 for (const button of document.querySelectorAll('[data-workspace-pane]')) {
   button.addEventListener('click', () => setWorkspacePane(button.dataset.workspacePane));
 }
@@ -701,52 +619,32 @@ $('#project-metadata-close').addEventListener(
 $('#project-metadata-cancel').addEventListener(
   'click', () => closeProjectMetadata());
 $('#project-metadata-dialog').addEventListener('cancel', event => {
-  if (state.projectMetadataSaving) event.preventDefault();
+  if (appState.projectMetadataSaving) event.preventDefault();
 });
 $('#project-metadata-dialog').addEventListener('close', () => {
   if ($('#project-metadata-dialog').open) return;
-  const opener = state.projectMetadataOpener;
-  if (state.projectMetadataDialogContext) {
-    state.projectMetadataDialogRevision += 1;
-    state.projectMetadataDialogContext = null;
-    state.projectMetadataSaving = false;
+  const opener = appState.projectMetadataOpener;
+  if (appState.projectMetadataDialogContext) {
+    appState.projectMetadataDialogRevision += 1;
+    appState.projectMetadataDialogContext = null;
+    appState.projectMetadataSaving = false;
   }
   if (opener?.isConnected) opener.focus();
-  state.projectMetadataOpener = null;
+  appState.projectMetadataOpener = null;
   renderProjectMetadataControls();
 });
 initializeGenerationSettings(refreshProject);
 initializeMediaReview(refreshProject);
+initializeReferenceController(refreshProject);
 initializeConversationController({
   refreshProject,
   jobsChanged: () => {
     renderProjectMetadataControls();
     renderClips();
-    renderGenerationReadiness(state.generationSettings);
+    rerenderGenerationReadiness();
     updateMovieExportControls();
   },
 });
-dropzone.addEventListener('click', () => {
-  if (state.current && !state.uploading) fileInput.click();
-  else if (!state.current) alert('Pick a project first');
-});
-dropzone.addEventListener('keydown', event => {
-  if (event.key === 'Enter' || event.key === ' ') dropzone.click();
-});
-for (const eventName of ['dragenter', 'dragover']) {
-  dropzone.addEventListener(eventName, event => {
-    event.preventDefault();
-    if (!state.uploading) dropzone.classList.add('drag');
-  });
-}
-for (const eventName of ['dragleave', 'drop']) {
-  dropzone.addEventListener(eventName, event => {
-    event.preventDefault();
-    dropzone.classList.remove('drag');
-  });
-}
-dropzone.addEventListener('drop', event => uploadReferences(event.dataTransfer.files));
-fileInput.addEventListener('change', () => uploadReferences(fileInput.files));
 $('#comfy-queue').addEventListener('toggle', event => {
   if (event.currentTarget.open) refreshComfyQueue();
 });

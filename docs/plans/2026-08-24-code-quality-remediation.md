@@ -440,6 +440,13 @@ not reset. This completes the existing auto-scroll defect before Phase 6.
 
 ### P2.2 Give references and media explicit controller ownership
 
+**Status (2026-08-25): complete.** `reference-controller.js` now owns reference
+signatures, guarded uploads, rendering, and refresh. Media review, generation
+settings, project-dialog, refresh-coordinator, and queue-request flags are local
+to their owning modules. `shared.js` exposes only workspace identity/context;
+the existing stale-dialog, stable-playback, upload, and settings paths remain
+covered by frontend and real-Chromium tests.
+
 **Files:**
 
 - Create: `webapp/static/reference-controller.js`

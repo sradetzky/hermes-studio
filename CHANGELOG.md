@@ -39,6 +39,9 @@ preview and production releases.
 - Extracted scoped chat, job, and activity ownership into a conversation
   controller that incrementally reconciles stable job/event nodes instead of
   replacing activity subtrees
+- Extracted reference refresh/uploads into a controller and moved media,
+  generation-settings, project-dialog, refresh, and queue-request state out of
+  the shared browser singleton
 
 ### Fixed
 

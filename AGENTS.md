@@ -227,10 +227,13 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
 - Remediation P2.1 extracted scoped conversation ownership, reconciles activity
   cards/events by stable identity, and preserves follow-latest, deliberate
   scroll-away, nested details/scroll, focus, selection, and DOM identity.
+- Remediation P2.2 established explicit reference-controller ownership and made
+  media review, generation settings, project dialog, refresh, and queue request
+  flags module-local; shared browser state now contains workspace context only.
 
 ## Next steps
 
-- [ ] Remediation P2.2–P2.3: extract reference/media state and split behavioral
-  browser scenarios behind a reusable CDP fixture.
+- [ ] Remediation P2.3: split behavioral browser scenarios behind a reusable CDP
+  fixture.
 - [ ] Only after the remediation gate passes, add scoped Hermes `clarify`
   responses and typed previous-selected-take last-frame generation inputs.
