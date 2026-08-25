@@ -541,6 +541,16 @@ source of truth and must propagate every local check failure.
 
 ### P3.1 Add interactive Hermes `clarify` transport
 
+**Status: complete (2026-08-25).** Studio chat now uses Hermes' supported TUI
+gateway JSON-RPC transport. Schema 7 persists strict scoped interaction contracts;
+atomic revision checks guard answers; the browser restores pending requests after
+reload; and `clarify.respond` resumes the same supervised turn. Unit, API, fake-
+gateway, real-Hermes, DOM, and Chromium reload tests cover the four input modes.
+Studio profiles use unlimited Hermes clarify waits under the existing bounded
+outer job supervisor; startup rejects configuration drift, and an unexpected
+`clarify.expire` closes the exact interaction and fails the run instead of
+accepting Hermes' deliberately graceful but non-delivering late RPC response.
+
 **Verified blocker:** A one-shot `hermes chat -Q` subprocess plus read-only
 session projection has no response callback, durable pending-input state, or way
 to resume the exact waiting job. Active-job rules correctly reject disguising an
@@ -561,10 +571,15 @@ control syntax.
 - Explicit `waiting_for_user` job phase without releasing process/job ownership.
 - Dedicated scoped answer endpoint with atomic exactly-once resolution.
 - Conversation controller rendering and submitting the pending interaction.
+- Unlimited inner clarify waits for dedicated Studio profiles, guarded before
+  launch and bounded by the existing job supervisor instead.
+- Structured gateway expiration closes pending or just-answered interactions
+  and fails the run before a late `clarify.respond` can appear successful.
 
 **Acceptance:** Reload/reconnect shows the exact pending request; stale, duplicate,
 wrong-scope, and post-completion answers fail closed; the same waiting run resumes;
-all question modes pass backend, DOM, and Chromium tests.
+all question modes pass backend, DOM, and Chromium tests; no browser-visible
+request can outlive the corresponding Hermes wait.
 
 ### P3.2 Introduce typed generation inputs and previous-take continuity
 

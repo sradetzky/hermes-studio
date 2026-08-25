@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from studio_core.identifiers import validate_clip_id
+from studio_core.interaction_store import close_job_interactions
 from studio_core.job_contracts import (
     ChatScope,
     JobContractError,
@@ -481,6 +482,7 @@ class JobStore:
                     "updated_at = excluded.updated_at",
                     (row["project"], scope_clip_id, row["profile"], session_id, now),
                 )
+            close_job_interactions(connection, job_id, now)
             connection.execute(
                 "UPDATE jobs SET status = 'completed', finished_at = ?, "
                 "error = '', pid = NULL, pid_start_time = NULL WHERE id = ?",
@@ -515,6 +517,7 @@ class JobStore:
                 connection, row["project"], scope_clip_id, job_id, row["message"],
                 "system", f"Studio job failed: {error}", now,
             )
+            close_job_interactions(connection, job_id, now)
             connection.execute(
                 "UPDATE jobs SET status = 'failed', finished_at = ?, "
                 "error = ?, pid = NULL, pid_start_time = NULL WHERE id = ?",

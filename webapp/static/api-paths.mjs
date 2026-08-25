@@ -16,6 +16,15 @@ export const apiPaths = {
   clipChat: (project, clip, after = null) =>
     `/api/project/${encode(project)}/clips/${encode(clip)}/chat` +
     (after === null ? '' : `?after=${encode(after)}`),
+  projectInteraction: project =>
+    `/api/project/${encode(project)}/interaction`,
+  clipInteraction: (project, clip) =>
+    `/api/project/${encode(project)}/clips/${encode(clip)}/interaction`,
+  projectInteractionAnswer: (project, interaction) =>
+    `/api/project/${encode(project)}/interaction/${encode(interaction)}`,
+  clipInteractionAnswer: (project, clip, interaction) =>
+    `/api/project/${encode(project)}/clips/${encode(clip)}/interaction/` +
+    `${encode(interaction)}`,
   references: project => `/api/project/${encode(project)}/references`,
   jobs: project => `/api/project/${encode(project)}/jobs?limit=5`,
   events: (project, after = 0) =>

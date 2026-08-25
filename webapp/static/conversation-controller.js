@@ -4,6 +4,10 @@ import {
   isChatContextCurrent,
 } from './frontend-contracts.mjs';
 import {refreshLivePlane} from './refresh-planes.mjs';
+import {
+  clearInteractionPanel,
+  renderInteractionPanel,
+} from './interaction-form.mjs';
 import {$, activeClip, requestJson, showEmpty, state} from './shared.js';
 
 const FOLLOW_END_THRESHOLD = 80;
@@ -16,6 +20,7 @@ const conversation = {
   activityCursor: 0,
   activityByJob: new Map(),
   jobs: [],
+  interaction: null,
   jobActive: false,
   showActivityDetails: true,
   initialLoad: true,
@@ -91,13 +96,15 @@ function renderJobs(jobs) {
   const latest = jobs[0];
   const active = jobs.find(job => job.status === 'queued' || job.status === 'running');
   conversation.jobActive = Boolean(active);
-  const activityState = active?.status || latest?.status || 'idle';
+  const activityState = active && conversation.interaction
+    ? 'waiting_for_user' : (active?.status || latest?.status || 'idle');
   $('#activity-dot').className =
     `activity-dot ${activityState === 'idle' ? '' : activityState}`;
   const labels = {
     idle: 'Idle',
     queued: 'Studio queued',
     running: 'Studio working…',
+    waiting_for_user: 'Studio is waiting for you',
     completed: 'Last job completed',
     failed: 'Last job failed',
   };
@@ -114,11 +121,13 @@ export function resetConversation(scope = conversation.scope) {
   conversation.chatCursor = 0;
   conversation.activityCursor = 0;
   conversation.activityByJob.clear();
+  conversation.interaction = null;
   conversation.initialLoad = true;
   const chat = $('#chatlog');
   chat.replaceChildren();
   delete chat.dataset.empty;
   $('#status').textContent = '';
+  clearInteractionPanel();
   renderJobs([]);
 }
 
@@ -271,18 +280,20 @@ function renderJobActivity(jobId) {
     return;
   }
   const wasHidden = card.hidden;
-  const lifecycle = [...events].reverse().find(event =>
-    event.event_type.startsWith('job.'));
-  const status = lifecycle?.status || 'running';
+  const latestState = [...events].reverse().find(event =>
+    ['queued', 'running', 'waiting_for_user', 'completed', 'failed']
+      .includes(event.status));
+  const status = latestState?.status || 'running';
   const profiles = [...new Set(events.map(event => event.profile).filter(Boolean))];
   const profile = card.querySelector('.job-activity-summary .profile-badge');
   const statusText = card.querySelector('.job-activity-status');
   profile.textContent = profiles.join(' → ') || 'studio';
   statusText.className = `job-activity-status ${status}`;
-  statusText.textContent = status === 'running' ? 'Working…' : status;
+  statusText.textContent = status === 'running' ? 'Working…' :
+    status === 'waiting_for_user' ? 'Waiting for you' : status;
   if (wasHidden) {
     card.hidden = false;
-    card.open = status === 'running' || status === 'queued';
+    card.open = ['running', 'queued', 'waiting_for_user'].includes(status);
   }
 
   let visible = compactActivityEvents(events);
@@ -323,6 +334,33 @@ function appendActivities(events) {
   restoreViewport(chat, viewport);
 }
 
+async function answerInteraction(interaction, answers) {
+  const context = captureContext();
+  const clipScoped = conversation.scope === 'clip';
+  const path = clipScoped
+    ? apiPaths.clipInteractionAnswer(
+        context.projectId, context.clipId, interaction.id)
+    : apiPaths.projectInteractionAnswer(context.projectId, interaction.id);
+  const result = await requestJson(path, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({revision: interaction.revision, answers}),
+  });
+  if (!isContextCurrent(context) ||
+      conversation.interaction?.id !== interaction.id ||
+      conversation.interaction?.revision !== interaction.revision) return;
+  renderInteraction(result.interaction);
+  await refreshProject();
+}
+
+function renderInteraction(interaction) {
+  conversation.interaction = interaction;
+  renderInteractionPanel(
+    interaction,
+    answers => answerInteraction(interaction, answers));
+  renderJobs(conversation.jobs);
+}
+
 export async function refreshConversation(report) {
   const context = captureContext();
   try {
@@ -341,6 +379,7 @@ export async function refreshConversation(report) {
           conversation.chatCursor = chat.cursor;
         },
         jobs: jobs => renderJobs(jobs.jobs),
+        interaction: result => renderInteraction(result.interaction),
         activity: activity => {
           appendActivities(activity.events);
           conversation.activityCursor = activity.cursor;

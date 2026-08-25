@@ -251,6 +251,7 @@ test('live refresh planes fail and apply independently', async () => {
       requested.push(url);
       if (url.includes('/chat?')) throw new Error('chat unavailable');
       if (url.includes('/jobs?')) return {jobs: ['job']};
+      if (url.endsWith('/interaction')) return {interaction: 'question'};
       return {events: ['activity'], cursor: 12};
     },
     paths: apiPaths,
@@ -261,14 +262,17 @@ test('live refresh planes fail and apply independently', async () => {
       chat: () => applied.push('chat'),
       jobs: value => applied.push(value.jobs[0]),
       activity: value => applied.push(value.events[0]),
+      interaction: value => applied.push(value.interaction),
     },
     report: (name, error) => reported.push([name, error?.message || null]),
   });
 
-  assert.deepEqual(applied.sort(), ['activity', 'job']);
+  assert.deepEqual(applied.sort(), ['activity', 'job', 'question']);
   assert.deepEqual(reported.sort(), [
-    ['activity', null], ['chat', 'chat unavailable'], ['jobs', null],
+    ['activity', null], ['chat', 'chat unavailable'],
+    ['interaction', null], ['jobs', null],
   ]);
   assert.ok(requested.includes('/api/project/project/clips/clip-001/chat?after=4'));
   assert.ok(requested.includes('/api/project/project/clips/clip-001/events?after=8'));
+  assert.ok(requested.includes('/api/project/project/clips/clip-001/interaction'));
 });

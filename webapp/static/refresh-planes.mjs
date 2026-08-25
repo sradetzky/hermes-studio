@@ -19,6 +19,9 @@ export async function refreshLivePlane({
   const activityPath = clipScoped
     ? paths.clipEvents(context.projectId, context.clipId, cursors.activity)
     : paths.events(context.projectId, cursors.activity);
+  const interactionPath = clipScoped
+    ? paths.clipInteraction(context.projectId, context.clipId)
+    : paths.projectInteraction(context.projectId);
   await Promise.all([
     settlePlane(
       'chat', () => requestJson(chatPath),
@@ -30,6 +33,9 @@ export async function refreshLivePlane({
       'activity',
       () => requestJson(activityPath),
       isCurrent, handlers.activity, report),
+    settlePlane(
+      'interaction', () => requestJson(interactionPath),
+      isCurrent, handlers.interaction, report),
   ]);
 }
 

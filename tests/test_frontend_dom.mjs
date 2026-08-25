@@ -86,7 +86,7 @@ test('conversation controller owns incremental activity and viewport state', () 
     new URL('../webapp/static/conversation-controller.js', import.meta.url), 'utf8');
   for (const field of [
     'chatCursor', 'activityCursor', 'activityByJob', 'jobs', 'jobActive',
-    'showActivityDetails',
+    'interaction', 'showActivityDetails',
   ]) {
     assert.doesNotMatch(shared, new RegExp(`\\b${field}:`));
     assert.match(controller, new RegExp(`\\b${field}:`));
@@ -98,6 +98,21 @@ test('conversation controller owns incremental activity and viewport state', () 
     /viewport\.following \? element\.scrollHeight : viewport\.scrollTop/,
   );
   assert.doesNotMatch(controller, /card\.replaceChildren/);
+});
+
+test('clarify UI is scoped, durable, and uses typed answer controls', () => {
+  const html = readFileSync(
+    new URL('../webapp/static/index.html', import.meta.url), 'utf8');
+  const controller = readFileSync(
+    new URL('../webapp/static/conversation-controller.js', import.meta.url), 'utf8');
+  const form = readFileSync(
+    new URL('../webapp/static/interaction-form.mjs', import.meta.url), 'utf8');
+  assert.match(html, /id="interaction-panel"[\s\S]*aria-live="polite" hidden/);
+  assert.match(controller, /clipInteractionAnswer/);
+  assert.match(controller, /conversation\.interaction\?\.revision !== interaction\.revision/);
+  assert.match(form, /question\.multi_select \? 'checkbox' : 'radio'/);
+  assert.match(form, /dataset\.freeText/);
+  assert.match(form, /Submitting answer/);
 });
 
 test('shared state contains only workspace identity and context', () => {

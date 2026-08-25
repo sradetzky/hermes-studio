@@ -5,7 +5,7 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 
 
-CURRENT_SCHEMA_VERSION = 6
+CURRENT_SCHEMA_VERSION = 7
 LEGACY_CLIP_ERROR = "Legacy active job lacked an exact clip binding"
 
 
@@ -89,6 +89,34 @@ ON job_events(project, id);
 
 CREATE INDEX IF NOT EXISTS job_events_job_id
 ON job_events(job_id, id);
+
+CREATE TABLE IF NOT EXISTS interaction_requests (
+    id TEXT PRIMARY KEY,
+    revision INTEGER NOT NULL CHECK (revision > 0),
+    job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+    hermes_request_id TEXT NOT NULL,
+    hermes_session_id TEXT NOT NULL,
+    project TEXT NOT NULL,
+    clip_id TEXT NOT NULL DEFAULT '',
+    chat_scope TEXT NOT NULL CHECK (chat_scope IN ('project', 'clip')),
+    profile TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (
+        status IN ('pending', 'answered', 'resolved', 'closed')
+    ),
+    answer TEXT,
+    created_at TEXT NOT NULL,
+    answered_at TEXT NOT NULL DEFAULT '',
+    resolved_at TEXT NOT NULL DEFAULT '',
+    UNIQUE(job_id, hermes_request_id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS one_open_interaction_per_job
+ON interaction_requests(job_id)
+WHERE status IN ('pending', 'answered');
+
+CREATE INDEX IF NOT EXISTS interactions_scope_status
+ON interaction_requests(project, chat_scope, clip_id, status, created_at);
 
 CREATE TABLE IF NOT EXISTS workers (
     owner_id TEXT PRIMARY KEY,
@@ -340,6 +368,20 @@ def _migration_6_typed_job_contracts(connection: sqlite3.Connection) -> None:
     """)
 
 
+def _migration_7_interaction_requests(connection: sqlite3.Connection) -> None:
+    """Verify the durable interaction table created by the latest base schema."""
+    missing = {
+        "id", "revision", "job_id", "hermes_request_id",
+        "hermes_session_id", "project", "clip_id", "chat_scope",
+        "profile", "payload", "status", "answer", "created_at",
+        "answered_at", "resolved_at",
+    } - _columns(connection, "interaction_requests")
+    if missing:
+        raise RuntimeSchemaError(
+            f"runtime interaction schema is missing columns: {sorted(missing)}"
+        )
+
+
 Migration = Callable[[sqlite3.Connection], None]
 MIGRATIONS: tuple[Migration, ...] = (
     _migration_1_job_columns,
@@ -348,6 +390,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     _migration_4_chat_and_session_scopes,
     _migration_5_project_movie_jobs,
     _migration_6_typed_job_contracts,
+    _migration_7_interaction_requests,
 )
 
 
@@ -376,3 +419,5 @@ def initialize_runtime_schema(connection: sqlite3.Connection) -> None:
         if "clip_id" not in _columns(connection, table):
             raise RuntimeSchemaError(
                 f"runtime {table} schema is missing clip_id")
+    if not _columns(connection, "interaction_requests"):
+        raise RuntimeSchemaError("runtime interaction schema is missing")

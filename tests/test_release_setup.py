@@ -32,6 +32,8 @@ class ReleaseSetupTests(unittest.TestCase):
             self.assertNotIn(obsolete, skill)
         self.assertIn("sole owner of web H3 rendering", soul)
         self.assertIn("Web profile toolsets intentionally exclude ComfyUI/MCP", skill)
+        self.assertIn("use the `clarify` tool", soul)
+        self.assertIn("Web profile jobs include the `clarify` tool", skill)
         self.assertIn("Web profiles do not execute local ComfyUI jobs", illustrator)
         self.assertIn("deterministic worker own web H3 execution", prompt_engineer)
 

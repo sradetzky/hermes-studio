@@ -116,6 +116,28 @@ class StudioPathTests(unittest.TestCase):
             self.assertFalse((
                 profile_home / "profiles/studio/skills/design-studio/SKILL.md"
             ).exists())
+            for profile in (
+                "studio", "studio-storyboarder", "studio-prompt-engineer",
+                "studio-reviewer", "studio-illustrator",
+            ):
+                config = (
+                    fleet / "profiles" / profile / "config.yaml"
+                ).read_text(encoding="utf-8")
+                self.assertIn("clarify_timeout: 0", config)
+            check = subprocess.run(
+                [REPO_ROOT / "scripts/sync-profiles.sh", "--check"],
+                cwd=REPO_ROOT,
+                env={
+                    **os.environ,
+                    "HOME": str(profile_home / "home"),
+                    "HERMES_REAL_HOME": str(root),
+                    "HERMES_HOME": str(profile_home),
+                },
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(check.returncode, 0, check.stdout + check.stderr)
 
     def test_switch_model_reports_exact_changes_and_fails_without_target(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -211,3 +211,81 @@ browserTest(
     })()`), true);
   },
 );
+
+browserTest(
+  'Chromium restores and answers durable clarify after reload',
+  async browser => {
+    let postBody = null;
+    let interaction = {
+      id: 'interaction-browser',
+      revision: 1,
+      job_id: 'job-clarify',
+      project: 'alpha',
+      clip_id: 'clip-001',
+      chat_scope: 'clip',
+      profile: 'studio',
+      status: 'pending',
+      batch: true,
+      questions: [
+        {id: 'pick', question: 'Pick one', choices: ['One', 'Two'],
+          multi_select: false},
+        {id: 'traits', question: 'Pick traits', choices: ['Warm', 'Fast'],
+          multi_select: true},
+        {id: 'notes', question: 'Notes?', choices: [], multi_select: false},
+      ],
+      created_at: '2026-08-25T00:00:00Z',
+      answered_at: '',
+    };
+    browser.intercept(async params => {
+      const url = new URL(params.request.url);
+      if (!url.pathname.endsWith('/interaction') &&
+          !url.pathname.includes('/interaction/')) return false;
+      if (params.request.method === 'GET') {
+        await browser.fulfill(params.requestId, {interaction});
+        return true;
+      }
+      if (params.request.method === 'POST') {
+        postBody = JSON.parse(params.request.postData);
+        interaction = {...interaction, revision: 2, status: 'answered',
+          answers: postBody.answers, answered_at: '2026-08-25T00:01:00Z'};
+        await browser.fulfill(params.requestId, {interaction});
+        return true;
+      }
+      return false;
+    });
+
+    await browser.navigate();
+    await browser.selectProject('Alpha');
+    await browser.waitExpression(
+      `document.querySelector('#interaction-panel:not([hidden])')?.dataset.signature ===
+        'interaction-browser:1:pending'`,
+      'initial pending clarify');
+    await browser.client.send('Page.reload');
+    await browser.waitExpression(
+      `document.querySelectorAll('.proj').length === 2`, 'project list after reload');
+    await browser.selectProject('Alpha');
+    await browser.waitExpression(
+      `document.querySelector('#interaction-panel:not([hidden])')?.dataset.signature ===
+        'interaction-browser:1:pending'`,
+      'restored pending clarify');
+
+    await browser.evaluate(`(() => {
+      const panel = document.querySelector('#interaction-panel');
+      panel.querySelector('[data-question-id="pick"] [data-choice][value="One"]').click();
+      panel.querySelector('[data-question-id="traits"] [data-choice][value="Warm"]').click();
+      panel.querySelector('[data-question-id="traits"] [data-other-text]').value = 'Custom';
+      panel.querySelector('[data-question-id="notes"] [data-free-text]').value = 'No music';
+      panel.querySelector('button[type="submit"]').click();
+    })()`);
+    await browser.waitFor(() => postBody !== null, 'clarify answer POST');
+    assert.deepEqual(postBody, {
+      revision: 1,
+      answers: {pick: 'One', traits: ['Warm', 'Custom'], notes: 'No music'},
+    });
+    await browser.waitExpression(
+      `document.querySelector('#interaction-panel')?.dataset.signature ===
+        'interaction-browser:2:answered' &&
+       document.querySelector('#interaction-panel')?.textContent.includes('Studio is continuing')`,
+      'answered clarify state');
+  },
+);

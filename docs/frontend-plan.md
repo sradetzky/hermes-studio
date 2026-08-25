@@ -26,6 +26,9 @@ no state in the UI that isn't already on disk; minimal dependencies.
   state and ordered SQLite migrations; clip work has a database-enforced exact
   clip id while project chat has an explicit project scope; exact pre-contract
   generation metadata is accepted only for immutable terminal history
+- `interaction_store.py` / `interactions.py` — strict durable clarify requests,
+  exact scope/session identity, atomic revision-guarded answers, and terminal
+  closure of abandoned requests
 - `reference_store.py` — synchronous staging + atomic no-overwrite publication
 - `clip_store.py` — canonical project title/brief publication, exact clip
   resolution, ordering, enabled state, and selected-take provenance
@@ -46,6 +49,8 @@ no state in the UI that isn't already on disk; minimal dependencies.
 - `conversation-controller.js` — scoped chat context/revisions, incremental
   cursors, jobs/activity, stable event-card reconciliation, and authoritative
   outer/nested follow-latest anchoring
+- `interaction-form.mjs` — typed single-select, multi-select, batch, and
+  free-text clarify rendering with exact-answer submission
 - `reference-controller.js` — static-reference refresh/rendering, guarded uploads,
   signature invalidation, and project-context response rejection
 - `media-review.js` / `generation-settings.js` — media review and generation
@@ -99,7 +104,7 @@ instead of rebuilding the DOM or resetting playback.
   the panel body and bounded long-prompt view scroll independently.
 - On phones, the ComfyUI queue popover anchors to both header edges and uses a
   viewport-relative maximum height instead of overflowing from the status label.
-- Polling every 2s runs project navigation, scoped chat/jobs/activity,
+- Polling every 2s runs project navigation, scoped chat/jobs/activity/interaction,
   references, and clip/generation requests as independently failing planes.
   Project, clip, and chat-scope revision tokens reject stale responses; media
   DOM rebuilds only when listing signatures change,
@@ -128,6 +133,8 @@ instead of rebuilding the DOM or resetting playback.
 | POST | `/api/project/{id}/movie` | enqueue one explicit immutable selected-take movie export job |
 | GET/POST | `/api/project/{id}/chat?after=N` | project-level chat/session for cross-clip direction |
 | GET/POST | `/api/project/{id}/clips/{clip}/chat?after=N` | independent exact-clip chat/session |
+| GET/POST | `/api/project/{id}/interaction[/{request}]` | inspect/answer the exact project-chat clarify request |
+| GET/POST | `/api/project/{id}/clips/{clip}/interaction[/{request}]` | inspect/answer the exact clip-chat clarify request |
 | GET | `/api/jobs/{id}` | one job's queued/running/completed/failed state |
 | GET | `/api/project/{id}/jobs` | recent project activity |
 | GET | `/api/project/{id}/events?after=N` | project-chat profile/tool/reasoning activity |
@@ -143,15 +150,18 @@ The project and nested clip chat endpoints accept an explicit allowlisted
 profile, reject a second active project job, return HTTP 202 immediately, and
 atomically insert the user turn, scope-bound job, and queued activity event.
 Clip chat additionally validates the exact clip.
-A lifespan-owned scheduler atomically claims
-the oldest global job and spawns
-`hermes -p PROFILE [-r SESSION] chat -Q -t TOOLSETS --source studio-web -q "<msg>"`.
+A lifespan-owned scheduler atomically claims the oldest global job and spawns a
+supervised Studio adapter around Hermes' supported TUI gateway JSON-RPC
+transport. The adapter creates or resumes the exact stored Hermes session,
+submits the turn, and consumes structured `clarify.request`, `message.complete`,
+and RPC response frames without scraping terminal presentation.
 The command carries the exact project/chat scope and, for clip work, exact clip
 ID and path in its query and environment. Runtime sessions are keyed by
 project + scope + profile, so one clip never resumes another clip's conversation.
 Schema-v4 migration keeps every existing transcript, job, activity row, and
 Hermes session in Project history; it does not guess or duplicate clip history.
-The orchestrator receives `all`; specialists receive fixed minimal toolsets.
+The orchestrator and specialists receive fixed minimal toolsets including
+`clarify`; web chat still excludes ComfyUI/MCP execution.
 While the subprocess remains isolated, the manager reads that profile's
 structured SQLite session messages to project model reasoning, commentary and
 tool start/completion records into `job_events`; formatted terminal output is
@@ -163,7 +173,25 @@ worker leases prevent one live worker from recovering another worker's job,
 while surviving schedulers continuously take over expired peer leases before
 advancing the global queue.
 
-Runtime schema 6 keeps SQLite text and JSON dictionaries inside persistence
+Schema 7 persists one open interaction per running chat job. Each request binds
+the exact project, clip scope, profile, job, stored Hermes session, gateway
+request id, normalized question contract, status, and revision. Answer writes
+validate every question and compare-and-set the pending revision in one SQLite
+transaction; duplicate, stale, wrong-scope, wrong-job, and terminal-job answers
+fail closed. While pending, activity exposes `waiting_for_user`. Browser reloads
+read back the same request; a valid answer is sent through `clarify.respond` and
+the suspended turn continues to `message.complete` in the same gateway process.
+Studio profile deployment pins `agent.clarify_timeout: 0`, so Hermes never
+auto-skips a browser question while the outer supervised job remains live; the
+worker rejects bounded or missing profile configuration before opening a gateway
+session. The adapter pumps gateway events while polling durable answers instead
+of blocking inside the event callback. If a drifted/upstream gateway nevertheless
+emits `clarify.expire`, the exact pending or accepted interaction closes and the
+job fails rather than accepting a late no-op response. Cancellation, outer job
+timeout, shutdown, or stale recovery likewise terminates the supervised process
+and closes any still-open interaction rather than manufacturing a new run.
+
+Runtime schema 7 keeps SQLite text and JSON dictionaries inside persistence
 adapters. Jobs are decoded into discriminated kind/scope enums plus typed
 chat, generation, or movie payloads before scheduler dispatch; unknown kinds,
 invalid scope bindings, malformed payloads, and unknown activity phases/events
@@ -173,8 +201,8 @@ The Studio wall-clock limit defaults to 10,800 seconds (override with
 `HERMES_STUDIO_JOB_TIMEOUT_SECONDS`). This deliberately exceeds the H3 runner's
 7,200-second render wait; the old 600-second limit could kill the agent after it
 had queued a valid render and then trigger the mandatory global ComfyUI cleanup.
-Only failures of the GPU-owning `studio` profile invoke that cleanup—specialist
-profile failures never interrupt ComfyUI.
+Only exact deterministic generation jobs invoke that cleanup—ordinary Studio or
+specialist chat failures never interrupt ComfyUI.
 
 `design_studio.py dispatch-profile` provides serialized orchestrator handoffs to
 storyboarder, prompt-engineer, reviewer and illustrator profiles. Each keeps a

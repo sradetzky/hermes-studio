@@ -51,9 +51,18 @@ preview and production releases.
 - Split the monolithic Chromium regression into five independently named
   playback, dialog, chat, queue-ordering, and conversation-scroll scenarios on
   one reusable disposable-app/CDP harness
+- Rewired web profile chat from Hermes one-shot CLI execution to the supported
+  structured gateway transport, with durable scoped `clarify` requests,
+  revision-guarded single/multi/batch/free-text answers, reload recovery, and
+  continuation of the same suspended Hermes run
 
 ### Fixed
 
+- Prevented web clarification cards from outliving Hermes' internal 10-minute
+  wait: Studio profiles now use an unlimited inner clarify wait under the bounded
+  job supervisor, startup fails closed on config drift, and gateway expiration
+  closes pending or just-answered interactions instead of reporting a late
+  `clarify.respond` no-op as resumed
 - Unified account, Hermes fleet/profile, and ComfyUI path resolution across the
   webapp, CLI, profile sync, and model switcher so profile-isolated `$HOME` values
   cannot create nested fleet paths or redirect account-owned resources

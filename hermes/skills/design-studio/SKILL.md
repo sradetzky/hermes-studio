@@ -181,3 +181,9 @@ cursor, Studio session, and specialist sessions. Dispatch and `append-chat`
 inherit `HERMES_STUDIO_CHAT_SCOPE`/`HERMES_STUDIO_CLIP` inside web jobs; manual
 calls can pass `--clip`. References remain project-shared; prompts, settings,
 takes, and take selection remain clip-local. See PLAN.md Phase 3.
+
+Web profile jobs include the `clarify` tool. Use it for blocking user decisions
+rather than returning a plain-text question: the web app persists the exact
+question against the current project/clip/profile/job/Hermes session, validates
+one scoped answer, and resumes the same suspended run. Keep questions minimal;
+never infer another clip or replace an unanswered decision with a guess.

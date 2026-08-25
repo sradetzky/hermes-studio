@@ -266,9 +266,11 @@ project/clip chat scope and exact IDs.
   VRAM cleanup, and desktop/narrow Chromium rendering.
 
 ### Phase 6 – Interaction and continuity additions (planned after Phase 5.5)
-- [ ] Make Hermes `clarify` requests actionable in the web app: render the exact
+- [x] Make Hermes `clarify` requests actionable in the web app: render the exact
   single-select, multi-select, or free-text question for the bound job/session
   and submit the response without losing project/clip scope or revision safety.
+  Dedicated Studio profiles use no inner clarify deadline; gateway expiration
+  closes the interaction and fails the run rather than accepting a no-op answer.
 - [ ] In a clip's References view, offer **Use previous selected take's last
   frame** only when the immediately preceding clip has a valid selected video
   take. Bind the derived frame to that exact source clip/take in the immutable

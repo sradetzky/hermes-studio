@@ -19,6 +19,13 @@ from studio_core.projects import (
     ClipStoreError,
     TakeNotFoundError,
 )
+from studio_core.interaction_store import (
+    InteractionConflictError,
+    InteractionNotFoundError,
+    InteractionStore,
+    InteractionStoreError,
+)
+from studio_core.job_contracts import ChatScope
 from webapp.comfy_queue import ComfyQueueClient
 from webapp.config import Settings
 from webapp.generation_settings_store import (
@@ -117,12 +124,23 @@ class GenerateIn(BaseModel):
     settings_updated_at: str = Field(min_length=1, max_length=64)
 
 
+class InteractionAnswerIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    revision: int = Field(ge=1)
+    answers: dict[str, str | list[str]]
+
+
 def _settings(request: Request) -> Settings:
     return request.app.state.settings
 
 
 def _store(request: Request) -> JobStore:
     return request.app.state.job_store
+
+
+def _interactions(request: Request) -> InteractionStore:
+    return request.app.state.interaction_store
 
 
 def _manager(request: Request) -> StudioJobManager:
@@ -164,6 +182,14 @@ def _raise_media_review_error(exc: MediaReviewError) -> NoReturn:
 def _raise_clip_store_error(exc: ClipStoreError) -> NoReturn:
     if isinstance(exc, (ClipNotFoundError, TakeNotFoundError)):
         raise HTTPException(404, str(exc))
+    raise HTTPException(400, str(exc))
+
+
+def _raise_interaction_error(exc: InteractionStoreError) -> NoReturn:
+    if isinstance(exc, InteractionNotFoundError):
+        raise HTTPException(404, str(exc))
+    if isinstance(exc, InteractionConflictError):
+        raise HTTPException(409, str(exc))
     raise HTTPException(400, str(exc))
 
 
@@ -540,6 +566,59 @@ def upload_references(request: Request, project_id: str,
     except ReferenceStoreError as exc:
         raise HTTPException(400, str(exc))
     return {"references": [item.to_dict() for item in saved]}
+
+
+@router.get("/api/project/{project_id}/interaction")
+def get_project_interaction(request: Request, project_id: str):
+    project = resolve_project(request, project_id)
+    try:
+        interaction = _interactions(request).open_for_scope(
+            project.name, ChatScope.PROJECT)
+    except InteractionStoreError as exc:
+        _raise_interaction_error(exc)
+    return {"interaction": interaction.to_dict() if interaction else None}
+
+
+@router.post("/api/project/{project_id}/interaction/{interaction_id}")
+def answer_project_interaction(request: Request, project_id: str,
+                               interaction_id: str,
+                               body: InteractionAnswerIn):
+    project = resolve_project(request, project_id)
+    try:
+        interaction = _interactions(request).answer(
+            interaction_id, body.revision, project.name,
+            ChatScope.PROJECT, "", body.answers)
+    except InteractionStoreError as exc:
+        _raise_interaction_error(exc)
+    return {"interaction": interaction.to_dict()}
+
+
+@router.get("/api/project/{project_id}/clips/{clip_id}/interaction")
+def get_clip_interaction(request: Request, project_id: str, clip_id: str):
+    project = resolve_project(request, project_id)
+    resolve_clip(request, project, clip_id)
+    try:
+        interaction = _interactions(request).open_for_scope(
+            project.name, ChatScope.CLIP, clip_id)
+    except InteractionStoreError as exc:
+        _raise_interaction_error(exc)
+    return {"interaction": interaction.to_dict() if interaction else None}
+
+
+@router.post(
+    "/api/project/{project_id}/clips/{clip_id}/interaction/{interaction_id}")
+def answer_clip_interaction(request: Request, project_id: str, clip_id: str,
+                            interaction_id: str,
+                            body: InteractionAnswerIn):
+    project = resolve_project(request, project_id)
+    resolve_clip(request, project, clip_id)
+    try:
+        interaction = _interactions(request).answer(
+            interaction_id, body.revision, project.name,
+            ChatScope.CLIP, clip_id, body.answers)
+    except InteractionStoreError as exc:
+        _raise_interaction_error(exc)
+    return {"interaction": interaction.to_dict()}
 
 
 @router.post("/api/project/{project_id}/chat", status_code=202)

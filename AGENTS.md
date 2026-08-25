@@ -246,8 +246,13 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
   60-second call cap, source-versus-executed prompt hash conflation, and safe
   archival through the configured ComfyUI-root symlink. A real 832x480 web H3
   job then archived with authoritative provenance, empty queue, and VRAM cleanup.
+- Phase 6 P3.1 replaced one-shot web chat with Hermes' structured gateway,
+  persists exact scoped clarify requests and atomic answers in schema 7, restores
+  them after browser reload, and resumes the same suspended run. A real Hermes
+  single-select checkpoint returned the chosen answer through that exact path;
+  Studio profiles now disable Hermes' inner clarify deadline, while structured
+  expiry events close stale cards and fail the run instead of accepting a no-op.
 
 ## Next steps
 
-- [ ] Add scoped Hermes `clarify`
-  responses and typed previous-selected-take last-frame generation inputs.
+- [ ] Add typed previous-selected-take last-frame generation inputs.

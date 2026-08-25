@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import re
 import subprocess
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -25,11 +26,11 @@ log = logging.getLogger(__name__)
 SESSION_RE = re.compile(r"session_id:\s*([A-Za-z0-9_-]+)")
 CommandBuilder = Callable[[Job, str | None], list[str]]
 PROFILE_TOOLSETS = {
-    "studio": "file,terminal,vision,web,skills",
-    "studio-storyboarder": "file,terminal,skills",
-    "studio-prompt-engineer": "file,terminal,skills",
-    "studio-reviewer": "file,terminal,vision,skills",
-    "studio-illustrator": "file,terminal,skills",
+    "studio": "file,terminal,vision,web,skills,clarify",
+    "studio-storyboarder": "file,terminal,skills,clarify",
+    "studio-prompt-engineer": "file,terminal,skills,clarify",
+    "studio-reviewer": "file,terminal,vision,skills,clarify",
+    "studio-illustrator": "file,terminal,skills,clarify",
 }
 
 
@@ -65,20 +66,29 @@ class AgentJobRunner:
         return f"studio-web:{job.id}"
 
     def default_command(self, job: Job, session_id: str | None) -> list[str]:
-        command = [self.settings.hermes_command, "-p", job.profile]
-        if session_id and re.fullmatch(r"[A-Za-z0-9_-]+", session_id):
-            command += ["-r", session_id]
-        toolsets = PROFILE_TOOLSETS.get(job.profile, "file,terminal,skills")
-        command += [
-            "chat",
-            "-Q",
-            "-t",
-            toolsets,
-            "--source",
-            self.session_source(job),
-            "-q",
-            self.agent_query(job),
+        gateway_python = (
+            self.settings.hermes_root / "hermes-agent" / "venv" / "bin" / "python"
+        )
+        command = [
+            sys.executable,
+            str(self.settings.repo / "scripts" / "hermes_studio_agent.py"),
+            "--gateway-python", str(gateway_python),
+            "--database", str(self.settings.database_path),
+            "--job-id", job.id,
+            "--profile", job.profile,
+            "--profile-home", str(
+                self.settings.hermes_root / "profiles" / job.profile),
+            "--project", job.project,
+            "--clip-id", job.clip_id,
+            "--chat-scope", job.chat_scope.value,
+            "--source", self.session_source(job),
+            "--cwd", str(self.settings.repo),
+            "--toolsets", PROFILE_TOOLSETS.get(
+                job.profile, "file,terminal,skills,clarify"),
+            "--prompt", self.agent_query(job),
         ]
+        if session_id and re.fullmatch(r"[A-Za-z0-9_-]+", session_id):
+            command += ["--session-id", session_id]
         return command
 
     def agent_query(self, job: Job) -> str:

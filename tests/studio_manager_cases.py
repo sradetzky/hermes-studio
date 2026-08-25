@@ -285,11 +285,13 @@ class StudioManagerTests(WebAppTestCase):
             clip_id="clip-002")
         command = manager.agent_runner.default_command(job, None)
         self.assertEqual(
-            command[command.index("-t") + 1], "file,terminal,skills")
+            command[command.index("--toolsets") + 1],
+            "file,terminal,skills,clarify")
         self.assertNotIn("all", command)
+        self.assertTrue(command[1].endswith("scripts/hermes_studio_agent.py"))
         self.assertEqual(
             command[command.index("--source") + 1], f"studio-web:{job.id}")
-        query = command[command.index("-q") + 1]
+        query = command[command.index("--prompt") + 1]
         self.assertIn("Project ID: project", query)
         self.assertIn("Active clip ID: clip-002", query)
         self.assertIn("/projects/project/clips/clip-002", query)
@@ -306,9 +308,9 @@ class StudioManagerTests(WebAppTestCase):
             "project", "plan", profile="studio", clip_id="clip-001")
 
         command = manager.agent_runner.default_command(job, None)
-        toolsets = command[command.index("-t") + 1]
+        toolsets = command[command.index("--toolsets") + 1]
 
-        self.assertEqual(toolsets, "file,terminal,vision,web,skills")
+        self.assertEqual(toolsets, "file,terminal,vision,web,skills,clarify")
         self.assertNotIn("all", command)
         self.assertNotIn("comfyui", toolsets)
         self.assertFalse(manager._job_owns_gpu(job))

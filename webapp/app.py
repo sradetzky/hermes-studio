@@ -17,6 +17,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from studio_core.projects import studio_root
 from studio_core.projects import ClipStore
+from studio_core.interaction_store import InteractionStore
 from webapp.comfy_queue import ComfyQueueClient
 from webapp.config import Settings
 from webapp.generation_settings_store import GenerationSettingsStore
@@ -53,6 +54,7 @@ def create_app(settings: Settings | None = None,
     async def lifespan(application: FastAPI):
         studio_root(str(settings.studio_root))
         store = JobStore(settings.database_path)
+        interactions = InteractionStore(settings.database_path)
         references = ReferenceStore(settings)
         media_reviews = MediaReviewStore()
         generation_settings = GenerationSettingsStore(settings)
@@ -61,6 +63,7 @@ def create_app(settings: Settings | None = None,
         comfy_queue = ComfyQueueClient(settings.comfy_url)
         manager = manager_factory(settings, store)
         application.state.job_store = store
+        application.state.interaction_store = interactions
         application.state.reference_store = references
         application.state.media_review_store = media_reviews
         application.state.generation_settings_store = generation_settings

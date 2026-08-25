@@ -18,6 +18,11 @@ MODE="${1:-sync}"
 }
 
 drift=0
+HERMES_BIN="${HERMES_BIN:-$(command -v hermes || true)}"
+[[ -n "$HERMES_BIN" ]] || {
+  echo "Hermes CLI is unavailable" >&2
+  exit 1
+}
 
 sync_file() {
   local source="$1" target="$2"
@@ -38,6 +43,31 @@ sync_file() {
   printf 'updated %s\n' "$target"
 }
 
+sync_clarify_timeout() {
+  local profile="$1" live="$2" current
+  current="$(HERMES_HOME="$live" "$HERMES_BIN" \
+    config get agent.clarify_timeout 2>/dev/null || true)"
+  if [[ "$current" == "0" || "$current" == "0.0" || "$current" == -* ]]; then
+    printf 'ok      %s (agent.clarify_timeout=0)\n' "$live/config.yaml"
+    return
+  fi
+  if [[ "$MODE" == "--check" ]]; then
+    printf 'DRIFT   %s (agent.clarify_timeout must be 0, got %s)\n' \
+      "$live/config.yaml" "${current:-unreadable}"
+    drift=1
+    return
+  fi
+  HERMES_HOME="$live" "$HERMES_BIN" \
+    config set agent.clarify_timeout 0 >/dev/null
+  current="$(HERMES_HOME="$live" "$HERMES_BIN" \
+    config get agent.clarify_timeout)"
+  [[ "$current" == "0" || "$current" == "0.0" || "$current" == -* ]] || {
+    echo "could not configure unlimited clarify for $profile" >&2
+    exit 1
+  }
+  printf 'updated %s (agent.clarify_timeout=0)\n' "$live/config.yaml"
+}
+
 profiles=(
   studio
   studio-storyboarder
@@ -55,6 +85,7 @@ for profile in "${profiles[@]}"; do
   sync_file "$ROOT/hermes/profiles/$profile/SOUL.md" "$live/SOUL.md"
   sync_file "$ROOT/hermes/skills/design-studio/SKILL.md" \
             "$live/skills/design-studio/SKILL.md"
+  sync_clarify_timeout "$profile" "$live"
 done
 
 sync_file "$ROOT/hermes/skills/krea2-images/SKILL.md" \

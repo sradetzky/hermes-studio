@@ -33,6 +33,7 @@ class JobPhase(StrEnum):
     NONE = ""
     QUEUED = "queued"
     RUNNING = "running"
+    WAITING_FOR_USER = "waiting_for_user"
     COMPLETED = "completed"
     FAILED = "failed"
 
@@ -53,6 +54,10 @@ class JobEventType(StrEnum):
     HANDOFF_STARTED = "handoff.started"
     HANDOFF_COMPLETED = "handoff.completed"
     HANDOFF_FAILED = "handoff.failed"
+    INTERACTION_REQUESTED = "interaction.requested"
+    INTERACTION_ANSWERED = "interaction.answered"
+    INTERACTION_RESUMED = "interaction.resumed"
+    INTERACTION_EXPIRED = "interaction.expired"
     GENERATION_VALIDATION = "generation.validation"
     GENERATION_GRAPH = "generation.graph"
     GENERATION_SUBMIT = "generation.submit"
