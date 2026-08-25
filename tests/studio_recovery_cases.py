@@ -1,37 +1,16 @@
-import json
-import multiprocessing
 import os
-import signal
-import shutil
 import sqlite3
 import subprocess
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor
-from contextlib import closing
 from dataclasses import replace
-from pathlib import Path
-from threading import Barrier, Event, Thread
-from unittest.mock import patch
-
-from fastapi.testclient import TestClient
 
 from scripts import design_studio as ds
-from webapp.generation_settings_store import GenerationSettingsStore
-from webapp.generation_runner import GenerationJobRunner, GenerationRuntime
-from studio_core.hermes_events import HermesSessionEventBridge
-from studio_core.job_store import JobStore, JobStoreError
+from studio_core.job_store import JobStore
 from studio_core.models import JobStatus
-from webapp.project_jobs import project_job_guard
 from webapp.process_runner import SupervisedProcessRunner, process_start_time
-from studio_core.runtime_schema import CURRENT_SCHEMA_VERSION, LEGACY_CLIP_ERROR
-from studio_core import safe_files
 from webapp.studio_manager import StudioJobManager
-from tests.webapp_test_support import (
-    WebAppTestCase,
-    create_job_in_process as _create_job_in_process,
-    generation_settings_payload as _generation_settings_payload,
-)
+from tests.webapp_test_support import WebAppTestCase
 
 
 class StudioRecoveryTests(WebAppTestCase):

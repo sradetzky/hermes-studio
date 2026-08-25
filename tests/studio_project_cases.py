@@ -1,24 +1,20 @@
 import json
-import hashlib
 import os
-import shutil
-import sqlite3
 import subprocess
 import sys
 import tempfile
 import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import closing, redirect_stdout
+from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from scripts import design_studio as ds
-from scripts import krea2_image
 from scripts.krea2_image import parse_loras
-from studio_core import projects as clip_store, safe_files
+from studio_core import projects as clip_store
 from studio_core.projects import ClipStore, ClipStoreError
 from studio_core.job_store import JobStore
 
