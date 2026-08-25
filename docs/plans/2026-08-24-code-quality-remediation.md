@@ -403,6 +403,13 @@ matches every route call.
 
 ### P2.1 Extract the conversation controller and fix scroll anchoring
 
+**Status (2026-08-25): complete.** `conversation-controller.js` now owns scoped
+chat revisions/cursors, jobs, activity, and viewport policy. Activity cards and
+event rows reconcile by persisted identity without replacing existing details.
+Deferred real-Chromium updates prove initial and follow-latest pinning, deliberate
+scroll-away preservation, and stable open state, nested scroll, focus/selection,
+and node identity.
+
 **Problems:** `app.js` coordinates chat, activity, jobs, navigation and refresh
 planes over shared mutable state. `renderJobActivity` replaces activity subtrees,
 losing nested open/scroll state and changing outer scroll height. Appending a new

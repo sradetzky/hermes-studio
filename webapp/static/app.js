@@ -19,20 +19,26 @@ import {
   queuePresentation,
 } from './comfy-queue.mjs';
 import {
-  captureChatContext,
   captureClipContext,
   captureProjectDialogContext,
   captureProjectContext,
-  isChatContextCurrent,
   isClipContextCurrent,
   isProjectDialogContextCurrent,
   isProjectContextCurrent,
 } from './frontend-contracts.mjs';
 import {
   refreshClipPlane,
-  refreshLivePlane,
   refreshReferencePlane,
 } from './refresh-planes.mjs';
+import {
+  conversationJobActive,
+  conversationScope,
+  ensureConversationScope,
+  initializeConversationController,
+  refreshConversation,
+  resetConversation,
+  switchConversationScope,
+} from './conversation-controller.js';
 import {updateRefreshStatus} from './refresh-status.mjs';
 import {$, activeClip, requestJson, showEmpty, state} from './shared.js';
 import {
@@ -220,7 +226,8 @@ function renderProjects() {
 }
 
 function renderProjectMetadataControls() {
-  const unavailable = !state.project || state.jobActive || state.projectMetadataSaving;
+  const unavailable = !state.project || conversationJobActive() ||
+    state.projectMetadataSaving;
   $('#edit-project').disabled = unavailable;
   $('#project-metadata-display-title').disabled = state.projectMetadataSaving;
   $('#project-metadata-brief').disabled = state.projectMetadataSaving;
@@ -230,7 +237,7 @@ function renderProjectMetadataControls() {
 }
 
 function openProjectMetadata() {
-  if (!state.project || state.jobActive || state.projectMetadataSaving) return;
+  if (!state.project || conversationJobActive() || state.projectMetadataSaving) return;
   state.projectMetadataDialogRevision += 1;
   state.projectMetadataDialogContext = captureProjectDialogContext(state);
   state.projectMetadataOpener = document.activeElement;
@@ -259,7 +266,7 @@ function closeProjectMetadata(restoreFocus = true, force = false) {
 
 async function saveProjectMetadata(event) {
   event.preventDefault();
-  if (!state.project || state.jobActive || state.projectMetadataSaving) return;
+  if (!state.project || conversationJobActive() || state.projectMetadataSaving) return;
   const context = state.projectMetadataDialogContext;
   if (!context || !isProjectDialogContextCurrent(state, context)) return;
   const title = $('#project-metadata-display-title').value.trim();
@@ -312,53 +319,6 @@ function resetClipState() {
   renderGenerationReadiness(null);
 }
 
-function renderChatScope() {
-  const clip = activeClip();
-  const clipScoped = state.chatScope === 'clip';
-  const clipTab = $('#clip-chat-scope');
-  const projectTab = $('#project-chat-scope');
-  clipTab.disabled = !clip;
-  clipTab.textContent = clip ? `Clip · ${clip.title}` : 'Clip';
-  clipTab.classList.toggle('active', clipScoped);
-  clipTab.setAttribute('aria-selected', String(clipScoped));
-  projectTab.classList.toggle('active', !clipScoped);
-  projectTab.setAttribute('aria-selected', String(!clipScoped));
-  $('#chat-scope-help').textContent = clipScoped
-    ? `Independent conversation for ${clip?.id || 'this clip'}`
-    : 'Project-wide direction and cross-clip continuity';
-  $('#active-clip-label').textContent = clipScoped
-    ? (clip ? `Clip chat · ${clip.id}` : 'Clip chat')
-    : 'Project chat';
-  $('#active-clip-label').title = clipScoped ? (clip?.title || '')
-    : 'Project-wide conversation';
-  $('#chatinput').placeholder = clipScoped
-    ? 'Message this clip agent…' : 'Message the project agent…';
-  const unavailable = !state.current || (clipScoped && !clip);
-  $('#chatinput').disabled = state.jobActive || unavailable;
-  $('#send-button').disabled = state.jobActive || unavailable;
-  $('#profile-select').disabled = state.jobActive || unavailable;
-}
-
-function resetChatState() {
-  state.chatRevision += 1;
-  state.chatRequestRevision += 1;
-  state.chatCursor = 0;
-  state.activityCursor = 0;
-  state.activityByJob = {};
-  $('#chatlog').replaceChildren();
-  delete $('#chatlog').dataset.empty;
-  $('#status').textContent = '';
-  renderChatScope();
-}
-
-async function switchChatScope(scope) {
-  if (scope === state.chatScope ||
-      (scope === 'clip' && !activeClip())) return;
-  state.chatScope = scope;
-  resetChatState();
-  await refreshProject();
-}
-
 function renderClips() {
   const navigation = $('#clips');
   navigation.replaceChildren();
@@ -393,36 +353,36 @@ function renderClips() {
   }
   const clip = activeClip();
   const index = state.clips.findIndex(entry => entry.id === state.currentClip);
-  $('#new-clip').disabled = !state.current || state.jobActive;
-  $('#rename-clip').disabled = !clip || state.jobActive;
-  $('#move-clip-up').disabled = !clip || index <= 0 || state.jobActive;
+  const jobActive = conversationJobActive();
+  $('#new-clip').disabled = !state.current || jobActive;
+  $('#rename-clip').disabled = !clip || jobActive;
+  $('#move-clip-up').disabled = !clip || index <= 0 || jobActive;
   $('#move-clip-down').disabled = !clip || index < 0 ||
-    index >= state.clips.length - 1 || state.jobActive;
-  $('#toggle-clip').disabled = !clip || state.jobActive;
+    index >= state.clips.length - 1 || jobActive;
+  $('#toggle-clip').disabled = !clip || jobActive;
   $('#toggle-clip').textContent = clip?.enabled ? 'Disable' : 'Enable';
-  renderChatScope();
+  ensureConversationScope();
 }
 
 async function selectClip(clipId) {
   if (!state.clips.some(clip => clip.id === clipId)) return;
   setWorkspacePane('chat');
   if (clipId === state.currentClip) {
-    await switchChatScope('clip');
+    await switchConversationScope('clip');
     return;
   }
   closeGenerationDialog(false);
   closeGenerationSettings(false);
   state.currentClip = clipId;
   state.clipRevision += 1;
-  state.chatScope = 'clip';
-  resetChatState();
+  resetConversation('clip');
   resetClipState();
   renderClips();
   await refreshProject();
 }
 
 async function runClipAction(action) {
-  if (!state.current || state.jobActive) return;
+  if (!state.current || conversationJobActive()) return;
   try {
     $('#status').textContent = 'Updating clip…';
     await action();
@@ -445,8 +405,7 @@ async function createClip() {
       });
     state.currentClip = created.clip.id;
     state.clipRevision += 1;
-    state.chatScope = 'clip';
-    resetChatState();
+    resetConversation('clip');
     resetClipState();
   });
 }
@@ -499,18 +458,15 @@ async function selectProject(projectId) {
   state.projectRevision += 1;
   state.currentClip = null;
   state.clipRevision += 1;
-  state.chatScope = 'clip';
   state.clips = [];
-  state.jobs = [];
   state.movieProject = null;
   state.movieSubmitting = false;
   state.refreshErrors = {};
-  resetChatState();
+  resetConversation('clip');
   resetClipState();
   state.referenceSignature = '';
   $('#refs').replaceChildren();
   renderMovieProject(null);
-  renderActivity([]);
   renderProjects();
   renderClips();
   await refreshProject();
@@ -546,14 +502,13 @@ function applyProjectNavigation(project) {
     closeGenerationDialog(false);
     closeGenerationSettings(false);
     resetClipState();
-    if (state.chatScope === 'clip') {
-      resetChatState();
+    if (conversationScope() === 'clip') {
+      resetConversation('clip');
       state.refreshPending = true;
     }
   }
-  if (!state.currentClip && state.chatScope === 'clip') {
-    state.chatScope = 'project';
-    resetChatState();
+  if (!state.currentClip && conversationScope() === 'clip') {
+    resetConversation('project');
     state.refreshPending = true;
   }
   renderProjects();
@@ -613,32 +568,12 @@ async function refreshProject() {
   }
   state.refreshing = true;
   const projectContext = captureProjectContext(state);
-  const chatContext = captureChatContext(state);
   const isProjectCurrent = () =>
     isProjectContextCurrent(state, projectContext);
-  const isChatCurrent = () => isChatContextCurrent(state, chatContext);
   try {
     await Promise.all([
       refreshNavigationPlane(projectContext),
-      refreshLivePlane({
-        requestJson,
-        paths: apiPaths,
-        context: chatContext,
-        cursors: {chat: state.chatCursor, activity: state.activityCursor},
-        isCurrent: isChatCurrent,
-        handlers: {
-          chat: chat => {
-            appendMessages(chat.messages);
-            state.chatCursor = chat.cursor;
-          },
-          jobs: jobs => renderActivity(jobs.jobs),
-          activity: activity => {
-            appendActivities(activity.events);
-            state.activityCursor = activity.cursor;
-          },
-        },
-        report: reportRefreshPlane,
-      }),
+      refreshConversation(reportRefreshPlane),
       refreshReferencePlane({
         requestJson,
         paths: apiPaths,
@@ -668,159 +603,6 @@ async function refreshProject() {
     }
   }
 }
-
-function appendMessages(messages) {
-  const chat = $('#chatlog');
-  const shouldScroll = chat.scrollHeight - chat.scrollTop - chat.clientHeight < 80;
-  if (!messages.length && state.chatCursor === 0 && !chat.children.length) {
-    showEmpty(chat, state.chatScope === 'clip'
-      ? 'Start this clip conversation…'
-      : 'Project history and cross-clip direction live here…');
-    return;
-  }
-  if (messages.length && chat.dataset.empty) {
-    chat.replaceChildren();
-    delete chat.dataset.empty;
-  }
-  for (const message of messages) {
-    const row = document.createElement('div');
-    row.className = 'chat-row';
-    if (message.job_id) row.dataset.jobId = message.job_id;
-    const role = document.createElement('span');
-    role.className = `role-${message.role} font-semibold`;
-    role.textContent = message.role === 'user' ? 'you' : (message.profile || message.role);
-    row.append(role, document.createTextNode(` ${message.content || ''}`));
-    chat.append(row);
-    if (message.job_id && message.role === 'user') {
-      ensureActivityCard(message.job_id, row);
-    }
-  }
-  if (messages.length && shouldScroll) chat.scrollTop = chat.scrollHeight;
-}
-
-function ensureActivityCard(jobId, afterRow = null) {
-  const chat = $('#chatlog');
-  let card = chat.querySelector(`[data-activity-job="${jobId}"]`);
-  if (!card) {
-    card = document.createElement('details');
-    card.className = 'job-activity';
-    card.dataset.activityJob = jobId;
-    card.hidden = true;
-    chat.append(card);
-  }
-  if (afterRow && afterRow.nextElementSibling !== card) afterRow.after(card);
-  renderJobActivity(jobId);
-  return card;
-}
-
-function appendActivities(events) {
-  if (!events.length) return;
-  const chat = $('#chatlog');
-  const shouldScroll = chat.scrollHeight - chat.scrollTop - chat.clientHeight < 80;
-  const changed = new Set();
-  for (const event of events) {
-    const group = state.activityByJob[event.job_id] || [];
-    if (!group.some(existing => existing.id === event.id)) group.push(event);
-    state.activityByJob[event.job_id] = group;
-    changed.add(event.job_id);
-  }
-  for (const jobId of changed) {
-    ensureActivityCard(jobId);
-    renderJobActivity(jobId);
-  }
-  if (shouldScroll) chat.scrollTop = chat.scrollHeight;
-}
-
-function compactActivityEvents(events) {
-  const pending = new Map();
-  const pairedStarts = new Set();
-  for (const event of events) {
-    if (event.event_type === 'tool.started') {
-      const key = `${event.profile}:${event.detail?.tool || event.summary}`;
-      const queue = pending.get(key) || [];
-      queue.push(event.id);
-      pending.set(key, queue);
-    } else if (event.event_type === 'tool.completed') {
-      const key = `${event.profile}:${event.detail?.tool || event.summary}`;
-      const queue = pending.get(key) || [];
-      const started = queue.shift();
-      if (started !== undefined) pairedStarts.add(started);
-      pending.set(key, queue);
-    }
-  }
-  return events.filter(event => !pairedStarts.has(event.id));
-}
-
-function renderJobActivity(jobId) {
-  const card = $('#chatlog').querySelector(`[data-activity-job="${jobId}"]`);
-  if (!card) return;
-  const events = state.activityByJob[jobId] || [];
-  if (!events.length) {
-    card.hidden = true;
-    return;
-  }
-  const previousOpen = card.open;
-  const lifecycle = [...events].reverse().find(event =>
-    event.event_type.startsWith('job.'));
-  const status = lifecycle?.status || 'running';
-  const profiles = [...new Set(events.map(event => event.profile).filter(Boolean))];
-  const summary = document.createElement('summary');
-  summary.className = 'job-activity-summary';
-  const profile = document.createElement('span');
-  profile.className = 'profile-badge';
-  profile.textContent = profiles.join(' → ') || 'studio';
-  const statusText = document.createElement('span');
-  statusText.className = `job-activity-status ${status}`;
-  statusText.textContent = status === 'running' ? 'Working…' : status;
-  summary.append(profile, statusText);
-
-  const list = document.createElement('div');
-  list.className = 'job-event-list';
-  let visible = compactActivityEvents(events);
-  if (!state.showActivityDetails) {
-    visible = visible.filter(event =>
-      !event.event_type.startsWith('tool.') || event.event_type === 'tool.started');
-  }
-  for (const event of visible) {
-    const item = document.createElement('div');
-    item.className = `job-event ${event.status || ''}`;
-    const badge = document.createElement('span');
-    badge.className = 'profile-badge compact';
-    badge.textContent = event.profile;
-    const icon = document.createElement('span');
-    icon.className = 'job-event-icon';
-    icon.textContent = event.event_type === 'reasoning' ? '◇' :
-      event.status === 'failed' ? '×' :
-      event.event_type === 'tool.started' ? '…' : '✓';
-    if (event.event_type === 'reasoning' || event.event_type === 'commentary') {
-      const reasoning = document.createElement('details');
-      reasoning.className = 'reasoning-event';
-      const heading = document.createElement('summary');
-      heading.textContent = event.event_type === 'reasoning' ? 'Thinking' : 'Commentary';
-      const text = document.createElement('pre');
-      text.textContent = event.detail?.text || event.summary;
-      reasoning.append(heading, text);
-      item.append(icon, badge, reasoning);
-    } else {
-      const text = document.createElement('span');
-      text.className = 'job-event-text';
-      text.textContent = event.summary;
-      item.append(icon, badge, text);
-      if (event.detail?.duration !== undefined) {
-        const duration = document.createElement('span');
-        duration.className = 'job-event-duration';
-        duration.textContent = `${event.detail.duration}s`;
-        item.append(duration);
-      }
-    }
-    list.append(item);
-  }
-  card.replaceChildren(summary, list);
-  card.hidden = false;
-  card.open = status === 'running' || status === 'queued' || previousOpen;
-}
-
-
 
 function renderReferences(references) {
   const container = $('#refs');
@@ -855,63 +637,6 @@ function renderReferences(references) {
     name.title = filename;
     card.append(name);
     container.append(card);
-  }
-}
-
-function renderActivity(jobs) {
-  state.jobs = jobs;
-  const latest = jobs[0];
-  const active = jobs.find(job => job.status === 'queued' || job.status === 'running');
-  state.jobActive = Boolean(active);
-  const activityState = active?.status || latest?.status || 'idle';
-  $('#activity-dot').className = `activity-dot ${activityState === 'idle' ? '' : activityState}`;
-  const labels = {
-    idle: 'Idle',
-    queued: 'Studio queued',
-    running: 'Studio working…',
-    completed: 'Last job completed',
-    failed: 'Last job failed',
-  };
-  $('#activity-text').textContent = labels[activityState] || activityState;
-  $('#activity').title = latest?.error || latest?.message || 'Studio activity';
-  renderProjectMetadataControls();
-  renderClips();
-  renderGenerationReadiness(state.generationSettings);
-  updateMovieExportControls();
-}
-
-
-async function sendChat(event) {
-  event.preventDefault();
-  const input = $('#chatinput');
-  const message = input.value.trim();
-  const clipScoped = state.chatScope === 'clip';
-  if (!message || !state.current || (clipScoped && !state.currentClip)) {
-    alert(clipScoped ? 'Pick a project and clip first' : 'Pick a project first');
-    return;
-  }
-  state.chatRequestRevision += 1;
-  const context = captureChatContext(state);
-  input.value = '';
-  $('#status').textContent = 'studio is thinking…';
-  try {
-    const job = await requestJson(
-      clipScoped
-        ? apiPaths.clipChat(context.projectId, context.clipId)
-        : apiPaths.projectChat(context.projectId), {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({message, profile: $('#profile-select').value || 'studio'}),
-      });
-    if (!isChatContextCurrent(state, context)) return;
-    $('#status').textContent = '';
-    renderActivity([job, ...state.jobs.filter(item => item.id !== job.id)]);
-    await refreshProject();
-  } catch (error) {
-    if (isChatContextCurrent(state, context)) {
-      if (!input.value) input.value = message;
-      $('#status').textContent = `error: ${error.message}`;
-    }
   }
 }
 
@@ -970,9 +695,6 @@ $('#rename-clip').addEventListener('click', renameClip);
 $('#move-clip-up').addEventListener('click', () => moveClip(-1));
 $('#move-clip-down').addEventListener('click', () => moveClip(1));
 $('#toggle-clip').addEventListener('click', toggleClip);
-$('#clip-chat-scope').addEventListener('click', () => switchChatScope('clip'));
-$('#project-chat-scope').addEventListener('click', () => switchChatScope('project'));
-$('#chat-form').addEventListener('submit', sendChat);
 $('#project-metadata-form').addEventListener('submit', saveProjectMetadata);
 $('#project-metadata-close').addEventListener(
   'click', () => closeProjectMetadata());
@@ -995,12 +717,14 @@ $('#project-metadata-dialog').addEventListener('close', () => {
 });
 initializeGenerationSettings(refreshProject);
 initializeMediaReview(refreshProject);
-$('#activity-detail-toggle').addEventListener('click', () => {
-  state.showActivityDetails = !state.showActivityDetails;
-  const toggle = $('#activity-detail-toggle');
-  toggle.textContent = state.showActivityDetails ? 'Details on' : 'Details off';
-  toggle.setAttribute('aria-pressed', String(state.showActivityDetails));
-  for (const jobId of Object.keys(state.activityByJob)) renderJobActivity(jobId);
+initializeConversationController({
+  refreshProject,
+  jobsChanged: () => {
+    renderProjectMetadataControls();
+    renderClips();
+    renderGenerationReadiness(state.generationSettings);
+    updateMovieExportControls();
+  },
 });
 dropzone.addEventListener('click', () => {
   if (state.current && !state.uploading) fileInput.click();

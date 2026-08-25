@@ -1,4 +1,8 @@
 import {$, activeClip, requestJson, showEmpty, state} from './shared.js';
+import {
+  conversationJobActive,
+  queueConversationJob,
+} from './conversation-controller.js';
 import {apiPaths} from './api-paths.mjs';
 import {
   captureProjectContext,
@@ -91,7 +95,7 @@ function reconcileMovies(movies) {
 
 export function updateMovieExportControls() {
   const action = movieExportState(
-    state.movieProject, state.jobActive, state.movieSubmitting);
+    state.movieProject, conversationJobActive(), state.movieSubmitting);
   const button = $('#export-movie');
   button.textContent = action.label;
   button.disabled = !action.enabled;
@@ -114,7 +118,7 @@ export function renderMovieProject(movieProject) {
 async function exportMovie() {
   const context = captureProjectContext(state);
   const action = movieExportState(
-    state.movieProject, state.jobActive, state.movieSubmitting);
+    state.movieProject, conversationJobActive(), state.movieSubmitting);
   if (!action.enabled || !context.projectId) return;
   state.movieSubmitting = true;
   updateMovieExportControls();
@@ -122,8 +126,7 @@ async function exportMovie() {
   try {
     const job = await requestJson(apiPaths.movie(context.projectId), {method: 'POST'});
     if (!isProjectContextCurrent(state, context)) return;
-    state.jobs = [job, ...state.jobs.filter(item => item.id !== job.id)];
-    state.jobActive = true;
+    queueConversationJob(job);
     await refreshProject();
   } catch (error) {
     failure = `Export failed: ${error.message}`;

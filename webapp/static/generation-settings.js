@@ -1,4 +1,8 @@
 import {$, activeClip, requestJson, state} from './shared.js';
+import {
+  conversationJobActive,
+  queueConversationJob,
+} from './conversation-controller.js';
 import {apiPaths} from './api-paths.mjs';
 import {
   captureClipContext,
@@ -62,7 +66,7 @@ function renderGenerationAction() {
   const action = generationActionState(
     state.generationSettings,
     activeClip()?.enabled ?? null,
-    state.jobActive,
+    conversationJobActive(),
     state.generationSubmitting,
   );
   const button = $('#generate-current-prompt');
@@ -119,7 +123,7 @@ function renderGenerationReadiness(contract) {
   }
   const actionStatus = $('#generation-action-status');
   if ((!contract && !state.generationSubmitting)
-      || (!state.jobActive && !state.generationSubmitting
+      || (!conversationJobActive() && !state.generationSubmitting
           && actionStatus.textContent === 'Generation queued.')) {
     actionStatus.textContent = '';
   }
@@ -130,7 +134,7 @@ async function submitGeneration() {
   const action = generationActionState(
     state.generationSettings,
     activeClip()?.enabled ?? null,
-    state.jobActive,
+    conversationJobActive(),
     state.generationSubmitting,
   );
   if (!action.enabled) return;
@@ -141,13 +145,13 @@ async function submitGeneration() {
   const status = $('#generation-action-status');
   status.textContent = 'Submitting generation request…';
   try {
-    await requestJson(apiPaths.generate(context.projectId, context.clipId), {
+    const job = await requestJson(apiPaths.generate(context.projectId, context.clipId), {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(generationRequestPayload(contract)),
     });
     if (!isClipContextCurrent(state, context)) return;
-    state.jobActive = true;
+    queueConversationJob(job);
     status.textContent = 'Generation queued.';
     await refreshProject();
   } catch (error) {

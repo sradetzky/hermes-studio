@@ -36,6 +36,9 @@ preview and production releases.
   per-kind payload codecs at the SQLite boundary; invalid persisted contracts
   now fail closed, schema migration 6 enforces kind/scope combinations, and the
   manager protocol covers every route submission
+- Extracted scoped chat, job, and activity ownership into a conversation
+  controller that incrementally reconciles stable job/event nodes instead of
+  replacing activity subtrees
 
 ### Fixed
 
@@ -48,6 +51,9 @@ preview and production releases.
 - Made Studio profile jobs and legacy H3 runner paths robust to Hermes profile
   HOME isolation: active-profile skills use `$HERMES_HOME`, account files use
   `$HERMES_REAL_HOME`, and the Studio profile forces real-home terminal mode
+- Fixed transcript and nested activity scrolling so new conversations and users
+  already following output remain pinned to the end, while intentional
+  scroll-away, open details, focus, selection, and nested scroll are preserved
 
 ## [0.1.0-preview.3] - 2026-08-24
 

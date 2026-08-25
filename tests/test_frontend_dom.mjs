@@ -78,3 +78,24 @@ test('Media exposes explicit movie readiness, export, playback, and download reg
   ]) assert.match(html, new RegExp(`id="${id}"`));
   assert.match(html, />Export selected takes as movie</);
 });
+
+test('conversation controller owns incremental activity and viewport state', () => {
+  const shared = readFileSync(
+    new URL('../webapp/static/shared.js', import.meta.url), 'utf8');
+  const controller = readFileSync(
+    new URL('../webapp/static/conversation-controller.js', import.meta.url), 'utf8');
+  for (const field of [
+    'chatCursor', 'activityCursor', 'activityByJob', 'jobs', 'jobActive',
+    'showActivityDetails',
+  ]) {
+    assert.doesNotMatch(shared, new RegExp(`\\b${field}:`));
+    assert.match(controller, new RegExp(`\\b${field}:`));
+  }
+  assert.match(controller, /dataset\.activityEvent = event\.id/);
+  assert.match(controller, /existing = new Map/);
+  assert.match(
+    controller,
+    /viewport\.following \? element\.scrollHeight : viewport\.scrollTop/,
+  );
+  assert.doesNotMatch(controller, /card\.replaceChildren/);
+});

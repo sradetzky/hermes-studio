@@ -39,6 +39,15 @@ no state in the UI that isn't already on disk; minimal dependencies.
 - `run.sh` / `stop.sh` / `status.sh` — single-instance lock, graceful stop,
   stale-PID cleanup and process status
 
+## Browser ownership
+
+- `app.js` — workspace bootstrap, project/clip navigation, and refresh wiring
+- `conversation-controller.js` — scoped chat context/revisions, incremental
+  cursors, jobs/activity, stable event-card reconciliation, and authoritative
+  outer/nested follow-latest anchoring
+- `media-review.js` / `generation-settings.js` — media review and generation
+  controls; their remaining local-state extraction is tracked by remediation P2.2
+
 ## Layout (single page)
 
 Wide screens use the desktop three-column workspace below. At 1099px and below,

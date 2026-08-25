@@ -251,9 +251,11 @@ project/clip chat scope and exact IDs.
 - [x] Type job kinds/scopes/phases/payloads at persistence boundaries, validate
   per-kind contracts on enqueue/read, and enforce combinations through ordered
   runtime schema migration 6.
-- [ ] Give conversation/reference/media browser controllers explicit local state,
-  reconcile stable activity nodes, fix follow-latest scrolling, and split the
-  behavioral Chromium mega-scenario.
+- [x] Give scoped conversation state an explicit controller, reconcile activity
+  cards/events by stable identity, and fix initial/follow-latest versus deliberate
+  scroll-away behavior with deferred real-Chromium coverage.
+- [ ] Give references and media/settings explicit local controller ownership and
+  split the behavioral Chromium mega-scenario into independently named tests.
 - [ ] Complete every acceptance criterion in
   `docs/plans/2026-08-24-code-quality-remediation.md` before new additions.
 

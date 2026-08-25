@@ -224,10 +224,13 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
 - Remediation P1.5 added discriminated job kinds/scopes/activity phases and
   per-kind payload codecs at SQLite boundaries; schema migration 6 rejects
   invalid contracts and the route/manager protocol is statically complete.
+- Remediation P2.1 extracted scoped conversation ownership, reconciles activity
+  cards/events by stable identity, and preserves follow-latest, deliberate
+  scroll-away, nested details/scroll, focus, selection, and DOM identity.
 
 ## Next steps
 
-- [ ] Remediation P2: extract browser controllers, reconcile stable activity
-  nodes, fix follow-latest scrolling, and split behavioral browser scenarios.
+- [ ] Remediation P2.2–P2.3: extract reference/media state and split behavioral
+  browser scenarios behind a reusable CDP fixture.
 - [ ] Only after the remediation gate passes, add scoped Hermes `clarify`
   responses and typed previous-selected-take last-frame generation inputs.
