@@ -16,6 +16,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from scripts import design_studio as ds
+from studio_core import migration
 from scripts import krea2_image
 from scripts.krea2_image import parse_loras
 from webapp import clip_store, safe_files
@@ -33,7 +34,7 @@ class LegacyMigrationResumeTests(LegacyClipMigrationCase):
         outside.mkdir()
         clips = project / "clips"
         displaced = project / "displaced-clips"
-        real_validate = ds._validate_migration_inventory_directory
+        real_validate = migration._validate_migration_inventory_directory
         swapped = False
 
         def swap_after_inventory(descriptor, tree, *, label):
@@ -46,7 +47,7 @@ class LegacyMigrationResumeTests(LegacyClipMigrationCase):
 
         with (
             patch.object(
-                ds, "_validate_migration_inventory_directory",
+                migration, "_validate_migration_inventory_directory",
                 side_effect=swap_after_inventory,
             ),
             self.assertRaises((ValueError, safe_files.SafeFilesystemError)),
@@ -55,14 +56,14 @@ class LegacyMigrationResumeTests(LegacyClipMigrationCase):
 
         self.assertTrue(swapped)
         self.assertEqual(list(outside.iterdir()), [])
-        self.assertTrue((project / ds.CLIP_MIGRATION_JOURNAL).is_file())
+        self.assertTrue((project / migration.CLIP_MIGRATION_JOURNAL).is_file())
         self.assertFalse((project / "project.json").exists())
 
         clips.unlink()
         displaced.rename(clips)
         report = self.migrate(project.name, apply=True)
         self.assertEqual(report["projects"][0]["status"], "migrated")
-        self.assertFalse((project / ds.CLIP_MIGRATION_JOURNAL).exists())
+        self.assertFalse((project / migration.CLIP_MIGRATION_JOURNAL).exists())
     def test_resume_accepts_existing_safe_destination_directories(self):
         project = self.legacy_project()
         self._prepare_journal(project)
@@ -75,7 +76,7 @@ class LegacyMigrationResumeTests(LegacyClipMigrationCase):
             (project / "clips" / "clip-001" / "current_prompt.txt").read_bytes(),
             b"legacy prompt\n",
         )
-        self.assertFalse((project / ds.CLIP_MIGRATION_JOURNAL).exists())
+        self.assertFalse((project / migration.CLIP_MIGRATION_JOURNAL).exists())
     def test_resume_fails_closed_when_source_and_target_both_exist(self):
         project = self.legacy_project()
         self._prepare_journal(project)

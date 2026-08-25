@@ -16,6 +16,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from scripts import design_studio as ds
+from studio_core import migration
 from scripts import krea2_image
 from scripts.krea2_image import parse_loras
 from webapp import clip_store, safe_files
@@ -42,7 +43,7 @@ class LegacyMigrationBasicTests(LegacyClipMigrationCase):
         )
         self.assertGreater(first["projects"][0]["file_count"], 4)
         self.assertEqual(self.snapshot(self.root), before)
-        self.assertFalse((project / ds.CLIP_MIGRATION_JOURNAL).exists())
+        self.assertFalse((project / migration.CLIP_MIGRATION_JOURNAL).exists())
         self.assertFalse((project / ".project.lock").exists())
     def test_apply_preserves_every_byte_and_publishes_default_manifest(self):
         project = self.legacy_project()
@@ -79,7 +80,7 @@ class LegacyMigrationBasicTests(LegacyClipMigrationCase):
         self.assertFalse((project / "current_prompt.txt").exists())
         self.assertFalse((project / "current_generation.json").exists())
         self.assertFalse((project / "generations").exists())
-        self.assertFalse((project / ds.CLIP_MIGRATION_JOURNAL).exists())
+        self.assertFalse((project / migration.CLIP_MIGRATION_JOURNAL).exists())
     def test_optional_settings_and_all_project_selection(self):
         first = self.legacy_project("2026-08-23_first", settings=False)
         second = self.legacy_project("2026-08-23_second")
@@ -178,7 +179,7 @@ class LegacyMigrationBasicTests(LegacyClipMigrationCase):
                         raise RuntimeError(f"interrupted at {checkpoint}")
 
                 with (
-                    patch.object(ds, "_migration_checkpoint",
+                    patch.object(migration, "_migration_checkpoint",
                                  side_effect=interrupt),
                     self.assertRaisesRegex(RuntimeError, "interrupted"),
                 ):
@@ -190,7 +191,7 @@ class LegacyMigrationBasicTests(LegacyClipMigrationCase):
                     expected,
                 )
                 self.assertFalse(
-                    (project / ds.CLIP_MIGRATION_JOURNAL).exists())
+                    (project / migration.CLIP_MIGRATION_JOURNAL).exists())
     def test_refuses_unsafe_sources_destinations_and_nested_entries(self):
         cases = ("prompt", "settings", "generations", "nested", "clips",
                  "manifest", "journal")
@@ -217,7 +218,7 @@ class LegacyMigrationBasicTests(LegacyClipMigrationCase):
                     (project / "clips").symlink_to(outside, target_is_directory=True)
                 else:
                     filename = ("project.json" if case == "manifest" else
-                                ds.CLIP_MIGRATION_JOURNAL)
+                                migration.CLIP_MIGRATION_JOURNAL)
                     (project / filename).symlink_to(outside)
                 before = self.snapshot(project)
                 with self.assertRaises((ValueError, safe_files.SafeFilesystemError)):

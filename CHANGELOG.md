@@ -19,6 +19,9 @@ preview and production releases.
 - Established measured durable retention for runtime job activity: the preview
   database keeps events with their owning jobs and defines concrete size, row,
   latency, and lifecycle triggers for a future transaction-safe bounded policy
+- Isolated the legacy clip-migration state machine in a lazily imported
+  `studio_core.migration` module, made each migration suite directly discoverable,
+  and moved cohesive safe-file primitives into the dependency-neutral core
 
 ### Fixed
 

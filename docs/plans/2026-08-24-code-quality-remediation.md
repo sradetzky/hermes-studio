@@ -243,6 +243,12 @@ only modify code if measurements justify it.
 
 ### P1.1 Extract the one-off migration engine
 
+**Status (2026-08-25): complete.** The 2,077-line migration implementation now
+lives in `studio_core.migration` and is imported lazily only by the migration CLI
+branch. Its four case suites are directly discoverable, all race/recovery cases
+remain green, and the cohesive safe-file implementation moved to
+`studio_core.safe_files` so the extracted engine has no `webapp` dependency.
+
 **Problem:** Roughly 2,000 lines of legacy clip migration code are imported on
 every normal CLI and webapp use.
 

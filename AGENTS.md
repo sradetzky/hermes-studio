@@ -27,7 +27,7 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
 | `scripts/build-web-css.sh` | Rebuild pinned local Tailwind CSS bundle |
 | `webapp/` | App factory, routes, SQLite jobs, process manager, uploads, local UI |
 | `requirements*.txt` | Pinned runtime and development dependencies |
-| `studio_core/` | Dependency-neutral path/domain ownership shared by CLI + web |
+| `studio_core/` | Dependency-neutral paths, safe files, migration, and domain ownership |
 | `comfyui/workflows/` | Parameterized H3 API-format workflow JSONs (empty) |
 | `studio-root/` | Default studio root: projects/, shared/, tmp/ |
 
@@ -209,6 +209,9 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
 - Remediation P0.4 measured 1,348 activity events across 16 finished jobs and
   established intentional durable retention with explicit size/latency revisit
   triggers instead of speculative pruning.
+- Remediation P1.1 moved the 2,077-line legacy migration engine behind a lazy CLI
+  import, made all migration suites directly discoverable, and moved cohesive
+  safe-file primitives into dependency-neutral `studio_core` ownership.
 
 ## Next steps
 

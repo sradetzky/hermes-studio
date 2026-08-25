@@ -16,6 +16,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from scripts import design_studio as ds
+from studio_core import migration
 from scripts import krea2_image
 from scripts.krea2_image import parse_loras
 from webapp import clip_store, safe_files
@@ -97,13 +98,14 @@ class LegacyClipMigrationCase(unittest.TestCase):
         with patch.dict(os.environ, {
             "HERMES_STUDIO_RUNTIME_ROOT": str(self.runtime),
         }):
-            return ds.migrate_clips(self.root, project, apply=apply)
+            return migration.migrate_clips(
+                self.root, project, apply=apply, clip_store=ds.CLIP_STORE)
     def _prepare_journal(self, project):
         def interrupt(checkpoint):
             if checkpoint == "journal-prepared":
                 raise RuntimeError("stop")
         with (
-            patch.object(ds, "_migration_checkpoint", side_effect=interrupt),
+            patch.object(migration, "_migration_checkpoint", side_effect=interrupt),
             self.assertRaises(RuntimeError),
         ):
             self.migrate(project.name, apply=True)

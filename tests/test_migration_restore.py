@@ -16,6 +16,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from scripts import design_studio as ds
+from studio_core import migration
 from scripts import krea2_image
 from scripts.krea2_image import parse_loras
 from webapp import clip_store, safe_files
@@ -29,7 +30,7 @@ from tests.studio_migration_base import LegacyClipMigrationCase
 class LegacyMigrationRestoreTests(LegacyClipMigrationCase):
     def test_restore_temp_replacement_at_cleanup_boundary_is_preserved(self):
         project = self.legacy_project()
-        journal_path = project / ds.CLIP_MIGRATION_JOURNAL
+        journal_path = project / migration.CLIP_MIGRATION_JOURNAL
         journal_path.write_bytes(b"canonical replacement")
         preserved = project / ".preserved-expected-restore-temp"
         replacement = b"replacement restore temp"
@@ -46,7 +47,7 @@ class LegacyMigrationRestoreTests(LegacyClipMigrationCase):
             if source.endswith(".clip-migration.restore"):
                 created_temporary = source
                 if (not injected
-                        and destination != ds.CLIP_MIGRATION_JOURNAL):
+                        and destination != migration.CLIP_MIGRATION_JOURNAL):
                     injected = True
                     os.rename(
                         source, preserved.name,
@@ -76,7 +77,7 @@ class LegacyMigrationRestoreTests(LegacyClipMigrationCase):
                 self.assertRaisesRegex(
                     safe_files.SafeFilesystemError, "restore temp identity changed"),
             ):
-                ds._restore_migration_journal(project_fd, b"expected restore temp")
+                migration._restore_migration_journal(project_fd, b"expected restore temp")
         finally:
             os.close(project_fd)
 
@@ -93,14 +94,14 @@ class LegacyMigrationRestoreTests(LegacyClipMigrationCase):
         )
     def test_rerun_preserves_same_content_separate_restore_named_file(self):
         project = self.legacy_project()
-        journal_path = project / ds.CLIP_MIGRATION_JOURNAL
+        journal_path = project / migration.CLIP_MIGRATION_JOURNAL
 
         def interrupt(checkpoint):
             if checkpoint == "journal-finalizing":
                 raise RuntimeError("injected interruption before finalization")
 
         with (
-            patch.object(ds, "_migration_checkpoint", side_effect=interrupt),
+            patch.object(migration, "_migration_checkpoint", side_effect=interrupt),
             self.assertRaisesRegex(RuntimeError, "before finalization"),
         ):
             self.migrate(project.name, apply=True)
@@ -122,7 +123,7 @@ class LegacyMigrationRestoreTests(LegacyClipMigrationCase):
             with self.subTest(case=case):
                 project = self.legacy_project(
                     f"2026-08-23_restore-artifact-{index}")
-                journal_path = project / ds.CLIP_MIGRATION_JOURNAL
+                journal_path = project / migration.CLIP_MIGRATION_JOURNAL
 
                 def interrupt(checkpoint):
                     if checkpoint == "journal-finalizing":
@@ -130,7 +131,7 @@ class LegacyMigrationRestoreTests(LegacyClipMigrationCase):
 
                 with (
                     patch.object(
-                        ds, "_migration_checkpoint", side_effect=interrupt),
+                        migration, "_migration_checkpoint", side_effect=interrupt),
                     self.assertRaisesRegex(RuntimeError, "interruption"),
                 ):
                     self.migrate(project.name, apply=True)
@@ -163,14 +164,14 @@ class LegacyMigrationRestoreTests(LegacyClipMigrationCase):
                 self.assertTrue(journal_path.is_file())
     def test_rerun_preserves_artifact_when_canonical_journal_was_replaced(self):
         project = self.legacy_project()
-        journal_path = project / ds.CLIP_MIGRATION_JOURNAL
+        journal_path = project / migration.CLIP_MIGRATION_JOURNAL
 
         def interrupt(checkpoint):
             if checkpoint == "journal-finalizing":
                 raise RuntimeError("injected interruption")
 
         with (
-            patch.object(ds, "_migration_checkpoint", side_effect=interrupt),
+            patch.object(migration, "_migration_checkpoint", side_effect=interrupt),
             self.assertRaisesRegex(RuntimeError, "interruption"),
         ):
             self.migrate(project.name, apply=True)
@@ -212,7 +213,7 @@ class LegacyMigrationRestoreTests(LegacyClipMigrationCase):
         self.assertFalse((project / ".project.lock").exists())
     def test_unlink_boundary_replacement_journal_is_never_overwritten(self):
         project = self.legacy_project()
-        journal_path = project / ds.CLIP_MIGRATION_JOURNAL
+        journal_path = project / migration.CLIP_MIGRATION_JOURNAL
         replacement = b'{"replacement":true}\n'
         real_renameat2 = safe_files._renameat2
         assert real_renameat2 is not None
@@ -225,7 +226,7 @@ class LegacyMigrationRestoreTests(LegacyClipMigrationCase):
                 source_fd, source_name, destination_fd, destination_name, flags)
             source = os.fsdecode(source_name)
             destination = os.fsdecode(destination_name)
-            if (not replaced and source == ds.CLIP_MIGRATION_JOURNAL
+            if (not replaced and source == migration.CLIP_MIGRATION_JOURNAL
                     and "safe-delete" in destination):
                 replaced = True
                 journal_path.write_bytes(replacement)
@@ -250,11 +251,11 @@ class LegacyMigrationRestoreTests(LegacyClipMigrationCase):
                          "finalizing")
     def test_replacement_journal_after_destination_validation_blocks_success(self):
         project = self.legacy_project()
-        journal_path = project / ds.CLIP_MIGRATION_JOURNAL
+        journal_path = project / migration.CLIP_MIGRATION_JOURNAL
         replacement = b'{"late-replacement":true}\n'
         retained_journal = None
         finalizing_validations = 0
-        real_validate = ds._validate_migration_destination_descriptors
+        real_validate = migration._validate_migration_destination_descriptors
 
         def replace_after_validation(*args, **kwargs):
             nonlocal retained_journal, finalizing_validations
@@ -270,7 +271,7 @@ class LegacyMigrationRestoreTests(LegacyClipMigrationCase):
 
         with (
             patch.object(
-                ds, "_validate_migration_destination_descriptors",
+                migration, "_validate_migration_destination_descriptors",
                 side_effect=replace_after_validation,
             ),
             self.assertRaises((ValueError, safe_files.SafeFilesystemError)),
@@ -289,7 +290,7 @@ class LegacyMigrationRestoreTests(LegacyClipMigrationCase):
         self.assertFalse(journal_path.exists())
     def test_exception_after_actual_unlink_restores_finalizing_journal(self):
         project = self.legacy_project()
-        journal_path = project / ds.CLIP_MIGRATION_JOURNAL
+        journal_path = project / migration.CLIP_MIGRATION_JOURNAL
         retained_journal = None
         real_unlink = os.unlink
         interrupted = False
@@ -316,7 +317,7 @@ class LegacyMigrationRestoreTests(LegacyClipMigrationCase):
             return real_unlink(path, *args, dir_fd=dir_fd)
 
         with (
-            patch.object(ds.os, "unlink", side_effect=unlink_then_interrupt),
+            patch.object(migration.os, "unlink", side_effect=unlink_then_interrupt),
             self.assertRaisesRegex(
                 safe_files.SafeFilesystemError,
                 "quarantine cleanup could not be proven"),
@@ -371,7 +372,7 @@ class LegacyMigrationRestoreTests(LegacyClipMigrationCase):
         replacement_before = self.snapshot(replacement)
         finalizing_validations = 0
         swapped = False
-        real_validate = ds._validate_migration_destination_descriptors
+        real_validate = migration._validate_migration_destination_descriptors
 
         def swap_projects_parent_after_validation(*args, **kwargs):
             nonlocal finalizing_validations, swapped
@@ -386,7 +387,7 @@ class LegacyMigrationRestoreTests(LegacyClipMigrationCase):
 
         with (
             patch.object(
-                ds, "_validate_migration_destination_descriptors",
+                migration, "_validate_migration_destination_descriptors",
                 side_effect=swap_projects_parent_after_validation,
             ),
             self.assertRaises((ValueError, safe_files.SafeFilesystemError)),
@@ -396,7 +397,7 @@ class LegacyMigrationRestoreTests(LegacyClipMigrationCase):
         self.assertTrue(swapped)
         self.assertEqual(self.snapshot(projects), replacement_before)
         original = displaced / project.name
-        journal_path = original / ds.CLIP_MIGRATION_JOURNAL
+        journal_path = original / migration.CLIP_MIGRATION_JOURNAL
         self.assertTrue(journal_path.is_file())
         self.assertEqual(json.loads(journal_path.read_bytes())["phase"], "finalizing")
         self.assertEqual(
@@ -407,7 +408,7 @@ class LegacyMigrationRestoreTests(LegacyClipMigrationCase):
         projects.rename(returned_replacement)
         displaced.rename(projects)
         self.assertEqual(self.snapshot(returned_replacement), replacement_before)
-        self.assertTrue((project / ds.CLIP_MIGRATION_JOURNAL).is_file())
+        self.assertTrue((project / migration.CLIP_MIGRATION_JOURNAL).is_file())
         report = self.migrate(project.name, apply=True)
         self.assertEqual(report["projects"][0]["status"], "migrated")
-        self.assertFalse((project / ds.CLIP_MIGRATION_JOURNAL).exists())
+        self.assertFalse((project / migration.CLIP_MIGRATION_JOURNAL).exists())
