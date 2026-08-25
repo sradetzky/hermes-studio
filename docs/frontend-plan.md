@@ -24,7 +24,8 @@ no state in the UI that isn't already on disk; minimal dependencies.
   scheduler-coupled liveness with top-level execution fault containment
 - `job_store.py` / `runtime_schema.py` — transactional scoped job/chat/event
   state and ordered SQLite migrations; clip work has a database-enforced exact
-  clip id while project chat has an explicit project scope
+  clip id while project chat has an explicit project scope; exact pre-contract
+  generation metadata is accepted only for immutable terminal history
 - `reference_store.py` — synchronous staging + atomic no-overwrite publication
 - `clip_store.py` — canonical project title/brief publication, exact clip
   resolution, ordering, enabled state, and selected-take provenance

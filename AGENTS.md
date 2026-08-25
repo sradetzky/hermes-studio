@@ -233,10 +233,12 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
 - Remediation P2.3 extracted reusable fixture-app/Chromium/CDP lifecycle and
   interception helpers; five independent scenarios now identify playback,
   dialog, chat, queue-ordering, and conversation-scroll failures directly.
+- The complete remediation release gate passed from clean committed source,
+  including live service/API and desktop/narrow CDP checks. A live historical
+  row exposed and now guards exact terminal-only pre-contract generation
+  metadata without weakening active-job or malformed-payload rejection.
 
 ## Next steps
 
-- [ ] Run and document the complete remediation release gate from clean,
-  committed source.
-- [ ] Only after the remediation gate passes, add scoped Hermes `clarify`
+- [ ] Add scoped Hermes `clarify`
   responses and typed previous-selected-take last-frame generation inputs.

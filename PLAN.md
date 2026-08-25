@@ -258,7 +258,7 @@ project/clip chat scope and exact IDs.
   shared browser state now contains workspace identity/context only.
 - [x] Split the behavioral Chromium mega-scenario into independently named tests
   behind a reusable CDP fixture.
-- [ ] Complete every acceptance criterion in
+- [x] Complete every acceptance criterion in
   `docs/plans/2026-08-24-code-quality-remediation.md` before new additions.
 
 ### Phase 6 – Interaction and continuity additions (planned after Phase 5.5)

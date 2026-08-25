@@ -60,6 +60,9 @@ preview and production releases.
 - Fixed transcript and nested activity scrolling so new conversations and users
   already following output remain pinned to the end, while intentional
   scroll-away, open details, focus, selection, and nested scroll are preserved
+- Preserved exact pre-contract generation metadata for completed/failed legacy
+  jobs so historical job lists remain readable, while active and malformed
+  payloads continue to fail closed at the typed persistence boundary
 
 ## [0.1.0-preview.3] - 2026-08-24
 

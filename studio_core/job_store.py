@@ -134,8 +134,12 @@ class JobStore:
             kind = parse_job_kind(row["kind"])
             scope = parse_chat_scope(row["chat_scope"])
             clip_id = validate_job_binding(kind, scope, row["clip_id"])
-            payload = decode_job_payload(kind, row["message"])
             status = JobStatus(row["status"])
+            payload = decode_job_payload(
+                kind,
+                row["message"],
+                terminal=status in {JobStatus.COMPLETED, JobStatus.FAILED},
+            )
         except (JobContractError, ValueError) as exc:
             raise JobStoreError(
                 f"persisted job {row['id']} is invalid: {exc}") from exc

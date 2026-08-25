@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import TypeAlias
@@ -68,11 +69,24 @@ class GenerationJobPayload:
 
 
 @dataclass(frozen=True)
+class LegacyGenerationJobPayload:
+    """Validated pre-contract metadata retained for a terminal generation."""
+
+    prompt_sha256: str
+    settings_updated_at: str
+
+
+@dataclass(frozen=True)
 class MovieExportJobPayload:
     contract: dict
 
 
-JobPayload: TypeAlias = ChatJobPayload | GenerationJobPayload | MovieExportJobPayload
+JobPayload: TypeAlias = (
+    ChatJobPayload
+    | GenerationJobPayload
+    | LegacyGenerationJobPayload
+    | MovieExportJobPayload
+)
 
 
 def parse_job_kind(value: object) -> JobKind:
@@ -117,7 +131,36 @@ def validate_job_binding(
     return clip_id
 
 
-def decode_job_payload(kind: JobKind, value: object) -> JobPayload:
+def _decode_legacy_terminal_generation_payload(
+    value: str,
+) -> LegacyGenerationJobPayload:
+    try:
+        payload = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise JobContractError("generation request payload is invalid") from exc
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != {
+            "action", "prompt_sha256", "settings_updated_at"}
+        or payload.get("action") != "generate-current-prompt"
+        or not isinstance(payload.get("prompt_sha256"), str)
+        or re.fullmatch(r"[0-9a-f]{64}", payload["prompt_sha256"]) is None
+        or not isinstance(payload.get("settings_updated_at"), str)
+        or not payload["settings_updated_at"]
+    ):
+        raise JobContractError("generation request payload is invalid")
+    return LegacyGenerationJobPayload(
+        prompt_sha256=payload["prompt_sha256"],
+        settings_updated_at=payload["settings_updated_at"],
+    )
+
+
+def decode_job_payload(
+    kind: JobKind,
+    value: object,
+    *,
+    terminal: bool = False,
+) -> JobPayload:
     if not isinstance(value, str):
         raise JobContractError("job payload must be text")
     if kind is JobKind.CHAT:
@@ -126,6 +169,8 @@ def decode_job_payload(kind: JobKind, value: object) -> JobPayload:
         try:
             return GenerationJobPayload(parse_generation_job_payload(value))
         except ValueError as exc:
+            if terminal:
+                return _decode_legacy_terminal_generation_payload(value)
             raise JobContractError(str(exc)) from exc
     try:
         contract = json.loads(value)

@@ -11,6 +11,7 @@ from studio_core.job_contracts import (
     ChatJobPayload,
     ChatScope,
     GenerationJobPayload,
+    LegacyGenerationJobPayload,
     JobKind,
     JobEventType,
     JobPhase,
@@ -145,6 +146,39 @@ class JobContractTests(unittest.TestCase):
         with self.assertRaisesRegex(
                 JobStoreError, "persisted job.*generation request payload"):
             self.store.get_job(job.id)
+
+    def test_exact_legacy_generation_payload_is_terminal_only(self):
+        legacy_payload = json.dumps({
+            "action": "generate-current-prompt",
+            "prompt_sha256": "a" * 64,
+            "settings_updated_at": "2026-08-24T00:00:00+00:00",
+        })
+        terminal = self.store.create_generation_job(
+            "project", generation_request(), clip_id="clip-001")
+        self.store.fail(terminal.id, "legacy completed elsewhere")
+        with closing(sqlite3.connect(self.store.database_path)) as connection:
+            connection.execute(
+                "UPDATE jobs SET message = ? WHERE id = ?",
+                (legacy_payload, terminal.id),
+            )
+            connection.commit()
+
+        loaded = self.store.get_job(terminal.id)
+        self.assertIsInstance(loaded.payload, LegacyGenerationJobPayload)
+        self.assertEqual(loaded.message, legacy_payload)
+        self.assertEqual(self.store.list_jobs("project")[0].id, terminal.id)
+
+        active = self.store.create_generation_job(
+            "other", generation_request(), clip_id="clip-001")
+        with closing(sqlite3.connect(self.store.database_path)) as connection:
+            connection.execute(
+                "UPDATE jobs SET message = ? WHERE id = ?",
+                (legacy_payload, active.id),
+            )
+            connection.commit()
+        with self.assertRaisesRegex(
+                JobStoreError, "persisted job.*generation request payload"):
+            self.store.get_job(active.id)
 
     def test_schema_migration_rejects_invalid_contract_updates(self):
         job = self.store.create_project_chat_job("project", "plan")

@@ -484,21 +484,38 @@ coverage, and a failure names the affected contract instead of one mega-test.
 
 ## 6. Remediation release gate
 
+**Status (2026-08-25): complete.** The canonical gate passed from clean,
+committed source after one live-data defect was found and fixed: a completed
+pre-contract generation row used the exact legacy three-field request metadata,
+so strict schema-6 decoding made that project's jobs endpoint return HTTP 500.
+The persistence adapter now recognizes only that exact legacy shape and only for
+terminal generation jobs; active jobs and arbitrary malformed historical
+payloads still fail closed. The regression is covered at the store/list boundary.
+
+The final verification included complete Python discovery, 24 frontend
+contract/DOM/Chromium tests, compilation, Ruff correctness lint, dependency
+lock/audit, supported Hermes and pinned MCP contracts, profile drift,
+reproducible CSS, clean source archive/checksum, and repository integrity. The
+restarted user service returned HTTP 200 for project, movie, jobs, and ComfyUI
+queue APIs across both live projects (16 historical jobs total), with no active
+Studio or ComfyUI work. Raw-CDP smoke checks passed at 1440×900 and 390×844 with
+zero horizontal overflow and correct narrow-pane visibility/inert state.
+
 P0–P2 are complete only when all of the following are true:
 
-- [ ] One Python discovery command runs every test, including MCP tests.
-- [ ] Canonical non-GPU release script passes and propagates failures.
-- [ ] Normal and profile-isolated path matrices pass for Python and shell tools.
-- [ ] A checkout-independent systemd installation is verified by read-back.
-- [ ] The webapp and CLI depend on `studio_core`; dependency direction is one-way.
-- [ ] Deterministic generation no longer uses an LLM as command executor.
-- [ ] Scheduler, process, agent, generation, and movie ownership are explicit.
-- [ ] Job kinds/scopes/phases/payloads are validated at boundaries.
-- [ ] Conversation activity reconciles stable nodes and the scroll regression is
+- [x] One Python discovery command runs every test, including MCP tests.
+- [x] Canonical non-GPU release script passes and propagates failures.
+- [x] Normal and profile-isolated path matrices pass for Python and shell tools.
+- [x] A checkout-independent systemd installation is verified by read-back.
+- [x] The webapp and CLI depend on `studio_core`; dependency direction is one-way.
+- [x] Deterministic generation no longer uses an LLM as command executor.
+- [x] Scheduler, process, agent, generation, and movie ownership are explicit.
+- [x] Job kinds/scopes/phases/payloads are validated at boundaries.
+- [x] Conversation activity reconciles stable nodes and the scroll regression is
   covered in real Chromium.
-- [ ] Shared browser state is reduced to genuine workspace context.
-- [ ] Runtime event retention is measured and explicitly decided.
-- [ ] Compilation, dependency/audit, profile drift, CSS, clean archive,
+- [x] Shared browser state is reduced to genuine workspace context.
+- [x] Runtime event retention is measured and explicitly decided.
+- [x] Compilation, dependency/audit, profile drift, CSS, clean archive,
   service/API, desktop, narrow-browser, and checksum gates pass.
 
 The canonical local non-GPU gate is:
