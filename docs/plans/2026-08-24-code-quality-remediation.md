@@ -751,5 +751,7 @@ They are being closed in this order before another feature wave:
    validation run once in `GenerationJobService` while the manager holds the
    project job guard.
 
-Each item follows the slice protocol in section 2. Run the complete committed-
-source gate after all four are verified.
+Each item followed the slice protocol in section 2. The committed-source gate
+passed on 2026-08-25 with 291 Python and 28 frontend/Chromium tests, compilation,
+full Ruff, dependency consistency and audit, external-tool contracts, profile
+drift, reproducible CSS, source-archive, and repository-integrity checks.

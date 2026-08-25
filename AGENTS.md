@@ -304,8 +304,12 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
 - Generation submission routes now resolve only the project identity and delegate
   readiness, enabled-clip, prompt/settings revision, input snapshot, and enqueue
   validation to the service under the project coordination lock.
+- The second thermo-nuclear closure gate passed 291 Python and 28 frontend/
+  Chromium tests plus compilation, full Ruff, dependency/audit, external-tool,
+  profile-drift, CSS reproducibility, source-archive, and repository-integrity
+  checks.
 
 ## Next steps
 
-- Run the committed-source release gate for the completed second thermo-nuclear
-  closure series.
+- No active remediation blocker; define the next feature slice before
+  implementation.
