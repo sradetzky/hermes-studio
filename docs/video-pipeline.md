@@ -28,6 +28,12 @@ Hermes CLI still exposes the subprocess options this integration requires.
 The worker waits through MCP, archives against exact project + clip IDs and
 authoritative history, and always clears VRAM. Only a typed `generate` job owns
 queue cancellation; chat or specialist failures never interrupt ComfyUI.
+Prompt provenance records both identities at this boundary: `prompt_sha256` is
+the exact newline-preserving source file revision, while
+`executed_prompt_sha256` is the H3 runner's stripped prompt from authoritative
+ComfyUI history. A configured ComfyUI-root symlink is resolved once as a trusted
+root before descriptor-safe output traversal; nested output symlinks remain
+rejected.
 `design_studio.py generate` remains a manual direct diagnostic fallback.
 
 ## Proven knobs (RTX 5060 Ti 16GB)

@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from scripts import submit_h3_graph_mcp as submit_mcp
+from studio_core import comfyui_mcp
 
 
 class H3McpSubmissionTests(unittest.TestCase):
@@ -92,7 +93,7 @@ class H3McpSubmissionTests(unittest.TestCase):
             ]
 
             with (
-                patch.object(submit_mcp.subprocess, "run", side_effect=responses) as run,
+                patch.object(comfyui_mcp.subprocess, "run", side_effect=responses) as run,
                 redirect_stdout(StringIO()),
             ):
                 code = submit_mcp.main([
@@ -109,6 +110,9 @@ class H3McpSubmissionTests(unittest.TestCase):
             self.assertIn("mcporter@0.13.7", first_upload)
             self.assertTrue(any("comfyui-mcp@0.52.61" in argument
                                 for argument in first_upload))
+            self.assertEqual(
+                first_upload[first_upload.index("--timeout") + 1], "180000")
+            self.assertEqual(run.call_args_list[0].kwargs["timeout"], 195)
             first_upload_args = json.loads(
                 first_upload[first_upload.index("--args") + 1])
             second_upload_args = json.loads(
@@ -152,7 +156,7 @@ class H3McpSubmissionTests(unittest.TestCase):
             arguments[hash_index] = "0" * 64
 
             with (
-                patch.object(submit_mcp.subprocess, "run") as run,
+                patch.object(comfyui_mcp.subprocess, "run") as run,
                 self.assertRaisesRegex(ValueError, "prompt SHA-256"),
             ):
                 submit_mcp.main(arguments)
@@ -173,7 +177,7 @@ class H3McpSubmissionTests(unittest.TestCase):
             arguments[revision_index] = "stale-timestamp"
 
             with (
-                patch.object(submit_mcp.subprocess, "run") as run,
+                patch.object(comfyui_mcp.subprocess, "run") as run,
                 self.assertRaisesRegex(ValueError, "settings timestamp"),
             ):
                 submit_mcp.main(arguments)
@@ -193,7 +197,7 @@ class H3McpSubmissionTests(unittest.TestCase):
             response = subprocess.CompletedProcess([], 9, "", "upload failed")
 
             with (
-                patch.object(submit_mcp.subprocess, "run", return_value=response) as run,
+                patch.object(comfyui_mcp.subprocess, "run", return_value=response) as run,
                 self.assertRaisesRegex(RuntimeError, "upload_image failed"),
             ):
                 submit_mcp.main(arguments)
@@ -210,7 +214,7 @@ class H3McpSubmissionTests(unittest.TestCase):
                 [], 0, json.dumps({"batch_id": "batch-id", "prompt_ids": []}), "")
 
             with (
-                patch.object(submit_mcp.subprocess, "run", return_value=response) as run,
+                patch.object(comfyui_mcp.subprocess, "run", return_value=response) as run,
                 self.assertRaisesRegex(RuntimeError, "one prompt_id"),
             ):
                 submit_mcp.main(arguments)

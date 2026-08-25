@@ -261,6 +261,9 @@ project/clip chat scope and exact IDs.
   behind a reusable CDP fixture.
 - [x] Complete every acceptance criterion in
   `docs/plans/2026-08-24-code-quality-remediation.md` before new additions.
+- [x] Pass a restarted live-service pre-Phase-6 checkpoint with a real 0.4 MP web
+  H3 job, authoritative dual prompt provenance, archive read-back, an empty queue,
+  VRAM cleanup, and desktop/narrow Chromium rendering.
 
 ### Phase 6 – Interaction and continuity additions (planned after Phase 5.5)
 - [ ] Make Hermes `clarify` requests actionable in the web app: render the exact

@@ -57,6 +57,7 @@ class GenerationJobRunnerTests(unittest.TestCase):
         references = project / "references"
         profile = root / "profile"
         comfy = root / "ComfyUI"
+        comfy_target = root / "comfy-target"
         clip.mkdir(parents=True)
         references.mkdir()
         (clip / "current_prompt.txt").write_text("exact prompt\n")
@@ -66,7 +67,8 @@ class GenerationJobRunnerTests(unittest.TestCase):
         }))
         (references / "ref.jpg").write_bytes(b"reference")
         (profile / "skills/minimax-h3-run/scripts").mkdir(parents=True)
-        (comfy / "output").mkdir(parents=True)
+        (comfy_target / "output").mkdir(parents=True)
+        comfy.symlink_to(comfy_target, target_is_directory=True)
         runtime = GenerationRuntime(
             studio_root=studio_root,
             runtime_root=root / "runtime",
@@ -171,6 +173,10 @@ class GenerationJobRunnerTests(unittest.TestCase):
             })
             self.assertEqual(archived[0][0][3], ["h3/render.mp4"])
             self.assertEqual(archived[0][0][4], {"prompt_id": "prompt-id"})
+            self.assertEqual(
+                archived[0][1]["source_root"],
+                runtime.comfy_root.resolve() / "output",
+            )
             self.assertIn("generation.archive", [item[0][0] for item in events])
             self.assertEqual(responses, [])
 

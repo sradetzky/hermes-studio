@@ -9,6 +9,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from studio_core.generation_contracts import executed_generation_prompt
 from studio_core.safe_files import (
     SafeFilesystemError,
     open_regular_file,
@@ -50,6 +51,7 @@ def call_mcp(
         "npx", "-y", MCPORTER,
         "call", "--stdio", f"npx -y {COMFYUI_MCP}", tool,
         "--args", json.dumps(arguments, separators=(",", ":"), ensure_ascii=False),
+        "--timeout", str(timeout * 1000),
         "--output", "json",
     ]
     completed = subprocess.run(
@@ -57,7 +59,7 @@ def call_mcp(
         check=False,
         capture_output=True,
         text=True,
-        timeout=timeout,
+        timeout=timeout + 15,
         env=environment,
     )
     if completed.returncode:
@@ -146,7 +148,7 @@ def submit_exact_h3_graph(
     prompt_bytes = _read_regular(prompt_file)
     if hashlib.sha256(prompt_bytes).hexdigest() != prompt_sha256:
         raise ValueError("current prompt SHA-256 no longer matches the generation token")
-    prompt = prompt_bytes.decode("utf-8").strip()
+    prompt = executed_generation_prompt(prompt_bytes.decode("utf-8"))
     graph_prompts = [
         node.get("inputs", {}).get("prompt")
         for node in graph.values()

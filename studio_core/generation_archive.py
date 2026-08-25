@@ -17,6 +17,7 @@ from pathlib import Path
 from studio_core.generation_contracts import (
     GenerationContract,
     GenerationContractError,
+    executed_generation_prompt_sha256,
     parse_generation_job_payload,
 )
 from studio_core.paths import StudioPaths
@@ -286,7 +287,8 @@ def _h3_history_metadata(prompt_id: str, outputs: list[str]) -> dict:
         "accel_nodes": accel_nodes,
         "references": references,
         "upscale": False,
-        "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+        "executed_prompt_sha256": hashlib.sha256(
+            prompt.encode("utf-8")).hexdigest(),
     }
 
 def _validate_authoritative_generation_contract(
@@ -296,7 +298,8 @@ def _validate_authoritative_generation_contract(
     resolution = execution["resolution"]
     timing = execution["timing"]
     expected = {
-        "prompt_sha256": contract["prompt_sha256"],
+        "executed_prompt_sha256": executed_generation_prompt_sha256(
+            contract["prompt"]),
         "mode": settings["mode"],
         "width": resolution["width"],
         "height": resolution["height"],
@@ -341,6 +344,7 @@ def _web_generation_metadata(project: str, clip_id: str, outputs: list[str],
     return {
         **metadata,
         **authoritative,
+        "prompt_sha256": contract["prompt_sha256"],
         "studio_job_id": job_id,
         "generation_contract_version": contract["schema_version"],
         "settings_updated_at": contract["settings_updated_at"],

@@ -300,7 +300,8 @@ class GenerationJobRunner:
                     clip_id,
                     files,
                     {"prompt_id": prompt_id},
-                    source_root=self.runtime.comfy_root / "output",
+                    source_root=(
+                        self.runtime.comfy_root.resolve(strict=True) / "output"),
                     transport="comfyui-mcp",
                 )
                 if generation.name != contract.expected_generation_id:

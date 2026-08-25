@@ -69,6 +69,10 @@ preview and production releases.
 - Preserved exact pre-contract generation metadata for completed/failed legacy
   jobs so historical job lists remain readable, while active and malformed
   payloads continue to fail closed at the typed persistence boundary
+- Fixed the live deterministic render boundary: mcporter now receives the full
+  tool-call timeout, archived metadata distinguishes source-file and executed
+  prompt hashes, and descriptor-safe archival canonicalizes an explicitly trusted
+  symlinked ComfyUI root before opening output files
 
 ## [0.1.0-preview.3] - 2026-08-24
 

@@ -6,17 +6,14 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
 from studio_core.comfyui_mcp import (
-    COMFYUI_MCP,
-    MCPORTER,
+    call_mcp,
     mcp_environment,
     submit_exact_h3_graph,
-    unwrap_content,
 )
 
 
@@ -35,32 +32,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--comfyui-python", type=Path, required=True)
     parser.add_argument("--result-json", type=Path, required=True)
     return parser.parse_args(argv)
-
-
-def _call_mcp(
-        tool: str, arguments: dict, environment: dict[str, str],
-        timeout: int = 180):
-    command = [
-        "npx", "-y", MCPORTER,
-        "call", "--stdio", f"npx -y {COMFYUI_MCP}", tool,
-        "--args", json.dumps(arguments, separators=(",", ":"), ensure_ascii=False),
-        "--output", "json",
-    ]
-    completed = subprocess.run(
-        command,
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        env=environment,
-    )
-    if completed.returncode:
-        detail = (completed.stderr or completed.stdout).strip()
-        raise RuntimeError(f"comfyui-mcp {tool} failed ({completed.returncode}): {detail}")
-    try:
-        return unwrap_content(json.loads(completed.stdout))
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"comfyui-mcp {tool} returned invalid JSON") from exc
 
 
 def _write_result(path: Path, payload: dict[str, Any]) -> None:
@@ -92,7 +63,7 @@ def main(argv: list[str] | None = None) -> int:
             args.settings_updated_at,
             args.image,
             environment,
-            mcp_call=_call_mcp,
+            mcp_call=call_mcp,
         )
         _write_result(args.result_json, result)
         print(json.dumps(result, separators=(",", ":"), ensure_ascii=False))

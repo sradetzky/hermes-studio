@@ -242,6 +242,10 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
   ownership from web Hermes agents, and synchronized semantic profile guards. The
   clean-source gate passed 255 Python and 24 frontend/Chromium tests plus all
   compilation, lint, dependency, audit, tool, profile, CSS, and integrity checks.
+- The restarted pre-Phase-6 live checkpoint exposed and fixed mcporter's implicit
+  60-second call cap, source-versus-executed prompt hash conflation, and safe
+  archival through the configured ComfyUI-root symlink. A real 832x480 web H3
+  job then archived with authoritative provenance, empty queue, and VRAM cleanup.
 
 ## Next steps
 

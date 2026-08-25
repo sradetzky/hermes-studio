@@ -28,6 +28,16 @@ MAX_SAFE_SEED = 9_007_199_254_740_991
 FPS = 24
 
 
+def executed_generation_prompt(prompt: str) -> str:
+    """Return the exact prompt normalization applied by the H3 graph builder."""
+    return prompt.strip()
+
+
+def executed_generation_prompt_sha256(prompt: str) -> str:
+    return hashlib.sha256(
+        executed_generation_prompt(prompt).encode("utf-8")).hexdigest()
+
+
 class GenerationContractError(ValueError):
     pass
 
@@ -323,7 +333,7 @@ def parse_generation_contract(value: Any) -> GenerationContract:
         payload["schema_version"] != CONTRACT_SCHEMA_VERSION
         or payload["action"] != "generate-current-prompt"
         or not isinstance(prompt, str)
-        or not prompt
+        or not executed_generation_prompt(prompt)
         or not isinstance(prompt_sha256, str)
         or re.fullmatch(r"[0-9a-f]{64}", prompt_sha256) is None
         or hashlib.sha256(prompt.encode("utf-8")).hexdigest() != prompt_sha256

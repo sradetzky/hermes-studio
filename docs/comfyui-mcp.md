@@ -15,6 +15,10 @@ Raw REST remains only inside explicit legacy diagnostic runners.
 - Tool-call timeout: 660s (covers the server's bounded 600s batch wait)
 - Completion watcher: 10,800s timeout, 2s fallback poll
 
+Every pinned `mcporter call` receives the selected timeout explicitly in
+milliseconds. The outer Python timeout is only a final process-level margin; it
+must not leave mcporter at its shorter 60-second default.
+
 The source-controlled example is
 `hermes/profiles/studio/config.yaml.example`. Verify the live profile with:
 

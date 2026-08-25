@@ -520,7 +520,7 @@ class ProjectPathTests(unittest.TestCase):
             "cond": {
                 "class_type": "MiniMaxH3ReferenceToVideo",
                 "inputs": {
-                    "prompt": archived_prompt,
+                    "prompt": prompt,
                     "width": 1280,
                     "height": 704,
                     "length": 243,
@@ -665,6 +665,10 @@ class ProjectPathTests(unittest.TestCase):
             meta["prompt_sha256"],
             hashlib.sha256(archived_prompt.encode()).hexdigest(),
         )
+        self.assertEqual(
+            meta["executed_prompt_sha256"],
+            hashlib.sha256(prompt.encode()).hexdigest(),
+        )
         self.assertFalse(meta["upscale"])
         self.assertEqual((generation / "prompt.txt").read_text(), archived_prompt)
         self.assertEqual(
@@ -770,7 +774,7 @@ class ProjectPathTests(unittest.TestCase):
                 prompt_id, ["result.mp4"])
         self.assertEqual(metadata["mode"], "t2va")
         self.assertEqual(metadata["output_node_id"], "save")
-        self.assertEqual(metadata["prompt_sha256"], hashlib.sha256(
+        self.assertEqual(metadata["executed_prompt_sha256"], hashlib.sha256(
             b"actual branch prompt").hexdigest())
         self.assertEqual((metadata["width"], metadata["height"]), (640, 384))
         self.assertEqual(metadata["length"], 125)

@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if __package__ in {None, ""} and str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.submit_h3_graph_mcp import COMFYUI_MCP, MCPORTER
+from studio_core.comfyui_mcp import COMFYUI_MCP, MCPORTER
 
 MIN_HERMES_VERSION = (0, 20, 5)
 REQUIRED_CHAT_OPTIONS = (
