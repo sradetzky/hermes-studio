@@ -169,6 +169,17 @@ class ImportBoundaryTests(unittest.TestCase):
             self.assertNotIn(generation_owner, manager)
             self.assertIn(generation_owner, files["generation_job_service.py"])
 
+    def test_movie_execution_keeps_the_typed_contract(self):
+        contracts = (ROOT / "studio_core" / "movie_contracts.py").read_text(
+            encoding="utf-8")
+        store = (ROOT / "webapp" / "movie_store.py").read_text(encoding="utf-8")
+        runner = (ROOT / "webapp" / "movie_runner.py").read_text(encoding="utf-8")
+        self.assertIn("def build_movie_contract(", contracts)
+        self.assertNotIn("def _copy_compatible(", store)
+        self.assertNotIn("def _target_for_sources(", store)
+        self.assertNotIn("contract = job.payload.contract.to_dict()", runner)
+        self.assertNotIn('"--contract"', runner)
+
 
 if __name__ == "__main__":
     unittest.main()

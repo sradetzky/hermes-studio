@@ -6,6 +6,8 @@ import unittest
 from pathlib import Path
 
 from scripts import design_studio as ds
+from studio_core.job_contracts import MovieExportJobPayload
+from studio_core.movie_contracts import MovieContract, parse_movie_contract
 from studio_core.projects import ClipStore
 from webapp.config import Settings
 from studio_core.job_store import JobStore
@@ -114,8 +116,9 @@ class MovieExportTests(unittest.TestCase):
             ["clip-001", "clip-002"],
         )
         self.assertEqual({path: path.read_bytes() for path in original}, original)
+        self.assertIsInstance(completed.payload, MovieExportJobPayload)
         self.assertEqual(MovieStore().verify_export(
-            self.project, json.loads(job.message), job.id)["id"], "movie-001")
+            self.project, completed.payload.contract, job.id)["id"], "movie-001")
         self.assertEqual(cleanup_calls, [])
 
     def test_mismatched_sources_are_deterministically_normalized(self):
@@ -127,7 +130,8 @@ class MovieExportTests(unittest.TestCase):
             fps=15, color="blue", audio=False)
         movies = MovieStore()
         contract = movies.build_contract(self.project)
-        self.assertEqual(contract["assembly"]["mode"], "normalized")
+        self.assertIsInstance(contract, MovieContract)
+        self.assertEqual(contract.assembly.mode, "normalized")
 
         result = movies.export(self.project, contract, "job-normalized")
         movie = self.project / "final" / result["id"] / "movie.mp4"
@@ -145,7 +149,7 @@ class MovieExportTests(unittest.TestCase):
         self.assertEqual(provenance["assembly"]["mode"], "normalized")
 
         next_contract = movies.build_contract(self.project)
-        self.assertEqual(next_contract["output"]["id"], "movie-002")
+        self.assertEqual(next_contract.output.id, "movie-002")
 
     def test_export_rejects_source_content_changed_after_enqueue(self):
         source = self._selected_video(
@@ -168,10 +172,11 @@ class MovieExportTests(unittest.TestCase):
             "clip-002", "001", width=128, height=72,
             fps=15, color="blue", audio=False)
         contract = MovieStore().build_contract(self.project)
-        contract["assembly"]["target"]["fps"] = "10;movie=/etc/passwd"
+        payload = contract.to_dict()
+        payload["assembly"]["target"]["fps"] = "10;movie=/etc/passwd"
 
-        with self.assertRaisesRegex(MovieStoreError, "contract is invalid"):
-            MovieStore().export(self.project, contract, "job-tampered")
+        with self.assertRaisesRegex(ValueError, "target frame rate is invalid"):
+            parse_movie_contract(payload)
 
     def test_publication_never_overwrites_allocated_version(self):
         self._selected_video(

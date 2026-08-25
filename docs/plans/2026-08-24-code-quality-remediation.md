@@ -719,3 +719,23 @@ empty queue and the generation-owned cleanup event.
 Re-run the remediation release gate after slices 3, 8, 11, and before either
 feature commit. Stop and update this document if implementation reveals a
 materially different canonical boundary.
+
+---
+
+## 10. Second thermo-nuclear closure gate
+
+A fresh codebase-level review on 2026-08-25 found four remaining ownership seams.
+They are being closed in this order before another feature wave:
+
+1. **Typed movie execution — complete.** `studio_core.movie_contracts` now owns
+   canonical contract construction and assembly policy. `MovieStore` and
+   `MovieJobRunner` retain `MovieContract` objects through export and verification;
+   serialization occurs only at persistence/provenance boundaries. The supervised
+   worker reloads the exact persisted running job instead of accepting an entire
+   contract through process arguments.
+2. **Explicit generation archive context — pending.**
+3. **Unified specialist dispatch lifecycle — pending.**
+4. **Single coordinated generation preflight owner — pending.**
+
+Each item follows the slice protocol in section 2. Run the complete committed-
+source gate after all four are verified.

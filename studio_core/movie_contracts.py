@@ -241,7 +241,7 @@ def _parse_audio(value: Any) -> MovieAudioProbe | None:
     )
 
 
-def _parse_probe(value: Any) -> MovieProbe:
+def parse_movie_probe(value: Any) -> MovieProbe:
     probe = _exact_dict(
         value,
         {"duration_seconds", "video", "audio"},
@@ -281,6 +281,22 @@ def _target_for_sources(sources: tuple[MovieSource, ...]) -> MovieTarget:
         fps=video.r_frame_rate,
         sample_rate=48_000,
         channels=2,
+    )
+
+
+def build_movie_contract(
+        sources: tuple[MovieSource, ...], movie_id: str) -> MovieContract:
+    if not sources or len({source.clip_id for source in sources}) != len(sources):
+        raise MovieContractError("movie export sources are invalid")
+    if MOVIE_DIRECTORY_RE.fullmatch(movie_id) is None:
+        raise MovieContractError("movie output id is invalid")
+    mode = "stream-copy" if _copy_compatible(sources) else "normalized"
+    return MovieContract(
+        schema_version=MOVIE_CONTRACT_VERSION,
+        action="export-selected-takes",
+        sources=sources,
+        assembly=MovieAssembly(mode, True, _target_for_sources(sources)),
+        output=MovieOutput(movie_id, MOVIE_FILENAME, MOVIE_PROVENANCE),
     )
 
 
@@ -330,7 +346,7 @@ def parse_movie_contract(value: Any) -> MovieContract:
             filename=filename,
             size=_integer(source["size"], "source size"),
             sha256=source["sha256"],
-            probe=_parse_probe(source["probe"]),
+            probe=parse_movie_probe(source["probe"]),
         ))
     typed_sources = tuple(sources)
 

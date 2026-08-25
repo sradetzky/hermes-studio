@@ -17,10 +17,11 @@ from studio_core.job_contracts import (
     MovieExportJobPayload,
 )
 from studio_core.job_store import JobStore
-from studio_core.models import Job
+from studio_core.models import Job, JobStatus
+from studio_core.movie_contracts import MOVIE_FILENAME
 from studio_core.projects import project_path
 from webapp.config import Settings
-from webapp.movie_store import MOVIE_FILENAME, MovieStore
+from webapp.movie_store import MovieStore
 from webapp.process_runner import ProcessCancelled, SupervisedProcessRunner
 
 
@@ -46,15 +47,13 @@ class MovieJobRunner:
         self.environment = environment
         self.export_chat = export_chat
 
-    def command(self, job: Job, project: Path, contract: dict) -> list[str]:
+    def command(self, job: Job) -> list[str]:
         return [
             sys.executable,
             str(self.settings.repo / "webapp" / "movie_runner.py"),
-            "--project", str(project),
+            "--database", str(self.settings.database_path),
+            "--studio-root", str(self.settings.studio_root),
             "--job-id", job.id,
-            "--contract", json.dumps(
-                contract, sort_keys=True, separators=(",", ":"),
-                ensure_ascii=False),
         ]
 
     def _fail(self, job: Job, error: str) -> None:
@@ -66,7 +65,7 @@ class MovieJobRunner:
         try:
             if not isinstance(job.payload, MovieExportJobPayload):
                 raise ValueError("movie runner received the wrong payload type")
-            contract = job.payload.contract.to_dict()
+            contract = job.payload.contract
         except ValueError as exc:
             self._fail(job, f"Movie export contract is invalid: {exc}")
             return
@@ -74,14 +73,14 @@ class MovieJobRunner:
             job.id,
             job.profile,
             JobEventType.MOVIE_EXPORT,
-            f"Assembling {len(contract['sources'])} selected takes with hard cuts",
+            f"Assembling {len(contract.sources)} selected takes with hard cuts",
             phase=JobPhase.RUNNING,
-            detail={"mode": contract["assembly"]["mode"]},
+            detail={"mode": contract.assembly.mode},
         )
         try:
             result = self.process_runner.run(
                 job,
-                self.command(job, project, contract),
+                self.command(job),
                 self.environment(job),
             )
         except ProcessCancelled:
@@ -128,13 +127,17 @@ class MovieJobRunner:
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Assemble one immutable Hermes Studio movie export contract")
-    parser.add_argument("--project", type=Path, required=True)
+    parser.add_argument("--database", type=Path, required=True)
+    parser.add_argument("--studio-root", type=Path, required=True)
     parser.add_argument("--job-id", required=True)
-    parser.add_argument("--contract", required=True)
     args = parser.parse_args()
 
-    contract = json.loads(args.contract)
-    result = MovieStore().export(args.project, contract, args.job_id)
+    job = JobStore(args.database).get_job(args.job_id)
+    if (job.status is not JobStatus.RUNNING
+            or not isinstance(job.payload, MovieExportJobPayload)):
+        raise ValueError("movie worker requires one running movie export job")
+    project = project_path(args.studio_root, job.project)
+    result = MovieStore().export(project, job.payload.contract, job.id)
     print(json.dumps(result, sort_keys=True, separators=(",", ":")))
     return 0
 

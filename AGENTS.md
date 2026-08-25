@@ -289,7 +289,13 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
 - The fresh post-follow-up live checkpoint generated clip-002 take 002 through
   the web-owned deterministic R2V path with exact project/previous-take inputs,
   matching source/archive bytes, API range read-back, cleanup, and an empty queue.
+- The second thermo-nuclear closure gate now keeps project-movie contracts typed
+  through canonical construction, worker execution, export, and verification;
+  movie workers reload the exact persisted running job instead of receiving a
+  serialized contract through process arguments.
 
 ## Next steps
 
-- No active implementation slice; choose the next scoped milestone explicitly.
+- Complete the remaining second thermo-nuclear closure slices in documented
+  order: explicit typed generation archive context, unified specialist dispatch,
+  redundant route-preflight removal, then the committed-source release gate.

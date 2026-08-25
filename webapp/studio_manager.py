@@ -172,7 +172,7 @@ class StudioJobManager:
             job = self.store.create_movie_export_job(
                 project,
                 json.dumps(
-                    contract, sort_keys=True, separators=(",", ":"),
+                    contract.to_dict(), sort_keys=True, separators=(",", ":"),
                     ensure_ascii=False),
                 self.settings.studio_profile,
             )

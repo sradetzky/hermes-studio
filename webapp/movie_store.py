@@ -8,20 +8,22 @@ import subprocess
 import uuid
 from contextlib import ExitStack
 from datetime import datetime, timezone
-from fractions import Fraction
 from pathlib import Path
 from urllib.parse import quote
 
 from studio_core.projects import ClipStore, ClipStoreError
 from studio_core.movie_contracts import (
-    COPY_AUDIO_CODECS,
-    COPY_VIDEO_CODECS,
     MOVIE_CONTRACT_VERSION,
     MOVIE_DIRECTORY_RE,
     MOVIE_FILENAME,
     MOVIE_PROVENANCE,
+    MovieContract,
     MovieContractError,
-    parse_movie_contract,
+    MovieProbe,
+    MovieSource,
+    MovieTarget,
+    build_movie_contract,
+    parse_movie_probe,
 )
 from webapp.media_review_store import (
     MediaReviewError,
@@ -198,7 +200,7 @@ class MovieStore:
             offset += len(chunk)
 
     @staticmethod
-    def _probe_descriptor(descriptor: int) -> dict:
+    def _probe_descriptor(descriptor: int) -> MovieProbe:
         result = subprocess.run([
             "ffprobe", "-v", "error", "-show_streams", "-show_format",
             "-of", "json", f"/proc/self/fd/{descriptor}",
@@ -215,12 +217,8 @@ class MovieStore:
                 (stream for stream in streams if stream.get("codec_type") == "audio"),
                 None,
             )
-            duration = float(payload["format"]["duration"])
-            fps = str(video["r_frame_rate"])
-            if Fraction(fps) <= 0 or duration <= 0:
-                raise ValueError
             normalized = {
-                "duration_seconds": duration,
+                "duration_seconds": float(payload["format"]["duration"]),
                 "video": {
                     key: video.get(key) for key in (
                         "codec_name", "width", "height", "pix_fmt",
@@ -236,29 +234,9 @@ class MovieStore:
                         "channel_layout", "time_base",
                     )
                 }
-            if (not isinstance(normalized["video"]["width"], int)
-                    or not isinstance(normalized["video"]["height"], int)):
-                raise ValueError
-            return normalized
-        except (KeyError, StopIteration, TypeError, ValueError, ZeroDivisionError) as exc:
+            return parse_movie_probe(normalized)
+        except (KeyError, StopIteration, TypeError, ValueError) as exc:
             raise MovieStoreError("selected video metadata is incomplete") from exc
-
-    @staticmethod
-    def _copy_compatible(sources: list[dict]) -> bool:
-        first = sources[0]
-        signature = (first["probe"]["video"], first["probe"]["audio"])
-        for source in sources:
-            video = source["probe"]["video"]
-            audio = source["probe"]["audio"]
-            if Path(source["filename"]).suffix.lower() not in {".mp4", ".mov"}:
-                return False
-            if video.get("codec_name") not in COPY_VIDEO_CODECS:
-                return False
-            if audio is not None and audio.get("codec_name") not in COPY_AUDIO_CODECS:
-                return False
-            if (video, audio) != signature:
-                return False
-        return True
 
     def _next_movie_id(self, project: Path) -> str:
         movies = self.list_movies(project)
@@ -268,7 +246,7 @@ class MovieStore:
         ) + 1
         return f"movie-{number:03d}"
 
-    def build_contract(self, project: Path) -> dict:
+    def build_contract(self, project: Path) -> MovieContract:
         readiness = self.readiness(project)
         if not readiness["ready"]:
             reasons = "; ".join(
@@ -276,7 +254,7 @@ class MovieStore:
                 for item in readiness["blocking"])
             raise MovieNotReadyError(f"project movie is not ready: {reasons}")
 
-        sources = []
+        sources: list[MovieSource] = []
         for item in readiness["clips"]:
             selected = item["selected_take"]
             assert selected is not None
@@ -285,63 +263,25 @@ class MovieStore:
                 with self.media.open_media(
                         clip, selected["generation"],
                         selected["filename"]) as opened:
-                    sources.append({
-                        "clip_id": item["id"],
-                        "clip_title": item["title"],
-                        "generation": selected["generation"],
-                        "filename": selected["filename"],
-                        "size": opened.stat.st_size,
-                        "sha256": self._sha256(opened),
-                        "probe": self._probe_descriptor(opened.descriptor),
-                    })
+                    sources.append(MovieSource(
+                        clip_id=item["id"],
+                        clip_title=item["title"],
+                        generation=selected["generation"],
+                        filename=selected["filename"],
+                        size=opened.stat.st_size,
+                        sha256=self._sha256(opened),
+                        probe=self._probe_descriptor(opened.descriptor),
+                    ))
             except (ClipStoreError, MediaReviewError, OSError) as exc:
                 raise MovieNotReadyError(
                     f"project movie source changed: {item['title']}") from exc
 
-        mode = "stream-copy" if self._copy_compatible(sources) else "normalized"
-        target = self._target_for_sources(sources)
-        contract = {
-            "schema_version": MOVIE_CONTRACT_VERSION,
-            "action": "export-selected-takes",
-            "output": {
-                "id": self._next_movie_id(project),
-                "filename": MOVIE_FILENAME,
-                "provenance": MOVIE_PROVENANCE,
-            },
-            "assembly": {
-                "mode": mode,
-                "hard_cuts": True,
-                "target": target,
-            },
-            "sources": sources,
-        }
-        self._validate_contract(contract)
-        return contract
-
-    @staticmethod
-    def _target_for_sources(sources: list[dict]) -> dict:
-        first_video = sources[0]["probe"]["video"]
-        width = int(first_video["width"])
-        height = int(first_video["height"])
-        return {
-            "width": max(2, width - width % 2),
-            "height": max(2, height - height % 2),
-            "fps": first_video["r_frame_rate"],
-            "sample_rate": 48000,
-            "channels": 2,
-        }
-
-    @staticmethod
-    def _validated_contract(contract: dict) -> dict:
         try:
-            return parse_movie_contract(contract).to_dict()
+            return build_movie_contract(
+                tuple(sources), self._next_movie_id(project))
         except MovieContractError as exc:
             raise MovieStoreError(
                 f"movie export contract is invalid: {exc}") from exc
-
-    @staticmethod
-    def _validate_contract(contract: dict) -> None:
-        MovieStore._validated_contract(contract)
 
     @staticmethod
     def _concat_bytes(descriptors: list[int]) -> bytes:
@@ -351,18 +291,20 @@ class MovieStore:
         ).encode("utf-8")
 
     @staticmethod
-    def _normalized_command(sources: list[dict], descriptors: list[int],
-                            staging_fd: int, target: dict) -> tuple[list[str], tuple[int, ...]]:
+    def _normalized_command(
+            sources: tuple[MovieSource, ...], descriptors: list[int],
+            staging_fd: int,
+            target: MovieTarget) -> tuple[list[str], tuple[int, ...]]:
         command = ["ffmpeg", "-v", "error", "-nostdin"]
         for descriptor in descriptors:
             command += ["-i", f"/proc/self/fd/{descriptor}"]
-        any_audio = any(source["probe"]["audio"] is not None for source in sources)
+        any_audio = any(source.probe.audio is not None for source in sources)
         audio_inputs = {}
         next_input = len(descriptors)
         if any_audio:
             for index, source in enumerate(sources):
-                if source["probe"]["audio"] is None:
-                    duration = source["probe"]["duration_seconds"]
+                if source.probe.audio is None:
+                    duration = source.probe.duration_seconds
                     command += [
                         "-f", "lavfi", "-i",
                         f"anullsrc=r=48000:cl=stereo:d={duration:.9f}",
@@ -372,9 +314,9 @@ class MovieStore:
 
         filters = []
         concat_inputs = []
-        width = target["width"]
-        height = target["height"]
-        fps = target["fps"]
+        width = target.width
+        height = target.height
+        fps = target.fps
         for index, source in enumerate(sources):
             filters.append(
                 f"[{index}:v:0]scale={width}:{height}:"
@@ -415,12 +357,12 @@ class MovieStore:
         ]
         return command, tuple(descriptors + [staging_fd])
 
-    def _ffmpeg_command(self, contract: dict, descriptors: list[int],
+    def _ffmpeg_command(self, contract: MovieContract, descriptors: list[int],
                         staging_fd: int) -> tuple[list[str], tuple[int, ...]]:
-        if contract["assembly"]["mode"] == "normalized":
+        if contract.assembly.mode == "normalized":
             return self._normalized_command(
-                contract["sources"], descriptors, staging_fd,
-                contract["assembly"]["target"])
+                contract.sources, descriptors, staging_fd,
+                contract.assembly.target)
         write_new_regular_file_at(
             staging_fd, "inputs.txt", self._concat_bytes(descriptors))
         return ([
@@ -431,27 +373,26 @@ class MovieStore:
             f"/proc/self/fd/{staging_fd}/{MOVIE_FILENAME}",
         ], tuple(descriptors + [staging_fd]))
 
-    def export(self, project: Path, contract: dict, job_id: str) -> dict:
-        contract = self._validated_contract(contract)
+    def export(self, project: Path, contract: MovieContract, job_id: str) -> dict:
         final = project / "final"
         staging_name = f".movie-{uuid.uuid4().hex}"
         staging_identity = None
         published = False
         with ExitStack() as stack:
             opened_sources = []
-            for source in contract["sources"]:
+            for source in contract.sources:
                 try:
-                    clip = self.clips.resolve_clip(project, source["clip_id"])
+                    clip = self.clips.resolve_clip(project, source.clip_id)
                     opened = stack.enter_context(self.media.open_media(
-                        clip, source["generation"], source["filename"]))
+                        clip, source.generation, source.filename))
                 except (ClipStoreError, MediaReviewError, OSError) as exc:
                     raise MovieStoreError(
-                        f"movie source changed after enqueue: {source['clip_id']}") from exc
-                if (opened.stat.st_size != source["size"]
-                        or self._sha256(opened) != source["sha256"]
-                        or self._probe_descriptor(opened.descriptor) != source["probe"]):
+                        f"movie source changed after enqueue: {source.clip_id}") from exc
+                if (opened.stat.st_size != source.size
+                        or self._sha256(opened) != source.sha256
+                        or self._probe_descriptor(opened.descriptor) != source.probe):
                     raise MovieStoreError(
-                        f"movie source changed after enqueue: {source['clip_id']}")
+                        f"movie source changed after enqueue: {source.clip_id}")
                 opened_sources.append(opened)
 
             try:
@@ -477,9 +418,9 @@ class MovieStore:
                             output_sha256 = self._sha256(output)
                             output_size = output.stat.st_size
                         expected_duration = sum(
-                            source["probe"]["duration_seconds"]
-                            for source in contract["sources"])
-                        actual_duration = output_probe["duration_seconds"]
+                            source.probe.duration_seconds
+                            for source in contract.sources)
+                        actual_duration = output_probe.duration_seconds
                         if (output_size <= 0 or actual_duration <= 0
                                 or abs(actual_duration - expected_duration) > max(
                                     0.5, expected_duration * 0.15)):
@@ -489,15 +430,16 @@ class MovieStore:
                             "schema_version": MOVIE_CONTRACT_VERSION,
                             "job_id": job_id,
                             "created_at": datetime.now(timezone.utc).isoformat(),
-                            "assembly": contract["assembly"],
-                            "sources": contract["sources"],
+                            "assembly": contract.assembly.to_dict(),
+                            "sources": [
+                                source.to_dict() for source in contract.sources],
                             "output": {
-                                "id": contract["output"]["id"],
+                                "id": contract.output.id,
                                 "filename": MOVIE_FILENAME,
                                 "size": output_size,
                                 "sha256": output_sha256,
                                 "duration_seconds": actual_duration,
-                                "probe": output_probe,
+                                "probe": output_probe.to_dict(),
                             },
                         }
                         write_new_regular_file_at(
@@ -506,7 +448,7 @@ class MovieStore:
                                 provenance, indent=2,
                                 ensure_ascii=False) + "\n").encode("utf-8"))
                         atomic_move_no_replace_at(
-                            final_fd, staging_name, contract["output"]["id"],
+                            final_fd, staging_name, contract.output.id,
                             expected_source_identity=staging_identity)
                         published = True
             except (SafeFilesystemError, OSError) as exc:
@@ -518,9 +460,9 @@ class MovieStore:
                         final / staging_name, staging_identity)
         return self.verify_export(project, contract, job_id)
 
-    def verify_export(self, project: Path, contract: dict, job_id: str) -> dict:
-        contract = self._validated_contract(contract)
-        movie_id = contract["output"]["id"]
+    def verify_export(
+            self, project: Path, contract: MovieContract, job_id: str) -> dict:
+        movie_id = contract.output.id
         movie = project / "final" / movie_id
         try:
             with open_directory(movie) as movie_fd:
@@ -535,8 +477,9 @@ class MovieStore:
             raise MovieStoreError(
                 "movie export postcondition was not satisfied") from exc
         if (provenance.get("job_id") != job_id
-                or provenance.get("assembly") != contract["assembly"]
-                or provenance.get("sources") != contract["sources"]
+                or provenance.get("assembly") != contract.assembly.to_dict()
+                or provenance.get("sources") != [
+                    source.to_dict() for source in contract.sources]
                 or provenance.get("output", {}).get("id") != movie_id
                 or provenance.get("output", {}).get("filename") != MOVIE_FILENAME
                 or provenance.get("output", {}).get("size") != output_size

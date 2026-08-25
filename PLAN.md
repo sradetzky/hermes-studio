@@ -1,8 +1,7 @@
 # PLAN.md — Hermes Studio
 
-**Status**: `v0.1.0-preview.3` released; Phase 5.5 remediation, Phase 6
-interaction/continuity, and the live chained-render release checkpoint are
-complete.
+**Status**: `v0.1.0-preview.3` released; Phase 5.5 remediation and Phase 6 are
+complete. The second thermo-nuclear closure gate is in progress.
 **Owner**: Sven (local setup on RTX 5060 Ti 16GB)  
 **Updated**: 2026-08-25
 **Goal**: Fully local, agent-orchestrated creative studio centered on MiniMax H3 + Hermes, with a simple self-hosted web UI.
@@ -294,6 +293,18 @@ project/clip chat scope and exact IDs.
 - [x] Re-run that chained-R2V web path after the lower-priority quality follow-up;
   generation 002 preserved both ordered input contracts, matched source/archive
   bytes, served range read-back, emitted cleanup, and left the queue empty.
+
+### Phase 6.1 – Second thermo-nuclear closure gate (in progress)
+- [x] Keep movie contracts typed from canonical construction through worker
+  execution, export, and postcondition verification; workers reload the exact
+  persisted running job instead of accepting a serialized command-line contract.
+- [ ] Pass generation archival an explicit typed context and exact resolved input
+  paths instead of reloading contracts through ambient process state.
+- [ ] Unify local and Grok specialist dispatch behind one lifecycle and fail
+  closed when web-correlated event projection cannot attach.
+- [ ] Remove the redundant unlocked generation-route preflight and retain the
+  coordinated generation service as the single validation owner.
+- [ ] Pass the full committed-source non-GPU release gate.
 
 ---
 
