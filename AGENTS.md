@@ -202,11 +202,13 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
 - Remediation P0.2 established `studio_core.paths` as the canonical account,
   Hermes fleet/profile, and ComfyUI resolver across Python and fleet shell tools,
   including profile-isolated matrices and exact model-switch reporting/failure.
+- Remediation P0.3 made user-service installation checkout-independent through a
+  verified stable launcher and added locked Python dependencies, `pip-audit`,
+  supported Hermes/MCP contract checks, and incremental Ruff correctness linting.
 
 ## Next steps
 
-- [ ] Remediation P0: complete reproducible service/audited dependency setup and
-  the event-retention decision.
+- [ ] Remediation P0: measure and decide the runtime event-retention policy.
 - [ ] Remediation P1: create `studio_core`, extract migration/domain ownership,
   remove the LLM generation proxy, split job runners, and type job boundaries.
 - [ ] Remediation P2: extract browser controllers, reconcile stable activity

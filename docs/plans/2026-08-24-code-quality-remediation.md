@@ -173,6 +173,13 @@ malformed input into a different target.
 
 ### P0.3 Make installation and dependency gates reproducible
 
+**Status (2026-08-25): complete.** A stable user launcher now binds the service
+to the installing checkout and is verified after installation. The canonical
+gate verifies a complete Python lock, installed consistency, `pip-audit`, the
+minimum supported Hermes CLI behavior, exact MCP package pins, and an incremental
+Ruff correctness baseline. The initial full default Ruff scan measured 263
+pre-existing findings; broad style cleanup remains deliberately separate.
+
 **Problems:** The systemd unit assumes `%h/repos/hermes-studio`; release checks
 are spread across prose; transitive Python/Node and Hermes/external tool versions
 are not represented by one verified contract; no root static-analysis baseline

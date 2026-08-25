@@ -69,8 +69,12 @@ This repository does **not** download or redistribute model weights.
 
 ```bash
 python -m venv .venv
-.venv/bin/python -m pip install -r requirements-dev.txt
+.venv/bin/python -m pip install -r requirements-lock.txt
 ```
+
+`requirements.txt` and `requirements-dev.txt` are the human-maintained direct
+pins. `requirements-lock.txt` records the complete resolved development/release
+environment and is checked against both the direct inputs and installed packages.
 
 ### 2. Create Hermes profiles
 
@@ -139,16 +143,18 @@ machine's exact Tailscale DNS name:
 
 ```bash
 ./webapp/stop.sh
-install -Dm644 webapp/hermes-studio.service \
-  "$HOME/.config/systemd/user/hermes-studio.service"
-install -d -m700 "$HOME/.config/hermes-studio"
+scripts/install-web-service.sh
 printf '%s\n' 'HERMES_STUDIO_TRUSTED_HOSTS=<machine>.<tailnet>.ts.net' \
   > "$HOME/.config/hermes-studio/environment"
 chmod 600 "$HOME/.config/hermes-studio/environment"
-systemctl --user daemon-reload
 systemctl --user enable --now hermes-studio.service
 sudo tailscale serve --bg --yes --https=8443 http://127.0.0.1:8788
 ```
+
+The installer writes a stable `~/.local/bin/hermes-studio-web` launcher pointing
+to the exact checkout from which it ran, copies and reads back the user unit, and
+reloads systemd. Pass `--enable` to install and start in one operation. Re-run the
+installer after moving the checkout.
 
 Open `https://<machine>.<tailnet>.ts.net:8443/` from a device permitted by the
 tailnet ACL. Standard alternate HTTPS port 8443 avoids replacing any existing
@@ -173,10 +179,12 @@ scripts/check.sh
 ```
 
 The canonical gate runs complete Python discovery, frontend and real-Chromium
-tests, Python compilation, JavaScript syntax checks, dependency consistency,
-profile drift, reproducible CSS, source-archive hygiene/checksum, and repository
-integrity. Live service/API and real GPU generation remain explicit operational
-gates because the local check must not interrupt Studio or queue ComfyUI work.
+tests, Python compilation, incremental Ruff correctness checks, JavaScript
+syntax checks, exact dependency-lock consistency, `pip check`, `pip-audit`,
+supported Hermes CLI and pinned MCP package checks, profile drift, reproducible
+CSS, source-archive hygiene/checksum, and repository integrity. Live service/API
+and real GPU generation remain explicit operational gates because the local
+check must not interrupt Studio or queue ComfyUI work.
 
 Runtime data, project media, `.venv/`, bytecode, and `.runtime/` are ignored.
 Never commit credentials, live profile configs, model files, project media, or

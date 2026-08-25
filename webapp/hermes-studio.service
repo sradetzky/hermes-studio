@@ -5,9 +5,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=%h/repos/hermes-studio
 EnvironmentFile=-%h/.config/hermes-studio/environment
-ExecStart=%h/repos/hermes-studio/webapp/run.sh
+ExecStart=%h/.local/bin/hermes-studio-web
 Restart=on-failure
 RestartSec=3s
 SuccessExitStatus=143

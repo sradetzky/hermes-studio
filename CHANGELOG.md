@@ -12,6 +12,10 @@ preview and production releases.
 - Made MCP graph-submission tests visible to standard Python discovery, expanded
   them across ordered multi-reference and deterministic failure paths, and added
   one clean-commit local non-GPU release-check entry point
+- Made user-service installation checkout-independent through a verified stable
+  launcher and added a complete Python dependency lock, vulnerability audit,
+  supported Hermes/MCP contract checks, and incremental correctness linting to
+  the canonical gate
 
 ### Fixed
 

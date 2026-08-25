@@ -1,8 +1,8 @@
 # PLAN.md — Hermes Studio
 
-**Status**: `v0.1.0-preview.3` released; Phase 5.5 remediation is in progress,
-starting with complete canonical test discovery and a local non-GPU check entry
-point. Phase 6 remains blocked.
+**Status**: `v0.1.0-preview.3` released; Phase 5.5 remediation P0.1–P0.3 are
+complete and the runtime-event retention decision is next. Phase 6 remains
+blocked.
 **Owner**: Sven (local setup on RTX 5060 Ti 16GB)  
 **Updated**: 2026-08-25
 **Goal**: Fully local, agent-orchestrated creative studio centered on MiniMax H3 + Hermes, with a simple self-hosted web UI.
@@ -236,7 +236,7 @@ project/clip chat scope and exact IDs.
 ### Phase 5.5 – Code-quality remediation gate (planned; blocks Phase 6)
 - [x] Make all Python tests discoverable through one canonical command and add
   one executable clean-commit entry point for local non-GPU release checks.
-- [ ] Add reproducible checkout-independent service setup and extend the
+- [x] Add reproducible checkout-independent service setup and extend the
   dependency gate with the supported tool-version and audit contract.
 - [x] Centralize profile, fleet, real-home, and ComfyUI path resolution across
   Python and shell; verify both normal and profile-isolated environments.

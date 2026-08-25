@@ -113,7 +113,8 @@ class LauncherScriptTests(unittest.TestCase):
             Path(__file__).resolve().parent.parent /
             "webapp" / "hermes-studio.service"
         ).read_text()
-        self.assertIn("ExecStart=%h/repos/hermes-studio/webapp/run.sh", unit)
+        self.assertIn("ExecStart=%h/.local/bin/hermes-studio-web", unit)
+        self.assertNotIn("repos/hermes-studio", unit)
         self.assertIn(
             "EnvironmentFile=-%h/.config/hermes-studio/environment", unit)
         self.assertIn("Restart=on-failure", unit)

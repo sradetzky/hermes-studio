@@ -24,6 +24,9 @@ through pinned `mcporter@0.13.7` → `comfyui-mcp@0.52.61`, with a result-file
 reservation that fails closed instead of double-submitting. Generation jobs
 receive only terminal, file, skills, and comfyui toolsets. The agent must not
 inspect the runner or transcribe workflow/prompt content.
+`scripts/check_tool_versions.py`, invoked by the canonical release gate, verifies
+that both pinned npm package versions remain available and that the installed
+Hermes CLI still exposes the subprocess options this integration requires.
 Studio then waits through MCP, archives with
 `design_studio.py archive-output` using exact project + clip IDs, and always
 clears VRAM.

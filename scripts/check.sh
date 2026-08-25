@@ -63,6 +63,9 @@ PYTHON="$PYTHON" node --test \
 echo "== Python compilation =="
 env -u PYTHONPATH "$PYTHON" -m compileall -q studio_core webapp scripts tests
 
+echo "== Python correctness lint =="
+env -u PYTHONPATH "$PYTHON" -m ruff check studio_core webapp scripts tests
+
 echo "== JavaScript syntax =="
 for file in webapp/static/*.js webapp/static/*.mjs; do
   node --check "$file"
@@ -70,7 +73,17 @@ done
 
 cd "$ROOT"
 echo "== Python dependency consistency =="
+"$PYTHON" scripts/check_dependency_lock.py
 "$PYTHON" -m pip check
+
+echo "== Python dependency audit =="
+"$PYTHON" -m pip_audit \
+  --cache-dir "$archive_dir/pip-audit-cache" \
+  --progress-spinner=off \
+  -r requirements-lock.txt
+
+echo "== external tool contracts =="
+"$PYTHON" scripts/check_tool_versions.py
 
 echo "== profile drift =="
 scripts/sync-profiles.sh --check
