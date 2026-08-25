@@ -583,11 +583,7 @@ class StudioJobManager:
     def _graph_builder_command(self, job: Job, package: dict) -> tuple[str, Path]:
         project_path = self.settings.studio_root / "projects" / job.project
         clip_path = project_path / "clips" / job.clip_id
-        profile_home = (
-            self.settings.hermes_home
-            if job.profile == "default"
-            else self.settings.hermes_home / "profiles" / job.profile
-        )
+        profile_home = self.settings.profile_home(job.profile)
         output = Path(f"/tmp/hermes-studio-{job.id}-h3-graph.json")
         settings = package["settings_manifest"]
         execution = package["execution"]

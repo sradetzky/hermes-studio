@@ -18,16 +18,34 @@ set -euo pipefail
 
 # Managed fleet: keep in sync with hermes/profiles/ in this repo.
 FLEET=(studio studio-storyboarder studio-prompt-engineer studio-reviewer studio-illustrator)
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PYTHON="${PYTHON:-python3}"
+HERMES_ROOT="$(
+  PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}" \
+    "$PYTHON" -m studio_core.paths hermes-root
+)"
+HERMES_PROFILES="$HERMES_ROOT/profiles"
 
 cmd="${1:-show}"
 case "$cmd" in
   show)
     echo "Fleet model status:"
     for p in "${FLEET[@]}"; do
-      cfg="$HOME/.hermes/profiles/$p/config.yaml"
+      cfg="$HERMES_PROFILES/$p/config.yaml"
       if [[ -f "$cfg" ]]; then
-        m=$(grep -m1 'default:' "$cfg" | sed 's/.*default:[[:space:]]*//')
-        pr=$(grep -m1 'provider:' "$cfg" | sed 's/.*provider:[[:space:]]*//')
+        readarray -t values < <("$PYTHON" - "$cfg" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+for key in ("provider", "default"):
+    match = re.search(rf"^\s*{key}:\s*(.*?)\s*$", text, re.M)
+    print(match.group(1) if match else "(unset)")
+PY
+        )
+        pr="${values[0]}"
+        m="${values[1]}"
         printf '  %-22s %-12s %s\n' "$p" "$pr" "$m"
       else
         printf '  %-22s (no profile)\n' "$p"
@@ -38,30 +56,66 @@ case "$cmd" in
     provider="$1"; model="${2:?usage: switch-model.sh <provider> <model> [profile]}"
     targets=("${FLEET[@]}")
     [[ -n "${3:-}" ]] && targets=("$3")
+    eligible=()
+    changed=()
+    missing=()
     for p in "${targets[@]}"; do
-      cfg="$HOME/.hermes/profiles/$p/config.yaml"
+      cfg="$HERMES_PROFILES/$p/config.yaml"
       if [[ ! -f "$cfg" ]]; then
         echo "skip $p (no profile at $cfg)" >&2
+        missing+=("$p")
         continue
       fi
+      eligible+=("$p")
       # Set both fields explicitly; provider-specific auth remains profile-owned.
-      python3 - "$cfg" "$provider" "$model" <<'EOF'
-import re, sys
-path, provider, model = sys.argv[1], sys.argv[2], sys.argv[3]
-text = open(path).read()
+      result="$("$PYTHON" - "$cfg" "$provider" "$model" <<'PY'
+import os
+import re
+import sys
+import tempfile
+from pathlib import Path
+
+path = Path(sys.argv[1])
+provider, model = sys.argv[2], sys.argv[3]
+text = path.read_text(encoding="utf-8")
 def setkey(text, key, value):
     pat = re.compile(rf"^(\s*){key}:[^\n]*$", re.M)
     if pat.search(text):
-        return pat.sub(rf"\g<1>{key}: {value}", text, count=1)
+        return pat.sub(
+            lambda match: f"{match.group(1)}{key}: {value}", text, count=1)
     if re.search(r"^model:\s*$", text, re.M):
         return re.sub(r"^model:\s*$", f"model:\n  {key}: {value}", text, count=1)
     return text + f"\nmodel:\n  {key}: {value}\n"
-text = setkey(text, "provider", provider)
-text = setkey(text, "default", model)
-open(path, "w").write(text)
-print(f"  {path}: provider={provider} default={model}")
-EOF
+updated = setkey(setkey(text, "provider", provider), "default", model)
+if updated == text:
+    print("unchanged")
+else:
+    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(updated)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary, path.stat().st_mode)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+    print("changed")
+PY
+      )"
+      if [[ "$result" == "changed" ]]; then
+        changed+=("$p")
+      elif [[ "$result" != "unchanged" ]]; then
+        echo "unexpected model update result for $p: $result" >&2
+        exit 1
+      fi
     done
+    if ((${#eligible[@]} == 0)); then
+      printf 'no intended profiles could be updated: %s\n' "${missing[*]}" >&2
+      exit 1
+    fi
+    printf 'Changed profiles: %s\n' "${changed[*]:-(none)}"
     echo "Done. Restart any running gateways/sessions to pick up the new model."
     ;;
 esac

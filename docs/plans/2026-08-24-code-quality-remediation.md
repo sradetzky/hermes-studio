@@ -132,6 +132,11 @@ The test claiming serial uploads uses one reference and does not prove ordering.
 
 ### P0.2 Establish one profile-safe path model
 
+**Status (2026-08-25): complete.** `studio_core.paths` now owns account, fleet,
+active-profile, and ComfyUI roots for the CLI, webapp, profile sync, and model
+switcher. Normal/profile-isolated matrices, literal-value preservation, exact
+state DB resolution, sync targeting, and switch failure/reporting are covered.
+
 **Problem:** `HERMES_HOME`, `HERMES_REAL_HOME`, account home, fleet root, active
 profile root, and ComfyUI root are independently inferred in Python and shell.
 This recreates the path bug already repaired in `design_studio.py`.

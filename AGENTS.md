@@ -27,6 +27,7 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
 | `scripts/build-web-css.sh` | Rebuild pinned local Tailwind CSS bundle |
 | `webapp/` | App factory, routes, SQLite jobs, process manager, uploads, local UI |
 | `requirements*.txt` | Pinned runtime and development dependencies |
+| `studio_core/` | Dependency-neutral path/domain ownership shared by CLI + web |
 | `comfyui/workflows/` | Parameterized H3 API-format workflow JSONs (empty) |
 | `studio-root/` | Default studio root: projects/, shared/, tmp/ |
 
@@ -198,11 +199,14 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
 - Remediation P0.1 made MCP submission tests part of standard Python discovery,
   added ordered two-reference and failure-path coverage, and established
   `scripts/check.sh` as the clean-commit local non-GPU release entry point.
+- Remediation P0.2 established `studio_core.paths` as the canonical account,
+  Hermes fleet/profile, and ComfyUI resolver across Python and fleet shell tools,
+  including profile-isolated matrices and exact model-switch reporting/failure.
 
 ## Next steps
 
-- [ ] Remediation P0: complete path-root resolution, reproducible service/audited
-  dependency setup, and the event-retention decision.
+- [ ] Remediation P0: complete reproducible service/audited dependency setup and
+  the event-retention decision.
 - [ ] Remediation P1: create `studio_core`, extract migration/domain ownership,
   remove the LLM generation proxy, split job runners, and type job boundaries.
 - [ ] Remediation P2: extract browser controllers, reconcile stable activity

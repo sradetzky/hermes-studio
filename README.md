@@ -108,6 +108,12 @@ The default is the repo's `studio-root/`. Override it when desired:
 export DESIGN_STUDIO_ROOT="$HOME/design-studio"
 ```
 
+Runtime account paths use one shared resolver: `$HERMES_REAL_HOME` identifies
+account-owned resources, `$HERMES_HOME` identifies the active Hermes profile (or
+the fleet root outside a profile), and `$COMFYUI_PATH` overrides the default
+`$HERMES_REAL_HOME/ComfyUI`. The webapp, CLI, profile sync, and model switcher
+derive the same fleet root even when Hermes isolates `$HOME` for a profile.
+
 ### 4. Start the web UI
 
 ```bash
@@ -185,6 +191,7 @@ reference images.
 | `docs/` | Agent, frontend, CLI, image/video, MCP, and backup-profile docs |
 | `hermes/profiles/` | Repo-owned SOUL files and safe config examples |
 | `hermes/skills/` | Studio, H3/Krea, and Grok workflow skills |
+| `studio_core/` | Dependency-neutral Studio path and domain primitives |
 | `scripts/design_studio.py` | Project CLI, specialist dispatch, and generation archiving |
 | `scripts/krea2_image.py` | Legacy/manual Krea 2 runner |
 | `webapp/` | FastAPI application, runtime stores, process manager, and frontend |

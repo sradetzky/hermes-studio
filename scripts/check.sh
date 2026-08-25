@@ -61,7 +61,7 @@ PYTHON="$PYTHON" node --test \
   tests/test_frontend_browser.mjs
 
 echo "== Python compilation =="
-env -u PYTHONPATH "$PYTHON" -m compileall -q webapp scripts tests
+env -u PYTHONPATH "$PYTHON" -m compileall -q studio_core webapp scripts tests
 
 echo "== JavaScript syntax =="
 for file in webapp/static/*.js webapp/static/*.mjs; do

@@ -18,6 +18,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from scripts import design_studio as ds
+from studio_core.paths import StudioPaths
 from webapp.app import create_app
 from webapp.config import Settings
 from webapp.hermes_events import HermesSessionEventBridge
@@ -454,8 +455,10 @@ class JobStoreTests(WebAppTestCase):
             connection.commit()
 
         with patch.dict(os.environ, {"HERMES_HOME": str(home)}):
+            settings = replace(
+                self.settings, runtime_paths=StudioPaths.from_environment())
             bridge = HermesSessionEventBridge(
-                store, self.settings, job, f"studio-web:{job.id}", started_at)
+                store, settings, job, f"studio-web:{job.id}", started_at)
             bridge.poll()
 
         _, events = store.job_events("project")

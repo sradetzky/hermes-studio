@@ -5,7 +5,12 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-HERMES_PROFILES="${HERMES_HOME:-$HOME/.hermes}/profiles"
+PYTHON="${PYTHON:-python3}"
+HERMES_ROOT="$(
+  PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}" \
+    "$PYTHON" -m studio_core.paths hermes-root
+)"
+HERMES_PROFILES="$HERMES_ROOT/profiles"
 MODE="${1:-sync}"
 [[ "$MODE" == "sync" || "$MODE" == "--check" ]] || {
   echo "usage: $0 [--check]" >&2
@@ -21,16 +26,16 @@ sync_file() {
     exit 1
   fi
   if cmp -s "$source" "$target" 2>/dev/null; then
-    printf 'ok      %s\n' "${target#$HOME/}"
+    printf 'ok      %s\n' "$target"
     return
   fi
   if [[ "$MODE" == "--check" ]]; then
-    printf 'DRIFT   %s\n' "${target#$HOME/}"
+    printf 'DRIFT   %s\n' "$target"
     drift=1
     return
   fi
   install -Dm644 "$source" "$target"
-  printf 'updated %s\n' "${target#$HOME/}"
+  printf 'updated %s\n' "$target"
 }
 
 profiles=(

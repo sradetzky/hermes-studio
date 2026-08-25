@@ -238,7 +238,7 @@ project/clip chat scope and exact IDs.
   one executable clean-commit entry point for local non-GPU release checks.
 - [ ] Add reproducible checkout-independent service setup and extend the
   dependency gate with the supported tool-version and audit contract.
-- [ ] Centralize profile, fleet, real-home, and ComfyUI path resolution across
+- [x] Centralize profile, fleet, real-home, and ComfyUI path resolution across
   Python and shell; verify both normal and profile-isolated environments.
 - [ ] Establish a dependency-neutral `studio_core` layer, extract the legacy
   migration engine, and remove bidirectional `webapp`/`scripts` imports.

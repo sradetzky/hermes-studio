@@ -40,6 +40,9 @@ The local Studio orchestrator is configured with `terminal.home_mode: real` so
 host paths remain stable even when container detection sees unrelated Docker
 mounts. Scripts still use `$HERMES_HOME` for profile data/skills and
 `$HERMES_REAL_HOME` for account files; do not construct either from `~`.
+`studio_core.paths` is the canonical resolver used by Python and the fleet shell
+tools: an active `.../profiles/<name>` home maps back to the one fleet root,
+while explicit environment path bytes are not normalized into another target.
 
 ## Model switching
 

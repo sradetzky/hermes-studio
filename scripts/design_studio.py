@@ -47,6 +47,7 @@ if __package__ in {None, ""} and str(REPO_ROOT) not in sys.path:
     # root for shared runtime modules. Installed/package imports need no shim.
     sys.path.insert(0, str(REPO_ROOT))
 
+from studio_core.paths import StudioPaths
 from webapp.clip_store import ClipStore
 from webapp.generation_contract import (
     GenerationContractError,
@@ -67,18 +68,13 @@ from webapp.safe_files import (
     verify_absolute_directory_identity,
 )
 
-REAL_HOME = Path(os.environ.get("HERMES_REAL_HOME", Path.home())).expanduser()
-HERMES_HOME = Path(
-    os.environ.get("HERMES_HOME", REAL_HOME / ".hermes")
-).expanduser()
-HERMES_ROOT = (
-    HERMES_HOME.parent.parent
-    if HERMES_HOME.parent.name == "profiles"
-    else HERMES_HOME
-)
+STUDIO_PATHS = StudioPaths.from_environment()
+REAL_HOME = STUDIO_PATHS.real_home
+HERMES_HOME = STUDIO_PATHS.active_profile_home
+HERMES_ROOT = STUDIO_PATHS.hermes_root
 RUN_H3 = HERMES_HOME / "skills/minimax-h3-run/scripts/run_h3.py"
 KREA2 = Path(__file__).resolve().parent / "krea2_image.py"
-COMFY_ROOT = Path(os.environ.get("COMFYUI_PATH", REAL_HOME / "ComfyUI")).expanduser()
+COMFY_ROOT = STUDIO_PATHS.comfy_root
 COMFY_OUTPUT = COMFY_ROOT / "output"
 GROK_IMAGE_OUTPUT = (
     HERMES_ROOT / "profiles" / "studio-grok" / "cache" / "images"
@@ -2961,7 +2957,7 @@ def run_generation(root: Path, project: str, clip_id: str,
     if handoff:
         h = Path(handoff).expanduser()
         if not h.exists():  # same archive fallback run_h3.py uses
-            h = Path.home() / "Documents/MinimaxH3" / h.name
+            h = REAL_HOME / "Documents/MinimaxH3" / h.name
         if not h.exists():
             raise FileNotFoundError(f"handoff not found: {handoff}")
         cmd += ["--handoff", str(h)]

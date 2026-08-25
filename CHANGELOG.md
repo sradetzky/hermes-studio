@@ -15,6 +15,9 @@ preview and production releases.
 
 ### Fixed
 
+- Unified account, Hermes fleet/profile, and ComfyUI path resolution across the
+  webapp, CLI, profile sync, and model switcher so profile-isolated `$HOME` values
+  cannot create nested fleet paths or redirect account-owned resources
 - Prevented web generation agents from repeatedly reading the H3 runner source:
   each immutable generation job now uses a minimal render toolset and supplies a
   compact tail-pinned, shell-quoted dry-run graph-builder command whose JSON
