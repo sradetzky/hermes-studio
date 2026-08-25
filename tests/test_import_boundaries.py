@@ -9,6 +9,27 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 class ImportBoundaryTests(unittest.TestCase):
+    def test_case_modules_stay_below_the_split_threshold(self):
+        oversized = {
+            path.name: len(path.read_text(encoding="utf-8").splitlines())
+            for path in (ROOT / "tests").glob("*_cases.py")
+            if len(path.read_text(encoding="utf-8").splitlines()) > 1000
+        }
+        self.assertEqual(oversized, {})
+
+    def test_cohesive_core_modules_keep_their_explicit_size_ceiling(self):
+        limits = {
+            ROOT / "studio_core" / "safe_files.py": 1000,
+            ROOT / "studio_core" / "migration.py": 2200,
+        }
+        oversized = {
+            path.name: {"lines": len(path.read_text(encoding="utf-8").splitlines()),
+                        "limit": limit}
+            for path, limit in limits.items()
+            if len(path.read_text(encoding="utf-8").splitlines()) > limit
+        }
+        self.assertEqual(oversized, {})
+
     def test_job_manager_protocol_covers_every_route_submission(self):
         routes = ast.parse(
             (ROOT / "webapp" / "routes.py").read_text(encoding="utf-8"))

@@ -9,6 +9,17 @@ preview and production releases.
 
 ### Changed
 
+- Split the remaining three thousand-line test case modules into focused manager,
+  recovery, route/media, project, and archive suites; an architecture test now
+  rejects any `*_cases.py` module that grows past 1,000 lines again.
+- Made Python test discovery fail on both visible `ResourceWarning` diagnostics
+  and destructor-time unraisable exceptions, with clean/leak/unraisable runner
+  regressions in the canonical gate.
+- Added explicit ESM metadata and a locked local Tailwind/Browserslist toolchain;
+  CSS builds install the exact lock, use the latest pinned caniuse dataset, and
+  no longer emit module-type or stale-data warnings.
+- Added explicit 1,000/2,200-line growth ceilings for the intentionally cohesive
+  `safe_files.py` and lazy migration engine instead of splitting them preemptively.
 - Consolidated the duplicated disposable web-app test case, passive manager,
   multiprocessing job creator, and generation-settings fixture into one test
   support module while retaining the route suite's specialized manager.

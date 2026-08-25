@@ -260,6 +260,12 @@ project/clip chat scope and exact IDs.
   shared browser state now contains workspace identity/context only.
 - [x] Split the behavioral Chromium mega-scenario into independently named tests
   behind a reusable CDP fixture.
+- [x] Split every remaining thousand-line Python case module by production domain
+  and enforce the 1,000-line test-module ceiling statically.
+- [x] Turn leaked-resource and unraisable diagnostics into canonical Python test
+  failures, and lock the local ESM/Tailwind/Browserslist build inputs.
+- [x] Preserve the cohesive safe-files and lazy migration boundaries behind
+  explicit 1,000/2,200-line growth ceilings.
 - [x] Complete every acceptance criterion in
   `docs/plans/2026-08-24-code-quality-remediation.md` before new additions.
 - [x] Pass a restarted live-service pre-Phase-6 checkpoint with a real 0.4 MP web

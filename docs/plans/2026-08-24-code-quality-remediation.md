@@ -538,6 +538,20 @@ transaction context managers in one interaction migration test: `sqlite3`
 commits on context exit but does not close. Explicit `closing(...)` ownership now
 makes the full webapp suite warning-clean under `PYTHONWARNINGS=always::ResourceWarning`.
 
+The final lower-priority follow-up split the remaining manager, route/media, and
+project/archive case monoliths so every `*_cases.py` module stays below 1,000
+lines, with a static regression ceiling. Canonical Python discovery now runs
+through `scripts/run_python_tests.py`, which rejects visible `ResourceWarning`
+output and destructor-time unraisable diagnostics after otherwise successful
+unittest discovery. The browser asset boundary is explicitly ESM, while the CSS
+builder installs an exact npm lock containing Tailwind 3.4.17, Browserslist
+4.28.8, and caniuse-lite 1.0.30001810 before rebuilding. The latest available
+dataset is therefore reproducible even though the host's future-dated clock
+requires disabling Browserslist's age heuristic. Finally, architecture tests
+cap the intentionally cohesive `safe_files.py` and lazy migration engine at
+1,000 and 2,200 lines respectively so growth forces an ownership review without
+splitting either module speculatively.
+
 The final committed-source gate passed after these follow-ups: 279 Python tests
 and 28 frontend/Chromium tests, compilation, full Ruff, dependency lock and
 audit, external-tool contracts, profile drift, reproducible CSS, source archive,

@@ -52,7 +52,7 @@ if projects.exists() and {entry.name for entry in projects.iterdir()} - {".gitke
 
 cd "$archive_dir/source"
 echo "== Python tests =="
-env -u PYTHONPATH "$PYTHON" -m unittest discover -s tests
+env -u PYTHONPATH "$PYTHON" scripts/run_python_tests.py
 
 echo "== frontend and Chromium tests =="
 PYTHON="$PYTHON" node --test \

@@ -281,7 +281,13 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
 - The committed-source thermo-nuclear follow-up gate passed 279 Python and 28
   frontend/Chromium tests plus compilation, full Ruff, dependency/audit, tool,
   profile, CSS, source-archive, and repository-integrity checks.
+- Split all remaining thousand-line Python case suites along manager recovery,
+  route/media, project, and archive boundaries; static checks prevent regrowth.
+- Python discovery now rejects visible resource warnings and destructor-time
+  unraisable exceptions. ESM and Tailwind/Browserslist inputs are explicit and
+  lock-pinned, and cohesive safe-files/migration modules have growth ceilings.
 
 ## Next steps
 
-- No active implementation slice; choose the next scoped milestone explicitly.
+- Complete the requested fresh live chained-R2V continuity checkpoint, then run
+  and record the final committed-source gate for this follow-up slice.
