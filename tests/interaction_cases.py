@@ -20,7 +20,7 @@ from studio_core.interactions import (
 )
 from studio_core.job_contracts import ChatScope
 from studio_core.job_store import JobStore
-from tests.job_store_cases import WebAppTestCase
+from tests.webapp_test_support import WebAppTestCase
 
 
 class InteractionContractTests(unittest.TestCase):

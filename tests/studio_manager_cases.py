@@ -6,9 +6,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
-import tempfile
 import time
-import unittest
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from dataclasses import replace
@@ -19,83 +17,22 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from scripts import design_studio as ds
-from webapp.app import create_app
-from webapp.config import Settings
 from webapp.generation_settings_store import GenerationSettingsStore
 from webapp.generation_runner import GenerationJobRunner, GenerationRuntime
 from studio_core.hermes_events import HermesSessionEventBridge
-from studio_core.job_store import ActiveJobError, JobStore, JobStoreError
+from studio_core.job_store import JobStore, JobStoreError
 from studio_core.models import JobStatus
 from webapp.project_jobs import project_job_guard
 from webapp.process_runner import SupervisedProcessRunner, process_start_time
 from studio_core.runtime_schema import CURRENT_SCHEMA_VERSION, LEGACY_CLIP_ERROR
 from studio_core import safe_files
 from webapp.studio_manager import StudioJobManager
+from tests.webapp_test_support import (
+    WebAppTestCase,
+    create_job_in_process as _create_job_in_process,
+    generation_settings_payload as _generation_settings_payload,
+)
 
-
-def _create_job_in_process(database, barrier, results):
-    store = JobStore(Path(database))
-    barrier.wait()
-    try:
-        results.put(store.create_chat_job(
-            "project", "message", clip_id="clip-001").id)
-    except ActiveJobError:
-        results.put("rejected")
-def _generation_settings_payload(**overrides):
-    payload = {
-        "mode": "t2va",
-        "aspect": "16:9",
-        "mp": 0.4,
-        "width": None,
-        "height": None,
-        "seed": None,
-        "steps": 20,
-        "accel": False,
-    }
-    payload.update(overrides)
-    return payload
-class PassiveManager:
-    def __init__(self, _settings, store):
-        self.store = store
-
-    def start(self):
-        self.store.initialize()
-
-    def stop(self):
-        pass
-
-    def submit_project_chat(self, project, message, profile=None):
-        return self.store.create_project_chat_job(
-            project, message, profile or "studio")
-
-    def submit_chat(self, project, clip_id, message, profile=None):
-        return self.store.create_chat_job(
-            project, message, profile or "studio", clip_id=clip_id)
-class WebAppTestCase(unittest.TestCase):
-    def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
-        root = Path(self.temp.name)
-        self.settings = Settings(
-            repo=Path(__file__).resolve().parent.parent,
-            studio_root=root / "studio",
-            comfy_output=root / "comfy-output",
-            runtime_root=root / "runtime",
-            job_timeout_seconds=5,
-            max_reference_bytes=1024,
-        )
-        self.settings.comfy_output.mkdir()
-
-    def tearDown(self):
-        self.temp.cleanup()
-
-    def app(self):
-        return create_app(self.settings, PassiveManager)
-
-    def create_project(self, client, name="web-job"):
-        response = client.post(
-            "/api/projects", json={"name": name, "brief": "test"})
-        self.assertEqual(response.status_code, 200)
-        return response.json()["id"]
 
 class StudioManagerTests(WebAppTestCase):
     def wait_for_terminal(self, store, job_id, timeout=5):

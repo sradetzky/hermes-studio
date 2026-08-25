@@ -529,6 +529,10 @@ A subsequent maintainability pass removed the eight `sys.modules` compatibility
 aliases under `webapp/` after all internal imports and patch targets moved to the
 canonical `studio_core` owners. The dependency-boundary suite now asserts those
 deprecated module paths remain absent instead of preserving their identity.
+The same pass consolidated three identical copies of the disposable web-app
+test base, passive manager, concurrent-job helper, and generation-settings
+fixture into `tests/webapp_test_support.py`; the route suite now carries only its
+genuinely different manager behavior.
 
 The canonical local non-GPU gate is:
 

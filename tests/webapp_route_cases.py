@@ -21,34 +21,18 @@ from scripts import design_studio as ds
 from webapp.app import create_app
 from webapp.config import Settings
 from studio_core.hermes_events import HermesSessionEventBridge
-from studio_core.job_store import ActiveJobError, JobStore, JobStoreError
+from studio_core.job_store import JobStore, JobStoreError
 from studio_core.models import JobStatus
 from studio_core.runtime_schema import CURRENT_SCHEMA_VERSION, LEGACY_CLIP_ERROR
 from studio_core import safe_files
 from webapp.studio_manager import StudioJobManager, process_start_time
+from tests.webapp_test_support import (
+    WebAppTestCase as SharedWebAppTestCase,
+    create_job_in_process as _create_job_in_process,
+    generation_settings_payload as _generation_settings_payload,
+)
 
 
-def _create_job_in_process(database, barrier, results):
-    store = JobStore(Path(database))
-    barrier.wait()
-    try:
-        results.put(store.create_chat_job(
-            "project", "message", clip_id="clip-001").id)
-    except ActiveJobError:
-        results.put("rejected")
-def _generation_settings_payload(**overrides):
-    payload = {
-        "mode": "t2va",
-        "aspect": "16:9",
-        "mp": 0.4,
-        "width": None,
-        "height": None,
-        "seed": None,
-        "steps": 20,
-        "accel": False,
-    }
-    payload.update(overrides)
-    return payload
 class PassiveManager:
     def __init__(self, settings, store):
         self.store = store
@@ -119,31 +103,8 @@ class PassiveManager:
         }))
 
 
-class WebAppTestCase(unittest.TestCase):
-    def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
-        root = Path(self.temp.name)
-        self.settings = Settings(
-            repo=Path(__file__).resolve().parent.parent,
-            studio_root=root / "studio",
-            comfy_output=root / "comfy-output",
-            runtime_root=root / "runtime",
-            job_timeout_seconds=5,
-            max_reference_bytes=1024,
-        )
-        self.settings.comfy_output.mkdir()
-
-    def tearDown(self):
-        self.temp.cleanup()
-
-    def app(self):
-        return create_app(self.settings, PassiveManager)
-
-    def create_project(self, client, name="web-job"):
-        response = client.post(
-            "/api/projects", json={"name": name, "brief": "test"})
-        self.assertEqual(response.status_code, 200)
-        return response.json()["id"]
+class WebAppTestCase(SharedWebAppTestCase):
+    manager_factory = PassiveManager
 
 class LauncherScriptTests(unittest.TestCase):
     def test_user_service_keeps_loopback_launcher_and_external_host_config(self):

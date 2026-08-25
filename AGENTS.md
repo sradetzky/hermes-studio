@@ -274,6 +274,8 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
 - Removed the eight `sys.modules` webapp compatibility aliases; tests and
   fault-injection patches now import the canonical `studio_core` domain owners,
   and the import-boundary suite prevents the deprecated paths from returning.
+- Consolidated three copies of common disposable-app test infrastructure into
+  `tests/webapp_test_support.py`, leaving route-specific manager behavior local.
 
 ## Next steps
 
