@@ -239,7 +239,9 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
   metadata without weakening active-job or malformed-payload rejection.
 - Thermo-nuclear follow-up completed nested immutable generation/movie contract
   validation, restricted ComfyUI cleanup to exact generation jobs, removed render
-  ownership from web Hermes agents, and synchronized semantic profile guards.
+  ownership from web Hermes agents, and synchronized semantic profile guards. The
+  clean-source gate passed 255 Python and 24 frontend/Chromium tests plus all
+  compilation, lint, dependency, audit, tool, profile, CSS, and integrity checks.
 
 ## Next steps
 
