@@ -340,7 +340,7 @@ class StudioManagerTests(WebAppTestCase):
             contract["manifest"]["updated_at"],
         )
         payload = json.loads(job.message)
-        self.assertEqual(payload["schema_version"], 1)
+        self.assertEqual(payload["schema_version"], 2)
         self.assertEqual(
             payload["prompt"], "A complete 5-second H3 generation prompt\n")
         self.assertEqual(payload["settings_manifest"], {

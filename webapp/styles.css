@@ -104,6 +104,13 @@ img.thumb, video.thumb { width:100%; border-radius:.5rem; display:block; }
 .dropzone { border:1px dashed #343d49; border-radius:.6rem; padding:.7rem; text-align:center; color:#737d8a; cursor:pointer; }
 .dropzone:hover, .dropzone.drag { border-color:#6ea8ef; color:#a9c9f2; background:#6ea8ef0d; }
 .dropzone.uploading { pointer-events:none; opacity:.65; }
+.previous-take-input-option { display:flex; align-items:flex-start; gap:.55rem; margin:0 0 .75rem; padding:.65rem .7rem; border:1px solid #3f3424; border-radius:.5rem; background:#151108; color:#ead9b8; cursor:pointer; }
+.previous-take-input-option[hidden] { display:none; }
+.previous-take-input-option input { margin-top:.18rem; accent-color:#6ea8ef; }
+.previous-take-input-option span { min-width:0; }
+.previous-take-input-option strong, .previous-take-input-option small { display:block; }
+.previous-take-input-option strong { font-size:.75rem; line-height:1.15rem; }
+.previous-take-input-option small { margin-top:.15rem; color:#9f927b; font-size:.65rem; overflow-wrap:anywhere; }
 .ref-card { min-width:0; }
 .ref-name { font-size:.62rem; color:#747e8b; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-top:.25rem; }
 .generation-label { font-size:.625rem; color:#6b7280; margin-top:.25rem; }

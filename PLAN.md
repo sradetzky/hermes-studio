@@ -1,7 +1,8 @@
 # PLAN.md — Hermes Studio
 
-**Status**: `v0.1.0-preview.3` released; Phase 5.5 remediation and its
-thermo-nuclear follow-up are complete. Phase 6 interaction/continuity work is next.
+**Status**: `v0.1.0-preview.3` released; Phase 5.5 remediation and Phase 6
+interaction/continuity implementation are complete. The live chained-render
+release checkpoint is next.
 **Owner**: Sven (local setup on RTX 5060 Ti 16GB)  
 **Updated**: 2026-08-25
 **Goal**: Fully local, agent-orchestrated creative studio centered on MiniMax H3 + Hermes, with a simple self-hosted web UI.
@@ -271,10 +272,12 @@ project/clip chat scope and exact IDs.
   and submit the response without losing project/clip scope or revision safety.
   Dedicated Studio profiles use no inner clarify deadline; gateway expiration
   closes the interaction and fails the run rather than accepting a no-op answer.
-- [ ] In a clip's References view, offer **Use previous selected take's last
+- [x] In a clip's References view, offer **Use previous selected take's last
   frame** only when the immediately preceding clip has a valid selected video
   take. Bind the derived frame to that exact source clip/take in the immutable
-  generation contract and invalidate it when ordering or selection changes.
+  generation contract and invalidate it when ordering, selection, source bytes,
+  or derived bytes change. Contract schema 2 uses ordered discriminated inputs,
+  and archives retain exact source/derived provenance.
 
 ---
 

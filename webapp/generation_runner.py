@@ -19,7 +19,10 @@ from studio_core.comfyui_mcp import (
     unwrap_content,
 )
 from studio_core.generation_archive import archive_outputs
-from studio_core.generation_contracts import GenerationContract
+from studio_core.generation_contracts import (
+    GenerationContract,
+    LEGACY_CONTRACT_SCHEMA_VERSION,
+)
 from studio_core.job_contracts import JobEventType, JobPhase
 from studio_core.safe_files import (
     SafeFilesystemError,
@@ -29,6 +32,7 @@ from studio_core.safe_files import (
 from studio_core.job_store import JobStore
 from studio_core.models import Job
 from webapp.config import Settings
+from webapp.generation_input_store import GenerationInputStore
 from webapp.process_runner import ProcessCancelled, SupervisedProcessRunner
 
 
@@ -99,6 +103,21 @@ class GenerationJobRunner:
                 "--image", str(project_path / "references" / filename)))
         command.extend(("--dry-run", "--output-json", str(output)))
         return command
+
+    @staticmethod
+    def _reference_paths(
+            project_path: Path, clip_id: str,
+            contract: GenerationContract) -> list[Path]:
+        if contract.schema_version == LEGACY_CONTRACT_SCHEMA_VERSION:
+            return [
+                project_path / "references" / filename
+                for filename in contract.execution.references
+            ]
+        return GenerationInputStore().validate(
+            project_path,
+            clip_id,
+            [item.to_dict() for item in contract.execution.inputs],
+        )
 
     @staticmethod
     def _read_graph(path: Path) -> dict:
@@ -205,10 +224,7 @@ class GenerationJobRunner:
             contract: GenerationContract) -> dict[str, Any]:
         project_path = self.runtime.studio_root / "projects" / project
         clip_path = project_path / "clips" / clip_id
-        references = [
-            project_path / "references" / filename
-            for filename in contract.execution.references
-        ]
+        references = self._reference_paths(project_path, clip_id, contract)
         environment = mcp_environment(
             self.runtime.comfy_url,
             self.runtime.comfy_root,
@@ -248,6 +264,8 @@ class GenerationJobRunner:
                     raise RuntimeError(
                         f"H3 graph builder failed ({result.returncode}): {detail}")
                 self._read_graph(graph_path)
+                references = self._reference_paths(
+                    project_path, clip_id, contract)
 
                 self._event(
                     JobEventType.GENERATION_SUBMIT,

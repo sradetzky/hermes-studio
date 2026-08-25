@@ -583,6 +583,15 @@ request can outlive the corresponding Hermes wait.
 
 ### P3.2 Introduce typed generation inputs and previous-take continuity
 
+**Status: complete.** Generation contract schema 2 replaces new filename-only
+execution snapshots with ordered discriminated inputs while retaining strict
+read compatibility for terminal schema-1 history. The backend resolves the
+immediately preceding enabled clip, opens its exact selected video, extracts the
+last frame at `-0.250s`, and snapshots source and derived SHA-256 identities under
+the project/job coordination lock. Worker-start and pre-submit validation reject
+order, enablement, selection, deletion, project-reference, source-byte, or
+derived-byte drift.
+
 **Verified blocker:** `list[str]` prompt-parsed filenames assume every input lives
 under project `references/`. A derived previous-take frame needs source clip,
 order, selected generation/file identity, video hash, extraction point, derived
@@ -602,7 +611,9 @@ source and derived hashes into execution and archive provenance.
 selection change, deletion, or byte change invalidates stale readiness/contracts;
 queue execution uses the exact materialized frame in declared order; archived
 metadata identifies both source video and derived frame; concurrent mutation
-fails closed.
+fails closed. Backend extraction tests prove the final blue frame is selected from
+a red-to-blue source, API tests prove immutable materialization/provenance, and a
+real Chromium scenario proves the eligible checkbox submits the exact typed flag.
 
 ---
 

@@ -98,6 +98,16 @@ references, canvas, and execution knobs. The deterministic worker revalidates
 both clip files immediately before submission and aborts without queueing on any
 token mismatch.
 
+For chained R2V clips, keep normal project references in prompt order, select the
+preceding enabled clip's canonical video take, then enable **Use previous selected
+take's last frame** in the next clip's References view. Studio appends that exact
+derived frame as the next `<Picture N>` input. The backend—not profile prose—owns
+predecessor resolution, final-frame extraction, source/derived SHA-256 provenance,
+and invalidation after reorder, disable, reselection, deletion, or byte drift.
+Describe the appended picture in the prompt as the exact opening continuity anchor;
+never publish a hand-extracted frame as an ordinary project reference to bypass
+this contract.
+
 The legacy `generate` and `generate-image` CLI commands remain for manual
 diagnostics only. They explicitly clean VRAM, and timeout paths interrupt the
 ComfyUI job before cleanup.

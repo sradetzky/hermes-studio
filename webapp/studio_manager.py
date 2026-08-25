@@ -12,7 +12,11 @@ from pathlib import Path
 from typing import Protocol
 
 from studio_core.comfyui_mcp import cleanup_comfyui, mcp_environment
-from studio_core.generation_contracts import GenerationContract
+from studio_core.generation_contracts import (
+    CONTRACT_SCHEMA_VERSION,
+    GenerationContract,
+    LEGACY_CONTRACT_SCHEMA_VERSION,
+)
 from studio_core.job_contracts import (
     ChatScope,
     GenerationJobPayload,
@@ -32,6 +36,7 @@ from studio_core.job_store import ActiveJobError, JobStore, JobStoreError
 from studio_core.models import Job, JobStatus
 from webapp.agent_runner import AgentJobRunner, CommandBuilder
 from webapp.generation_runner import GenerationWorkerRunner
+from webapp.generation_input_store import GenerationInputStore
 from webapp.generation_settings_store import GenerationSettingsStore
 from webapp.media_review_store import MediaReviewStore
 from webapp.movie_runner import MovieJobRunner
@@ -154,12 +159,14 @@ class StudioJobManager:
 
     def submit_generation(self, project: str, clip_id: str,
                           prompt_sha256: str,
-                          settings_updated_at: str) -> Job:
+                          settings_updated_at: str,
+                          use_previous_take_last_frame: bool = False) -> Job:
         project_directory = project_path(self.settings.studio_root, project)
         with project_job_guard(project_directory):
             request = self._generation_request(
                 project_directory, project, clip_id,
-                prompt_sha256, settings_updated_at)
+                prompt_sha256, settings_updated_at,
+                use_previous_take_last_frame)
             chat_path = self._chat_path(project, clip_id)
             self.store.import_chat_if_empty(
                 project, chat_path, clip_id=clip_id)
@@ -188,7 +195,8 @@ class StudioJobManager:
 
     def _generation_request(
             self, project_path: Path, project: str, clip_id: str,
-            prompt_sha256: str, settings_updated_at: str) -> str:
+            prompt_sha256: str, settings_updated_at: str,
+            use_previous_take_last_frame: bool) -> str:
         clip_store = ClipStore()
         project_manifest = clip_store.describe(project_path)
         entry = next(
@@ -205,10 +213,32 @@ class StudioJobManager:
         current = settings_store.validate_generation_request(
             project_path, clip, prompt_sha256, settings_updated_at)
         normalized_settings = settings_store.normalize(current["settings"])
+        input_store = GenerationInputStore()
+        project_references = current["readiness"]["references"]
+        inputs = [
+            input_store.snapshot_project_reference(
+                project_path, filename, slot=index)
+            for index, filename in enumerate(project_references, 1)
+        ]
+        if use_previous_take_last_frame:
+            eligibility = input_store.describe_previous_selected_take(
+                project_path,
+                clip_id,
+                mode=normalized_settings["mode"],
+                project_reference_count=len(project_references),
+            )
+            if not eligibility["eligible"]:
+                raise ValueError(
+                    "previous selected take is not available for this generation")
+            inputs.append(input_store.materialize_previous_selected_take(
+                project_path,
+                clip_id,
+                project_reference_count=len(project_references),
+            ))
         prompt = read_project_text(
             clip, "current_prompt.txt", required=True)
         payload = {
-            "schema_version": 1,
+            "schema_version": CONTRACT_SCHEMA_VERSION,
             "action": "generate-current-prompt",
             "prompt": prompt,
             "prompt_sha256": prompt_sha256,
@@ -222,7 +252,7 @@ class StudioJobManager:
             "execution": {
                 "resolution": current["readiness"]["resolution"],
                 "timing": current["readiness"]["timing"],
-                "references": current["readiness"]["references"],
+                "inputs": inputs,
             },
             "expected_generation_id": next_generation_dir(
                 self.settings.studio_root, project, clip_id).name,
@@ -342,8 +372,20 @@ class StudioJobManager:
         current_execution = {
             "resolution": current["readiness"]["resolution"],
             "timing": current["readiness"]["timing"],
-            "references": current["readiness"]["references"],
         }
+        if contract.schema_version == LEGACY_CONTRACT_SCHEMA_VERSION:
+            current_execution["references"] = current["readiness"]["references"]
+        else:
+            input_dicts = [item.to_dict() for item in contract.execution.inputs]
+            project_references = [
+                item["filename"] for item in input_dicts
+                if item["type"] == "project_reference"
+            ]
+            if project_references != current["readiness"]["references"]:
+                raise ValueError("generation inputs changed after enqueue")
+            GenerationInputStore().validate(
+                project, job.clip_id, input_dicts)
+            current_execution["inputs"] = input_dicts
         if (read_project_text(clip, "current_prompt.txt", required=True)
                 != request["prompt"]
                 or current_settings != request["settings_manifest"]
@@ -369,8 +411,10 @@ class StudioJobManager:
             raise ValueError(
                 "generation archive postcondition was not satisfied") from exc
         meta = details["meta"]
+        expected_inputs = (
+            contract.to_dict()["execution"].get("inputs", []))
         if (meta.get("studio_job_id") != job.id
-                or meta.get("generation_contract_version") != 1
+                or meta.get("generation_contract_version") != contract.schema_version
                 or meta.get("prompt_sha256") != contract.prompt_sha256
                 or meta.get("settings_updated_at")
                 != contract.settings_updated_at
@@ -378,6 +422,7 @@ class StudioJobManager:
                 or not meta["prompt_id"]
                 or not details["files"]
                 or sorted(meta.get("files", [])) != sorted(details["files"])
+                or meta.get("generation_inputs", []) != expected_inputs
                 or details.get("prompt") != contract.prompt):
             raise ValueError(
                 "generation archive does not match its immutable job contract")

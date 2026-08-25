@@ -79,6 +79,22 @@ test('Media exposes explicit movie readiness, export, playback, and download reg
   assert.match(html, />Export selected takes as movie</);
 });
 
+test('References exposes an eligibility-gated previous selected take input', () => {
+  const html = readFileSync(
+    new URL('../webapp/static/index.html', import.meta.url), 'utf8');
+  const css = readFileSync(
+    new URL('../webapp/styles.css', import.meta.url), 'utf8');
+  for (const id of [
+    'previous-take-input-option', 'use-previous-take-last-frame',
+    'previous-take-input-label', 'previous-take-input-source',
+  ]) assert.match(html, new RegExp(`id="${id}"`));
+  assert.match(
+    html,
+    /id="previous-take-input-option" class="previous-take-input-option" hidden/,
+  );
+  assert.match(css, /\.previous-take-input-option\[hidden\] \{ display:none; \}/);
+});
+
 test('conversation controller owns incremental activity and viewport state', () => {
   const shared = readFileSync(
     new URL('../webapp/static/shared.js', import.meta.url), 'utf8');

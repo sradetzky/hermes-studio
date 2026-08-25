@@ -289,3 +289,69 @@ browserTest(
       'answered clarify state');
   },
 );
+
+browserTest(
+  'Chromium submits an eligible previous selected take continuity input',
+  async browser => {
+    let generateBody = null;
+    browser.intercept(async params => {
+      const url = new URL(params.request.url);
+      if (!url.pathname.endsWith('/generate') || params.request.method !== 'POST') {
+        return false;
+      }
+      generateBody = JSON.parse(params.request.postData);
+      await browser.fulfill(params.requestId, {
+        id: 'job-previous-take',
+        project: 'alpha',
+        clip_id: 'clip-001',
+        profile: 'studio',
+        kind: 'generate',
+        status: 'queued',
+        message: 'generate',
+      });
+      return true;
+    });
+
+    await browser.navigate();
+    await browser.selectProject('Alpha');
+    await browser.waitExpression(
+      `document.querySelector('.clip')`, 'clip navigation');
+    await browser.evaluate(`document.querySelector('.clip').click()`);
+    await browser.waitExpression(
+      `document.querySelector('.clip.active')`, 'active clip');
+    await browser.evaluate(`void import('/static/generation-settings.js').then(module =>
+      module.renderGenerationReadiness({
+        readiness: {
+          ready: true, status: 'ready', reasons: [], warnings: [],
+          resolution: {width: 832, height: 480},
+          timing: {requested_seconds: 5},
+        },
+        settings: {mode: 'r2v', steps: 8, accel: true},
+        manifest: {prompt_sha256: '${'a'.repeat(64)}', updated_at: 'revision-2'},
+        previous_selected_take_input: {
+          eligible: true,
+          source_clip_id: 'clip-000',
+          source_generation_id: '007',
+          source_filename: 'take.mp4',
+          picture_number: 2,
+        },
+      }))`);
+    await browser.waitExpression(
+      `!document.querySelector('#previous-take-input-option').hidden &&
+       document.querySelector('#previous-take-input-label').textContent.includes('<Picture 2>')`,
+      'eligible previous take input');
+    await browser.waitExpression(
+      `!document.querySelector('#generate-current-prompt').disabled`,
+      'ready generation action');
+    await browser.evaluate(`(() => {
+      document.querySelector('#use-previous-take-last-frame').click();
+      document.querySelector('#generate-current-prompt').click();
+    })()`);
+    await browser.waitFor(() => generateBody !== null, 'previous take generation POST');
+    assert.deepEqual(generateBody, {
+      prompt_sha256: 'a'.repeat(64),
+      settings_updated_at: 'revision-2',
+      use_previous_take_last_frame: true,
+    });
+  },
+);

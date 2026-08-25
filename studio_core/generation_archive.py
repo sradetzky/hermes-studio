@@ -297,6 +297,17 @@ def _validate_authoritative_generation_contract(
     execution = contract["execution"]
     resolution = execution["resolution"]
     timing = execution["timing"]
+    inputs = execution.get("inputs")
+    expected_references = (
+        [
+            item["filename"]
+            if item["type"] == "project_reference"
+            else item["derived_filename"]
+            for item in inputs
+        ]
+        if isinstance(inputs, list)
+        else execution["references"]
+    )
     expected = {
         "executed_prompt_sha256": executed_generation_prompt_sha256(
             contract["prompt"]),
@@ -307,7 +318,7 @@ def _validate_authoritative_generation_contract(
         "fps": timing["fps"],
         "steps": settings["steps"],
         "accel": settings["accel"],
-        "references": execution["references"],
+        "references": expected_references,
     }
     for field, value in expected.items():
         if authoritative.get(field) != value:
@@ -348,6 +359,7 @@ def _web_generation_metadata(project: str, clip_id: str, outputs: list[str],
         "studio_job_id": job_id,
         "generation_contract_version": contract["schema_version"],
         "settings_updated_at": contract["settings_updated_at"],
+        "generation_inputs": contract["execution"].get("inputs", []),
     }, contract
 
 def archive_outputs(root: Path, project: str, clip_id: str,

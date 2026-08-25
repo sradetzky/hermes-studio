@@ -55,6 +55,11 @@ preview and production releases.
   structured gateway transport, with durable scoped `clarify` requests,
   revision-guarded single/multi/batch/free-text answers, reload recovery, and
   continuation of the same suspended Hermes run
+- Added typed ordered generation inputs and an eligibility-gated **Use previous
+  selected take's last frame** control for chained R2V clips. Studio resolves the
+  exact preceding enabled clip and selected video, materializes its final frame,
+  snapshots source/derived hashes and slot provenance, revalidates before queueing,
+  and records the full input contract in archived metadata
 
 ### Fixed
 

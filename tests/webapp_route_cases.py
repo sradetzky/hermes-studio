@@ -70,9 +70,11 @@ class PassiveManager:
             project, message, profile or "studio", clip_id=clip_id)
 
     def submit_generation(self, project, clip_id, prompt_sha256,
-                          settings_updated_at):
+                          settings_updated_at,
+                          use_previous_take_last_frame=False):
         return self.manager.submit_generation(
-            project, clip_id, prompt_sha256, settings_updated_at)
+            project, clip_id, prompt_sha256, settings_updated_at,
+            use_previous_take_last_frame)
 
     def submit_movie_export(self, project):
         return self.store.create_movie_export_job(project, json.dumps({
@@ -791,7 +793,7 @@ class AppFactoryTests(WebAppTestCase):
             self.assertEqual(job["status"], "queued")
             payload = json.loads(job["message"])
             self.assertEqual(payload["action"], "generate-current-prompt")
-            self.assertEqual(payload["schema_version"], 1)
+            self.assertEqual(payload["schema_version"], 2)
             self.assertEqual(payload["prompt_sha256"], token["prompt_sha256"])
             self.assertEqual(
                 payload["settings_updated_at"], token["settings_updated_at"])
@@ -915,6 +917,69 @@ class AppFactoryTests(WebAppTestCase):
                 "invalid prompt reference" in reason
                 for reason in unsafe["readiness"]["reasons"]
             ))
+
+    def test_generation_can_snapshot_previous_selected_take_last_frame(self):
+        with TestClient(self.app()) as client:
+            project = self.create_project(client, "previous-take-input")
+            root = self.settings.studio_root / "projects" / project
+            created = client.post(
+                f"/api/project/{project}/clips",
+                json={"title": "Continuation"},
+            )
+            self.assertEqual(created.status_code, 201)
+            self.assertEqual(created.json()["clip"]["id"], "clip-002")
+
+            generation = root / "clips" / "clip-001" / "generations" / "001"
+            generation.mkdir()
+            source = generation / "take.mp4"
+            subprocess.run([
+                "ffmpeg", "-v", "error", "-nostdin", "-f", "lavfi",
+                "-i", "color=c=blue:s=64x64:r=4:d=0.5", "-an",
+                "-c:v", "libx264", "-pix_fmt", "yuv420p", str(source),
+            ], check=True, capture_output=True)
+            selected = client.put(
+                f"/api/project/{project}/clips/clip-001/selected-take",
+                json={"generation": "001", "filename": "take.mp4"},
+            )
+            self.assertEqual(selected.status_code, 200)
+
+            (root / "references" / "identity.png").write_bytes(b"identity")
+            clip = root / "clips" / "clip-002"
+            (clip / "current_prompt.txt").write_text(
+                "A 5-second continuation with <Picture 1> (identity.png) and "
+                "<Picture 2> as the exact opening continuity anchor\n")
+            contract = client.put(
+                f"/api/project/{project}/clips/clip-002/generation-settings",
+                json=_generation_settings_payload(mode="r2v"),
+            ).json()
+            self.assertEqual(contract["previous_selected_take_input"], {
+                "eligible": True,
+                "source_clip_id": "clip-001",
+                "source_generation_id": "001",
+                "source_filename": "take.mp4",
+                "picture_number": 2,
+            })
+
+            queued = client.post(
+                f"/api/project/{project}/clips/clip-002/generate",
+                json={
+                    "prompt_sha256": contract["manifest"]["prompt_sha256"],
+                    "settings_updated_at": contract["manifest"]["updated_at"],
+                    "use_previous_take_last_frame": True,
+                },
+            )
+            self.assertEqual(queued.status_code, 202)
+            payload = json.loads(queued.json()["message"])
+            self.assertEqual(payload["schema_version"], 2)
+            self.assertEqual(
+                [item["type"] for item in payload["execution"]["inputs"]],
+                ["project_reference", "previous_selected_take_last_frame"])
+            previous = payload["execution"]["inputs"][1]
+            self.assertEqual(previous["slot"], 2)
+            derived = (
+                clip / "generation-inputs" / previous["derived_filename"])
+            self.assertTrue(derived.is_file())
+            self.assertGreater(derived.stat().st_size, 0)
 
     def test_generation_settings_reject_unsafe_values(self):
         with TestClient(self.app()) as client:

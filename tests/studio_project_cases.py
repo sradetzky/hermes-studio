@@ -472,8 +472,24 @@ class ProjectPathTests(unittest.TestCase):
         runtime_root = Path(self.temp.name) / "runtime"
         store = JobStore(runtime_root / "studio.db")
         store.initialize()
+        generation_inputs = [{
+            "type": "project_reference",
+            "slot": 1,
+            "filename": "first.png",
+            "sha256": "1" * 64,
+        }, {
+            "type": "previous_selected_take_last_frame",
+            "slot": 2,
+            "source_clip_id": "clip-000",
+            "source_generation_id": "001",
+            "source_filename": "take.mp4",
+            "source_video_sha256": "2" * 64,
+            "extraction_offset_seconds": 0.25,
+            "derived_filename": "previous-selected-take-second.png",
+            "derived_frame_sha256": "3" * 64,
+        }]
         payload = {
-            "schema_version": 1,
+            "schema_version": 2,
             "action": "generate-current-prompt",
             "prompt": archived_prompt,
             "prompt_sha256": prompt_sha256,
@@ -488,7 +504,7 @@ class ProjectPathTests(unittest.TestCase):
                     "requested_seconds": 10.0, "frames": 243,
                     "actual_seconds": 10.125, "fps": 24,
                 },
-                "references": ["first.png", "second.png"],
+                "inputs": generation_inputs,
             },
             "expected_generation_id": "001",
         }
@@ -515,7 +531,7 @@ class ProjectPathTests(unittest.TestCase):
             },
             "ref-2": {
                 "class_type": "LoadImage",
-                "inputs": {"image": "second.png"},
+                "inputs": {"image": "previous-selected-take-second.png"},
             },
             "cond": {
                 "class_type": "MiniMaxH3ReferenceToVideo",
@@ -644,7 +660,8 @@ class ProjectPathTests(unittest.TestCase):
         )
         self.assertEqual(meta["studio_job_id"], job.id)
         self.assertEqual(meta["output_node_id"], "save")
-        self.assertEqual(meta["generation_contract_version"], 1)
+        self.assertEqual(meta["generation_contract_version"], 2)
+        self.assertEqual(meta["generation_inputs"], generation_inputs)
         self.assertEqual(meta["settings_updated_at"], settings_manifest["updated_at"])
         self.assertEqual(meta["recipe"], "h3-ref2va")
         self.assertEqual(meta["mode"], "r2v")
@@ -660,7 +677,8 @@ class ProjectPathTests(unittest.TestCase):
             "MiniMaxH3FusedModulation",
             "MiniMaxH3ChunkFeedForward",
         ])
-        self.assertEqual(meta["references"], ["first.png", "second.png"])
+        self.assertEqual(meta["references"], [
+            "first.png", "previous-selected-take-second.png"])
         self.assertEqual(
             meta["prompt_sha256"],
             hashlib.sha256(archived_prompt.encode()).hexdigest(),

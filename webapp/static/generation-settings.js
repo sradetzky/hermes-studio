@@ -19,6 +19,7 @@ const generation = {
   options: null,
   submitting: false,
   opener: null,
+  previousTakeSignature: '',
 };
 
 export function generationActionState(
@@ -63,11 +64,32 @@ export function generationActionState(
   return {enabled: true, label: 'Generate with this prompt', reason: ''};
 }
 
-export function generationRequestPayload(contract) {
+export function generationRequestPayload(contract, usePreviousTakeLastFrame = false) {
   return {
     prompt_sha256: contract.manifest.prompt_sha256,
     settings_updated_at: contract.manifest.updated_at,
+    use_previous_take_last_frame: usePreviousTakeLastFrame,
   };
+}
+
+function renderPreviousTakeInput(contract) {
+  const option = $('#previous-take-input-option');
+  const checkbox = $('#use-previous-take-last-frame');
+  const input = contract?.previous_selected_take_input;
+  const signature = input?.eligible ? [
+    input.source_clip_id,
+    input.source_generation_id,
+    input.source_filename,
+    input.picture_number,
+  ].join('\u0000') : '';
+  if (signature !== generation.previousTakeSignature) checkbox.checked = false;
+  generation.previousTakeSignature = signature;
+  option.hidden = !input?.eligible;
+  if (!input?.eligible) return;
+  $('#previous-take-input-label').textContent =
+    `Use previous selected take’s last frame as <Picture ${input.picture_number}>`;
+  $('#previous-take-input-source').textContent =
+    `${input.source_clip_id} · take ${input.source_generation_id} · ${input.source_filename}`;
 }
 
 function renderGenerationAction() {
@@ -85,6 +107,7 @@ function renderGenerationAction() {
 
 function renderGenerationReadiness(contract) {
   generation.contract = contract;
+  renderPreviousTakeInput(contract);
   const readiness = contract?.readiness || {
     ready: false, status: 'not-configured', reasons: ['Generation settings unavailable'],
     warnings: [], resolution: {}, timing: {},
@@ -156,7 +179,10 @@ async function submitGeneration() {
     const job = await requestJson(apiPaths.generate(context.projectId, context.clipId), {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(generationRequestPayload(contract)),
+      body: JSON.stringify(generationRequestPayload(
+        contract,
+        $('#use-previous-take-last-frame').checked,
+      )),
     });
     if (!isClipContextCurrent(state, context)) return;
     queueConversationJob(job);
@@ -326,6 +352,8 @@ export function resetGenerationSettings() {
   closeGenerationSettings(false);
   generation.contract = null;
   generation.submitting = false;
+  generation.previousTakeSignature = '';
+  $('#use-previous-take-last-frame').checked = false;
   renderGenerationReadiness(null);
 }
 

@@ -252,7 +252,12 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
   single-select checkpoint returned the chosen answer through that exact path;
   Studio profiles now disable Hermes' inner clarify deadline, while structured
   expiry events close stale cards and fail the run instead of accepting a no-op.
+- Phase 6 P3.2 added ordered typed generation inputs and previous-selected-take
+  continuity. The References UI exposes the option only for an eligible chained
+  R2V clip; the backend extracts the exact predecessor's final frame, snapshots
+  source/derived SHA-256 provenance, and fails closed on order, selection, file,
+  or byte drift before submission and archival.
 
 ## Next steps
 
-- [ ] Add typed previous-selected-take last-frame generation inputs.
+- [ ] Run the final clean release gate and a real two-clip chained H3 render E2E.

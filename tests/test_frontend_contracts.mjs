@@ -208,6 +208,11 @@ test('generation action requires a ready current contract and idle enabled clip'
   }, true, false, false).reason, 'Current prompt changed');
   assert.deepEqual(generationRequestPayload(contract), {
     prompt_sha256: 'abc', settings_updated_at: 'revision-1',
+    use_previous_take_last_frame: false,
+  });
+  assert.deepEqual(generationRequestPayload(contract, true), {
+    prompt_sha256: 'abc', settings_updated_at: 'revision-1',
+    use_previous_take_last_frame: true,
   });
 });
 

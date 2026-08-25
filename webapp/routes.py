@@ -122,6 +122,7 @@ class GenerateIn(BaseModel):
 
     prompt_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     settings_updated_at: str = Field(min_length=1, max_length=64)
+    use_previous_take_last_frame: bool = False
 
 
 class InteractionAnswerIn(BaseModel):
@@ -448,6 +449,7 @@ def generate_current_prompt(request: Request, project_id: str, clip_id: str,
             clip_id,
             body.prompt_sha256,
             body.settings_updated_at,
+            body.use_previous_take_last_frame,
         )
     except (ActiveJobError, ProjectJobGuardError, ValueError) as exc:
         raise HTTPException(409, str(exc))

@@ -35,7 +35,11 @@ no state in the UI that isn't already on disk; minimal dependencies.
 - `media_review_store.py` — guarded generation detail, idempotent promotion and
   generation-to-reference publication with filesystem provenance
 - `generation_settings_store.py` — typed `current_generation.json`, strict H3
-  knob validation, prompt-hash staleness, and prompt-derived length/references
+  knob validation, prompt-hash staleness, prompt-owned timing/static references,
+  and previous-take eligibility
+- `generation_input_store.py` — ordered project-reference hashing, exact
+  previous-selected-take resolution, descriptor-safe final-frame materialization,
+  and source/derived identity revalidation
 - `comfy_queue.py` — read-only sanitized ComfyUI running/pending projection plus
   native completed-job timing; only allowlisted render metadata crosses the
   backend boundary and workflow payloads remain private
@@ -54,7 +58,8 @@ no state in the UI that isn't already on disk; minimal dependencies.
 - `reference-controller.js` — static-reference refresh/rendering, guarded uploads,
   signature invalidation, and project-context response rejection
 - `media-review.js` / `generation-settings.js` — media review and generation
-  controls with dialog, operation, readiness, and settings state held locally
+  controls with dialog, operation, readiness, settings, and eligibility-gated
+  previous-selected-take continuity state held locally
 - `shared.js` — workspace identity/context only; module operation and dialog flags
   stay with their owners
 - `tests/frontend_browser_harness.mjs` — disposable fixture app plus isolated raw

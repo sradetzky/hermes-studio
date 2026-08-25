@@ -10,7 +10,8 @@ from pathlib import Path
 from typing import Any
 
 
-CONTRACT_SCHEMA_VERSION = 1
+CONTRACT_SCHEMA_VERSION = 2
+LEGACY_CONTRACT_SCHEMA_VERSION = 1
 SETTINGS_SCHEMA_VERSION = 2
 MODES = {"t2va", "i2va", "fl2va", "r2v"}
 ASPECT_RATIOS = {
@@ -22,6 +23,7 @@ ASPECT_RATIOS = {
     "21:9": 21 / 9,
 }
 IMAGE_REFERENCE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
+VIDEO_REFERENCE_EXTENSIONS = {".mp4", ".mov", ".webm"}
 CANVAS_MULTIPLE = 32
 MAX_CANVAS_PIXELS = 1_100_000
 MAX_SAFE_SEED = 9_007_199_254_740_991
@@ -86,6 +88,25 @@ def _reference(value: Any) -> str:
         or Path(value).suffix.lower() not in IMAGE_REFERENCE_EXTENSIONS
     ):
         raise GenerationContractError("generation reference must be a safe image filename")
+    return value
+
+
+def _sha256(value: Any, field: str) -> str:
+    if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+        raise GenerationContractError(f"generation {field} is invalid")
+    return value
+
+
+def _component(value: Any, field: str) -> str:
+    if (
+        not isinstance(value, str)
+        or not value
+        or value in {".", ".."}
+        or "/" in value
+        or "\\" in value
+        or Path(value).name != value
+    ):
+        raise GenerationContractError(f"generation {field} is invalid")
     return value
 
 
@@ -170,17 +191,81 @@ class GenerationTimingContract:
 
 
 @dataclass(frozen=True)
-class GenerationExecutionContract:
-    resolution: GenerationResolutionContract
-    timing: GenerationTimingContract
-    references: tuple[str, ...]
+class ProjectReferenceInputContract:
+    slot: int
+    filename: str
+    sha256: str | None
+
+    @property
+    def reference_filename(self) -> str:
+        return self.filename
+
+    def to_dict(self) -> dict[str, Any]:
+        if self.sha256 is None:
+            raise GenerationContractError(
+                "legacy generation reference has no typed snapshot")
+        return {
+            "type": "project_reference",
+            "slot": self.slot,
+            "filename": self.filename,
+            "sha256": self.sha256,
+        }
+
+
+@dataclass(frozen=True)
+class PreviousSelectedTakeLastFrameInputContract:
+    slot: int
+    source_clip_id: str
+    source_generation_id: str
+    source_filename: str
+    source_video_sha256: str
+    extraction_offset_seconds: float
+    derived_filename: str
+    derived_frame_sha256: str
+
+    @property
+    def reference_filename(self) -> str:
+        return self.derived_filename
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "type": "previous_selected_take_last_frame",
+            "slot": self.slot,
+            "source_clip_id": self.source_clip_id,
+            "source_generation_id": self.source_generation_id,
+            "source_filename": self.source_filename,
+            "source_video_sha256": self.source_video_sha256,
+            "extraction_offset_seconds": self.extraction_offset_seconds,
+            "derived_filename": self.derived_filename,
+            "derived_frame_sha256": self.derived_frame_sha256,
+        }
+
+
+GenerationInputContract = (
+    ProjectReferenceInputContract | PreviousSelectedTakeLastFrameInputContract
+)
+
+
+@dataclass(frozen=True)
+class GenerationExecutionContract:
+    resolution: GenerationResolutionContract
+    timing: GenerationTimingContract
+    inputs: tuple[GenerationInputContract, ...]
+
+    @property
+    def references(self) -> tuple[str, ...]:
+        return tuple(item.reference_filename for item in self.inputs)
+
+    def to_dict(self, schema_version: int) -> dict[str, Any]:
+        result: dict[str, Any] = {
             "resolution": self.resolution.to_dict(),
             "timing": self.timing.to_dict(),
-            "references": list(self.references),
         }
+        if schema_version == LEGACY_CONTRACT_SCHEMA_VERSION:
+            result["references"] = list(self.references)
+        else:
+            result["inputs"] = [item.to_dict() for item in self.inputs]
+        return result
 
 
 @dataclass(frozen=True)
@@ -202,7 +287,7 @@ class GenerationContract:
             "prompt_sha256": self.prompt_sha256,
             "settings_updated_at": self.settings_updated_at,
             "settings_manifest": self.settings_manifest.to_dict(),
-            "execution": self.execution.to_dict(),
+            "execution": self.execution.to_dict(self.schema_version),
             "expected_generation_id": self.expected_generation_id,
         }
 
@@ -315,6 +400,67 @@ def _parse_timing(value: Any) -> GenerationTimingContract:
     return GenerationTimingContract(requested, frames, actual, fps)
 
 
+def _parse_input(value: Any, expected_slot: int) -> GenerationInputContract:
+    if not isinstance(value, dict):
+        raise GenerationContractError("generation input snapshot is invalid")
+    input_type = value.get("type")
+    if input_type == "project_reference":
+        item = _exact_dict(
+            value, {"type", "slot", "filename", "sha256"},
+            "generation project reference snapshot is invalid")
+        slot = _integer(item["slot"], "input slot")
+        if slot != expected_slot:
+            raise GenerationContractError("generation input slots must be consecutive")
+        return ProjectReferenceInputContract(
+            slot=slot,
+            filename=_reference(item["filename"]),
+            sha256=_sha256(item["sha256"], "project reference SHA-256"),
+        )
+    if input_type == "previous_selected_take_last_frame":
+        item = _exact_dict(
+            value,
+            {
+                "type", "slot", "source_clip_id", "source_generation_id",
+                "source_filename", "source_video_sha256",
+                "extraction_offset_seconds", "derived_filename",
+                "derived_frame_sha256",
+            },
+            "generation previous-take input snapshot is invalid",
+        )
+        slot = _integer(item["slot"], "input slot")
+        source_clip_id = _component(item["source_clip_id"], "source clip id")
+        source_generation_id = _component(
+            item["source_generation_id"], "source generation id")
+        source_filename = _component(item["source_filename"], "source filename")
+        derived_filename = _reference(item["derived_filename"])
+        offset = _number(
+            item["extraction_offset_seconds"], "extraction offset seconds")
+        if (
+            slot != expected_slot
+            or re.fullmatch(r"clip-[0-9]{3,}", source_clip_id) is None
+            or re.fullmatch(r"[0-9]{3,}", source_generation_id) is None
+            or Path(source_filename).suffix.lower() not in VIDEO_REFERENCE_EXTENSIONS
+            or not derived_filename.startswith("previous-selected-take-")
+            or Path(derived_filename).suffix.lower() != ".png"
+            or offset != 0.25
+        ):
+            raise GenerationContractError(
+                "generation previous-take input snapshot is invalid")
+        return PreviousSelectedTakeLastFrameInputContract(
+            slot=slot,
+            source_clip_id=source_clip_id,
+            source_generation_id=source_generation_id,
+            source_filename=source_filename,
+            source_video_sha256=_sha256(
+                item["source_video_sha256"], "source video SHA-256"),
+            extraction_offset_seconds=offset,
+            derived_filename=derived_filename,
+            derived_frame_sha256=_sha256(
+                item["derived_frame_sha256"], "derived frame SHA-256"),
+        )
+    raise GenerationContractError("generation input type is invalid")
+
+
 def parse_generation_contract(value: Any) -> GenerationContract:
     payload = _exact_dict(
         value,
@@ -329,8 +475,10 @@ def parse_generation_contract(value: Any) -> GenerationContract:
     prompt_sha256 = payload["prompt_sha256"]
     updated_at = _timestamp(payload["settings_updated_at"], "settings revision")
     expected_generation_id = payload["expected_generation_id"]
+    schema_version = payload["schema_version"]
     if (
-        payload["schema_version"] != CONTRACT_SCHEMA_VERSION
+        schema_version not in {
+            LEGACY_CONTRACT_SCHEMA_VERSION, CONTRACT_SCHEMA_VERSION}
         or payload["action"] != "generate-current-prompt"
         or not isinstance(prompt, str)
         or not executed_generation_prompt(prompt)
@@ -342,15 +490,34 @@ def parse_generation_contract(value: Any) -> GenerationContract:
     ):
         raise GenerationContractError("generation request payload is invalid")
     settings = _parse_settings(payload["settings_manifest"], prompt_sha256, updated_at)
-    execution = _exact_dict(
-        payload["execution"],
-        {"resolution", "timing", "references"},
-        "generation execution snapshot is invalid",
+    execution_keys = (
+        {"resolution", "timing", "references"}
+        if schema_version == LEGACY_CONTRACT_SCHEMA_VERSION
+        else {"resolution", "timing", "inputs"}
     )
-    references_value = execution["references"]
-    if not isinstance(references_value, list):
+    execution = _exact_dict(
+        payload["execution"], execution_keys,
+        "generation execution snapshot is invalid")
+    values = execution[
+        "references" if schema_version == LEGACY_CONTRACT_SCHEMA_VERSION
+        else "inputs"]
+    if not isinstance(values, list):
         raise GenerationContractError("generation execution snapshot is invalid")
-    references = tuple(_reference(item) for item in references_value)
+    if schema_version == LEGACY_CONTRACT_SCHEMA_VERSION:
+        inputs: tuple[GenerationInputContract, ...] = tuple(
+            ProjectReferenceInputContract(index, _reference(item), None)
+            for index, item in enumerate(values, 1))
+    else:
+        inputs = tuple(
+            _parse_input(item, index) for index, item in enumerate(values, 1))
+        previous_positions = [
+            index for index, item in enumerate(inputs)
+            if isinstance(item, PreviousSelectedTakeLastFrameInputContract)
+        ]
+        if previous_positions and previous_positions != [len(inputs) - 1]:
+            raise GenerationContractError(
+                "previous selected take must be the final generation input")
+    references = tuple(item.reference_filename for item in inputs)
     if len(references) != len(set(references)):
         raise GenerationContractError("generation references must be unique")
     expected_counts = {
@@ -362,7 +529,7 @@ def parse_generation_contract(value: Any) -> GenerationContract:
     if len(references) not in expected_counts[settings.mode]:
         raise GenerationContractError("generation reference count does not match mode")
     return GenerationContract(
-        schema_version=CONTRACT_SCHEMA_VERSION,
+        schema_version=schema_version,
         action="generate-current-prompt",
         prompt=prompt,
         prompt_sha256=prompt_sha256,
@@ -371,7 +538,7 @@ def parse_generation_contract(value: Any) -> GenerationContract:
         execution=GenerationExecutionContract(
             resolution=_parse_resolution(execution["resolution"], settings),
             timing=_parse_timing(execution["timing"]),
-            references=references,
+            inputs=inputs,
         ),
         expected_generation_id=expected_generation_id,
     )

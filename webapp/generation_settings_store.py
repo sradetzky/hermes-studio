@@ -30,6 +30,7 @@ from studio_core.safe_files import (
     read_opened_text,
 )
 from webapp.config import Settings
+from webapp.generation_input_store import GenerationInputStore
 from webapp.reference_store import ReferenceStore, ReferenceStoreError
 
 
@@ -338,6 +339,7 @@ class GenerationSettingsStore:
         settings = {
             key: manifest[key] for key in self.defaults()
         } if manifest else self.defaults()
+        readiness = self.readiness(project, clip, manifest, error)
         result = {
             "exists": manifest is not None,
             "settings": settings,
@@ -346,7 +348,15 @@ class GenerationSettingsStore:
                 "prompt_sha256": manifest.get("prompt_sha256"),
                 "updated_at": manifest.get("updated_at"),
             } if manifest else None),
-            "readiness": self.readiness(project, clip, manifest, error),
+            "readiness": readiness,
+            "previous_selected_take_input": (
+                GenerationInputStore().describe_previous_selected_take(
+                    project,
+                    clip.name,
+                    mode=settings["mode"],
+                    project_reference_count=len(readiness["references"]),
+                )
+            ),
         }
         if result["settings"]["seed"] is not None:
             result["settings"]["seed"] = str(result["settings"]["seed"])
