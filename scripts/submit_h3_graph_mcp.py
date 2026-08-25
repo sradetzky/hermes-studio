@@ -112,6 +112,15 @@ def _batch_result(result: Any) -> tuple[str, str]:
     return batch_id, prompt_id
 
 
+def _validate_settings_contract(
+        path: Path, prompt_sha256: str, updated_at: str) -> None:
+    settings = json.loads(_read_regular(path).decode("utf-8"))
+    if settings.get("prompt_sha256") != prompt_sha256:
+        raise ValueError("current settings prompt SHA-256 no longer matches the token")
+    if settings.get("updated_at") != updated_at:
+        raise ValueError("current settings timestamp no longer matches the token")
+
+
 def _write_result(path: Path, payload: dict[str, Any]) -> None:
     with path.open("w", encoding="utf-8") as handle:
         json.dump(payload, handle, separators=(",", ":"), ensure_ascii=False)
@@ -157,6 +166,9 @@ def main(argv: list[str] | None = None) -> int:
         if prompt not in graph_prompts:
             raise ValueError("graph prompt does not exactly match current_prompt.txt")
 
+        _validate_settings_contract(
+            args.settings_file, args.prompt_sha256, args.settings_updated_at)
+
         image_map: dict[str, str] = {}
         for image in args.image:
             _read_regular(image)
@@ -173,11 +185,8 @@ def main(argv: list[str] | None = None) -> int:
             if isinstance(inputs, dict) and inputs.get("image") in image_map:
                 inputs["image"] = image_map[inputs["image"]]
 
-        settings = json.loads(_read_regular(args.settings_file).decode("utf-8"))
-        if settings.get("prompt_sha256") != args.prompt_sha256:
-            raise ValueError("current settings prompt SHA-256 no longer matches the token")
-        if settings.get("updated_at") != args.settings_updated_at:
-            raise ValueError("current settings timestamp no longer matches the token")
+        _validate_settings_contract(
+            args.settings_file, args.prompt_sha256, args.settings_updated_at)
         if hashlib.sha256(_read_regular(args.prompt_file)).hexdigest() != args.prompt_sha256:
             raise ValueError("current prompt changed immediately before submission")
 

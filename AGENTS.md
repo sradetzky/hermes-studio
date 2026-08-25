@@ -194,10 +194,15 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
   recommendation into a mandatory correctness, runtime-boundary, and browser-
   ownership remediation gate before Phase 6 additions.
 
+### 2026-08-25
+- Remediation P0.1 made MCP submission tests part of standard Python discovery,
+  added ordered two-reference and failure-path coverage, and established
+  `scripts/check.sh` as the clean-commit local non-GPU release entry point.
+
 ## Next steps
 
-- [ ] Remediation P0: complete canonical test discovery/release gates, path-root
-  resolution, reproducible service/dependency setup, and event-retention decision.
+- [ ] Remediation P0: complete path-root resolution, reproducible service/audited
+  dependency setup, and the event-retention decision.
 - [ ] Remediation P1: create `studio_core`, extract migration/domain ownership,
   remove the LLM generation proxy, split job runners, and type job boundaries.
 - [ ] Remediation P2: extract browser controllers, reconcile stable activity

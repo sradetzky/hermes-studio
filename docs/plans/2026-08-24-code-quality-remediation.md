@@ -93,6 +93,11 @@ commands while moving their implementations.
 
 ### P0.1 Make test discovery complete and canonical
 
+**Status (2026-08-25): complete.** Standard discovery now includes the renamed
+MCP module and its ordered-reference/failure coverage. `scripts/check.sh` is the
+single clean-commit entry point for local non-GPU checks; P0.3 will extend its
+dependency section with the measured audit/version contract.
+
 **Problem:** The advertised Python command omits the MCP submission tests because
 `mcp_submit_cases.py` does not match `test_*.py` and is not imported by a wrapper.
 The test claiming serial uploads uses one reference and does not prove ordering.
@@ -420,23 +425,15 @@ P0–P2 are complete only when all of the following are true:
 - [ ] Compilation, dependency/audit, profile drift, CSS, clean archive,
   service/API, desktop, narrow-browser, and checksum gates pass.
 
-Suggested gate commands, consolidated by P0.1 into `scripts/check.sh`:
+The canonical local non-GPU gate is:
 
 ```bash
-.venv/bin/python -m unittest discover -s tests
-node --test tests/test_frontend_contracts.mjs \
-  tests/test_frontend_dom.mjs tests/test_frontend_browser.mjs
-.venv/bin/python -m compileall -q webapp scripts studio_core tests
-.venv/bin/python -m pip check
-.venv/bin/python -m pip_audit -r requirements.txt -r requirements-dev.txt
-scripts/sync-profiles.sh --check
-scripts/build-web-css.sh
-for file in webapp/static/*.js webapp/static/*.mjs; do node --check "$file"; done
-git diff --check
+scripts/check.sh
 ```
 
-The final command names may change as tests are split; `scripts/check.sh` becomes
-the source of truth.
+Live service/API and GPU generation checks remain explicit so this command cannot
+interrupt a running Studio instance or ComfyUI job. `scripts/check.sh` is the
+source of truth and must propagate every local check failure.
 
 ---
 

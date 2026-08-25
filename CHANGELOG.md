@@ -7,6 +7,12 @@ preview and production releases.
 
 ## [Unreleased]
 
+### Changed
+
+- Made MCP graph-submission tests visible to standard Python discovery, expanded
+  them across ordered multi-reference and deterministic failure paths, and added
+  one clean-commit local non-GPU release-check entry point
+
 ### Fixed
 
 - Prevented web generation agents from repeatedly reading the H3 runner source:

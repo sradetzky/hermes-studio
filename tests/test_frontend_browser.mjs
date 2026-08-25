@@ -145,7 +145,7 @@ test('Chromium rejects stale UI work and preserves active media', {timeout: 3000
   const appPort = await freePort();
   const cdpPort = await freePort();
   const app = spawn(
-    join(repo, '.venv/bin/python'),
+    process.env.PYTHON || join(repo, '.venv/bin/python'),
     ['-m', 'tests.browser_fixture_app', String(appPort), fixture],
     {cwd: repo, stdio: ['ignore', 'pipe', 'pipe']},
   );

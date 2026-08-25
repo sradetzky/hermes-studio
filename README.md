@@ -160,27 +160,17 @@ systemctl --user disable --now hermes-studio.service
 
 ## Development
 
-Run the complete test suite:
+Run every local non-GPU release check from a clean commit:
 
 ```bash
-.venv/bin/python -m unittest discover -s tests
-node --test tests/test_frontend_contracts.mjs tests/test_frontend_dom.mjs \
-  tests/test_frontend_browser.mjs
+scripts/check.sh
 ```
 
-Compile-check Python and JavaScript:
-
-```bash
-python -m compileall -q webapp scripts tests
-for file in webapp/static/*.js webapp/static/*.mjs; do node --check "$file"; done
-```
-
-Rebuild the committed stylesheet after HTML/JS utility-class changes:
-
-```bash
-scripts/build-web-css.sh
-git diff --exit-code -- webapp/static/studio.css
-```
+The canonical gate runs complete Python discovery, frontend and real-Chromium
+tests, Python compilation, JavaScript syntax checks, dependency consistency,
+profile drift, reproducible CSS, source-archive hygiene/checksum, and repository
+integrity. Live service/API and real GPU generation remain explicit operational
+gates because the local check must not interrupt Studio or queue ComfyUI work.
 
 Runtime data, project media, `.venv/`, bytecode, and `.runtime/` are ignored.
 Never commit credentials, live profile configs, model files, project media, or
