@@ -286,8 +286,10 @@ project/media source of truth → SQLite only coordinates web jobs/chat sessions
 - Python discovery now rejects visible resource warnings and destructor-time
   unraisable exceptions. ESM and Tailwind/Browserslist inputs are explicit and
   lock-pinned, and cohesive safe-files/migration modules have growth ceilings.
+- The fresh post-follow-up live checkpoint generated clip-002 take 002 through
+  the web-owned deterministic R2V path with exact project/previous-take inputs,
+  matching source/archive bytes, API range read-back, cleanup, and an empty queue.
 
 ## Next steps
 
-- Complete the requested fresh live chained-R2V continuity checkpoint, then run
-  and record the final committed-source gate for this follow-up slice.
+- No active implementation slice; choose the next scoped milestone explicitly.

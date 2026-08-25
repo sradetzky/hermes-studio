@@ -20,6 +20,9 @@ preview and production releases.
   no longer emit module-type or stale-data warnings.
 - Added explicit 1,000/2,200-line growth ceilings for the intentionally cohesive
   `safe_files.py` and lazy migration engine instead of splitting them preemptively.
+- Re-ran the live chained-R2V web checkpoint after the quality follow-ups: the
+  exact project reference plus previous selected take frame archived as generation
+  002 with matching immutable inputs, source bytes, cleanup, and an empty queue.
 - Consolidated the duplicated disposable web-app test case, passive manager,
   multiprocessing job creator, and generation-settings fixture into one test
   support module while retaining the route suite's specialized manager.

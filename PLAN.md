@@ -291,6 +291,9 @@ project/clip chat scope and exact IDs.
   checkpoint: the second 928×544 clip consumed the exact selected first-clip
   video and derived final frame as ordered inputs, archived matching provenance
   and source bytes, and completed with an empty ComfyUI queue and VRAM cleanup.
+- [x] Re-run that chained-R2V web path after the lower-priority quality follow-up;
+  generation 002 preserved both ordered input contracts, matched source/archive
+  bytes, served range read-back, emitted cleanup, and left the queue empty.
 
 ---
 

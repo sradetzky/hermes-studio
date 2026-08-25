@@ -557,6 +557,14 @@ and 28 frontend/Chromium tests, compilation, full Ruff, dependency lock and
 audit, external-tool contracts, profile drift, reproducible CSS, source archive,
 and repository integrity all succeeded.
 
+The requested lower-priority closure gate then passed from committed source with
+284 Python tests and the same 28 frontend/Chromium tests plus every compilation,
+lint, dependency/audit, tool, profile, CSS, archive, and integrity check. A fresh
+web-owned chained-R2V generation followed: clip-002 generation 002 consumed the
+project reference in slot 1 and the exact clip-001 selected-take frame in slot 2,
+archived matching typed inputs and source bytes, passed API byte-range read-back,
+emitted `comfyui.cleanup`, and left no running or pending ComfyUI work.
+
 The canonical local non-GPU gate is:
 
 ```bash
